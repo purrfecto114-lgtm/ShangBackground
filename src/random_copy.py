@@ -1,16 +1,8 @@
-# -*- coding: utf-8 -*-
-"""
-随机概率管理模块（文件复制法）
-- 通过复制图片文件来增加被随机选中的概率
-- 用户调整滑块后暂存修改，点击保存按钮才实际执行文件复制/删除
-- 关闭窗口时如有未保存修改则提示
-"""
-
 import os
 import json
 import shutil
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from PIL import Image, ImageTk
 import logging
 
@@ -199,12 +191,16 @@ def restore_weights(folder_path):
     if not folder_data:
         print(f"[DEBUG] restore_weights: 没有找到权重配置 for {folder_abs}，请先通过「设置随机概率」保存权重")
         log(f"restore_weights: 没有找到权重配置 for {folder_abs}，跳过恢复")
-        # 增加提示，方便用户排查
-        if 'root' in globals() and root is not None:
+        # 增加提示，方便用户排查；不要直接引用未定义的 root，避免 Pylance/运行时警告。
+        gui_root = globals().get("root")
+        if gui_root is not None:
             try:
-                from tkinter import messagebox
-                root.after(0, lambda: messagebox.showinfo("提示喵", "未找到随机概率配置，请先打开「设置随机概率」并保存"))
-            except:
+                gui_root.after(0, lambda: messagebox.showinfo(
+                    "提示喵",
+                    "未找到随机概率配置，请先打开「设置随机概率」并保存",
+                    parent=gui_root
+                ))
+            except Exception:
                 pass
         return
 
@@ -265,7 +261,7 @@ def get_all_images_with_copies(folder_path):
 
 def open_random_probability_window(parent, folder):
     if not folder or not os.path.isdir(folder):
-        tk.messagebox.showwarning("提示喵", "请先设置幻灯片文件夹", parent=parent)
+        messagebox.showwarning("提示喵", "请先设置幻灯片文件夹", parent=parent)
         return
 
     all_files = os.listdir(folder)
@@ -274,7 +270,7 @@ def open_random_probability_window(parent, folder):
                        if f.lower().endswith(image_ext) and not f.startswith(COPY_PREFIX)]
 
     if not original_images:
-        tk.messagebox.showinfo("提示喵", "文件夹中没有图片", parent=parent)
+        messagebox.showinfo("提示喵", "文件夹中没有图片", parent=parent)
         return
 
     win = tk.Toplevel(parent)
@@ -322,7 +318,7 @@ def open_random_probability_window(parent, folder):
 
     def delete_all():
         nonlocal pending_changes, has_unsaved_changes
-        if tk.messagebox.askyesno("确认？", f"删除文件夹「{folder}」中所有识别文件（副本）？\n注意：此操作立即生效，无法撤销喵",
+        if messagebox.askyesno("确认？", f"删除文件夹「{folder}」中所有识别文件（副本）？\n注意：此操作立即生效，无法撤销喵",
                                   parent=win):
             cleanup_folder(folder)
             # 清空待保存更改
@@ -358,12 +354,11 @@ def open_random_probability_window(parent, folder):
     def close_window():
         nonlocal has_unsaved_changes
         if has_unsaved_changes:
-            result = tk.messagebox.askyesnocancel("未保存的更改",
+            result = messagebox.askyesnocancel("未保存的更改",
                                                   "随机概率已修改，您是否保存更改啊？",
                                                   parent=win)
             if result is True:  # 是
                 save_changes()
-                win.destroy()
             elif result is False:  # 否
                 win.destroy()
             # else: 取消，什么都不做

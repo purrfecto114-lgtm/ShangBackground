@@ -3,7 +3,7 @@ import sys
 
 IS_WINDOWS = sys.platform.startswith("win")
 IS_MACOS = sys.platform == "darwin"
-APP_NAME = "xxdz_上一个桌面背景"
+APP_NAME = "ShangBackground"
 
 UI_BG = "#f6f8fb"
 UI_PANEL = "#ffffff"
@@ -12,7 +12,7 @@ UI_ACCENT_DARK = "#0f766e"
 UI_TEXT = "#1f2937"
 UI_MUTED = "#6b7280"
 UI_BORDER = "#d8dee9"
-FONT_FAMILY = "Microsoft YaHei" if IS_WINDOWS else ("PingFang SC" if IS_MACOS else "Noto Sans CJK SC")
+FONT_FAMILY = "Microsoft YaHei UI" if IS_WINDOWS else ("PingFang SC" if IS_MACOS else "Noto Sans CJK SC")
 
 IMAGE_FILETYPES = [
     ("JPEG 图片", "*.jpg"),

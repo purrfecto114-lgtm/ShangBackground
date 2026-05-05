@@ -41,8 +41,7 @@ class ThumbnailLoader:
         for idx, img_path in enumerate(self.sidebar.image_paths):
             if self._stop:
                 break
-            thread = threading.Thread(target=self._load_one, args=(idx, img_path))
-            thread.daemon = True
+            thread = threading.Thread(target=self._load_one, args=(idx, img_path), daemon=True)
             thread.start()
             self.loading_threads.append(thread)
 
@@ -51,12 +50,15 @@ class ThumbnailLoader:
             return
         try:
             pil_img = generate_thumbnail_fast(img_path)
-            photo = ImageTk.PhotoImage(pil_img)
 
             def update_ui():
-                if self._stop:
+                if self._stop or self.sidebar._is_closing:
                     return
-                self.sidebar.update_thumbnail(idx, photo, img_path)
+                try:
+                    photo = ImageTk.PhotoImage(pil_img)
+                    self.sidebar.update_thumbnail(idx, photo, img_path)
+                except Exception as ui_error:
+                    log_to_file(f"更新缩略图到界面失败 {img_path}: {ui_error}", self.sidebar.log_path)
 
             if self.sidebar.master and self.sidebar.master.winfo_exists():
                 self.sidebar.master.after(0, update_ui)
@@ -195,6 +197,7 @@ class WallpaperSidebar:
             frame = item['frame']
             if item['placeholder_label']:
                 item['placeholder_label'].destroy()
+                item['placeholder_label'] = None
             img_label = tk.Label(frame, image=photo, bg='#ffffff', cursor="hand2")
             img_label.image = photo
             img_label.pack(pady=5)

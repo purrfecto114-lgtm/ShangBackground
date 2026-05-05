@@ -1,6 +1,7 @@
 # 喵~ 这里是 上一个桌面背景 的代码 (by 小小电子xxdz)
 # 嗷~ 代码由deepseek辅助编写的
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk, filedialog, colorchooser, messagebox
 import os
 import sys
@@ -89,7 +90,7 @@ class WNDCLASS(ctypes.Structure):
 # 定义COPYDATASTRUCT结构
 class COPYDATASTRUCT(ctypes.Structure):
     _fields_ = [
-        ('dwData', ctypes.c_ulong),
+        ('dwData', ctypes.c_size_t),
         ('cbData', ctypes.c_ulong),
         ('lpData', ctypes.c_void_p)
     ]
@@ -147,6 +148,57 @@ def show_message(title, msg):
             pass
 
 
+def resolve_ui_font_family(master=None):
+    candidates = [
+        FONT_FAMILY,
+        "Microsoft YaHei UI",
+        "Microsoft YaHei",
+        "SimHei",
+        "SimSun",
+        "Noto Sans CJK SC",
+        "Arial Unicode MS",
+        "Segoe UI",
+    ]
+    try:
+        available = set(tkfont.families(master)) if master is not None else set()
+    except Exception:
+        available = set()
+    for family in candidates:
+        if not family:
+            continue
+        if not available or family in available:
+            return family
+    return "TkDefaultFont"
+
+
+def apply_global_font_settings(master):
+    global FONT_FAMILY
+    try:
+        chosen = resolve_ui_font_family(master)
+        FONT_FAMILY = chosen
+        for font_name, size in (
+            ("TkDefaultFont", 9),
+            ("TkTextFont", 9),
+            ("TkMenuFont", 9),
+            ("TkHeadingFont", 10),
+            ("TkCaptionFont", 9),
+            ("TkSmallCaptionFont", 8),
+            ("TkIconFont", 9),
+            ("TkTooltipFont", 9),
+        ):
+            try:
+                tkfont.nametofont(font_name).configure(family=chosen, size=size)
+            except Exception:
+                pass
+        try:
+            master.option_add("*Font", f"{{{chosen}}} 9")
+        except Exception:
+            pass
+        log(f"已应用界面字体: {chosen}")
+    except Exception as e:
+        log(f"应用界面字体失败: {e}")
+
+
 # 全局变量
 hwnd = None
 WND_CLASS_NAME = "WallpaperControllerClass"
@@ -185,6 +237,169 @@ hotkey_thread = None
 preview_images_frame = None
 wallpaper_preview_labels = None
 folder_entry = None
+
+_message_loop_thread = None
+session_original_wallpaper = ""
+session_original_wallpaper_style = {}
+session_original_wallpaper_captured = False
+pending_show_request = False
+
+APP_MUTEX_NAME = r"Global\ShangBackground"
+STARTUP_ITEM_NAME = "ShangBackground"
+STARTUP_VBS_NAME = f"{STARTUP_ITEM_NAME}.vbs"
+LEGACY_STARTUP_VALUE_NAMES = ["xxdz_WallpaperController"]
+ALL_STARTUP_VALUE_NAMES = LEGACY_STARTUP_VALUE_NAMES + [STARTUP_ITEM_NAME]
+LEGACY_STARTUP_VBS_NAMES = ["PowerOn.vbs"]
+ALL_STARTUP_VBS_NAMES = LEGACY_STARTUP_VBS_NAMES + [STARTUP_VBS_NAME]
+_instance_mutex_handle = None
+
+
+def is_windows_admin():
+    if not IS_WINDOWS:
+        return False
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception as e:
+        log(f"管理员权限检测失败: {e}")
+        return False
+
+
+def acquire_single_instance_mutex():
+    global _instance_mutex_handle
+    if not IS_WINDOWS:
+        return True
+    try:
+        handle = ctypes.windll.kernel32.CreateMutexW(None, False, APP_MUTEX_NAME)
+        last_error = ctypes.windll.kernel32.GetLastError()
+        if not handle:
+            log("创建单实例互斥体失败，继续使用窗口检测")
+            return True
+        if last_error == 183:  # ERROR_ALREADY_EXISTS
+            try:
+                ctypes.windll.kernel32.CloseHandle(handle)
+            except Exception:
+                pass
+            return False
+        _instance_mutex_handle = handle
+        return True
+    except Exception as e:
+        log(f"单实例互斥体检测失败: {e}")
+        return True
+
+
+def find_existing_main_window(timeout=2.0):
+    if not IS_WINDOWS:
+        return None
+    deadline = time.time() + max(0, timeout)
+    while True:
+        try:
+            existing = ctypes.windll.user32.FindWindowW(WND_CLASS_NAME, None)
+            if existing:
+                return existing
+        except Exception as e:
+            log(f"查找已有主窗口失败: {e}")
+            return None
+        if time.time() >= deadline:
+            return None
+        time.sleep(0.1)
+
+
+def send_command_to_hwnd(target_hwnd, command):
+    if not IS_WINDOWS or not target_hwnd:
+        return False
+    try:
+        payload = command.encode("utf-8") + b"\x00"
+        buffer = ctypes.create_string_buffer(payload)
+        cds = COPYDATASTRUCT()
+        cds.dwData = 1
+        cds.cbData = len(payload)
+        cds.lpData = ctypes.cast(buffer, ctypes.c_void_p)
+        result = ctypes.windll.user32.SendMessageW(target_hwnd, WM_COPYDATA, 0, ctypes.byref(cds))
+        return result == 1
+    except Exception as e:
+        log(f"发送命令到已有实例失败: {e}")
+        return False
+
+
+def activate_existing_instance(show_notice=True):
+    existing = find_existing_main_window(timeout=5.0)
+    activated = False
+    if existing:
+        activated = send_command_to_hwnd(existing, "show")
+        try:
+            ctypes.windll.user32.ShowWindow(existing, 9)  # SW_RESTORE
+            ctypes.windll.user32.ShowWindow(existing, 1)  # SW_SHOWNORMAL
+            ctypes.windll.user32.SetForegroundWindow(existing)
+        except Exception as e:
+            log(f"激活已有实例失败: {e}")
+    if show_notice:
+        if existing:
+            show_message("不要重复运行", "不要重复运行，已为您打开现有主界面。")
+        else:
+            show_message("不要重复运行", "不要重复运行。检测到 ShangBackground 已经在启动或运行，本次启动已取消。")
+    return activated or existing is not None
+
+
+def ensure_single_instance_or_exit():
+    if not IS_WINDOWS:
+        return
+    if not acquire_single_instance_mutex():
+        log("检测到已有实例，打开现有主界面并退出本次启动")
+        activate_existing_instance(show_notice=True)
+        sys.exit(0)
+    existing = find_existing_main_window(timeout=0.3)
+    if existing:
+        log("检测到已有主窗口，打开现有主界面并退出本次启动")
+        activate_existing_instance(show_notice=True)
+        sys.exit(0)
+
+
+def get_startup_folder_path_windows():
+    if not IS_WINDOWS:
+        return ""
+    try:
+        CSIDL_STARTUP = 7
+        buf = ctypes.create_unicode_buffer(260)
+        ctypes.windll.shell32.SHGetFolderPathW(None, CSIDL_STARTUP, None, 0, buf)
+        return buf.value
+    except Exception as e:
+        log(f"获取 Windows 启动文件夹失败: {e}")
+        return os.path.join(os.path.expanduser('~'), r'AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup')
+
+
+def get_startup_vbs_path(name=STARTUP_VBS_NAME):
+    folder = get_startup_folder_path_windows()
+    return os.path.join(folder, name) if folder else name
+
+
+def remove_legacy_startup_entries():
+    if not IS_WINDOWS:
+        return
+    # 清理旧注册表启动项名称，避免任务管理器/启动项里显示旧名称。
+    if winreg is not None:
+        try:
+            run_key = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_key, 0, winreg.KEY_SET_VALUE)
+            for value_name in LEGACY_STARTUP_VALUE_NAMES:
+                if value_name != STARTUP_ITEM_NAME:
+                    try:
+                        winreg.DeleteValue(key, value_name)
+                        log(f"已清理旧开机自启动注册表项: {value_name}")
+                    except FileNotFoundError:
+                        pass
+            winreg.CloseKey(key)
+        except Exception as e:
+            log(f"清理旧开机自启动注册表项失败: {e}")
+    # 如果已经启用新 VBS，则删除旧 PowerOn.vbs，防止出现两个启动项。
+    try:
+        new_vbs = get_startup_vbs_path(STARTUP_VBS_NAME)
+        old_vbs = get_startup_vbs_path("PowerOn.vbs")
+        if os.path.exists(new_vbs) and old_vbs != new_vbs and os.path.exists(old_vbs):
+            os.remove(old_vbs)
+            log(f"已清理旧开机自启动 VBS: {old_vbs}")
+    except Exception as e:
+        log(f"清理旧开机自启动 VBS 失败: {e}")
+
 
 # 版本检查全局变量
 remote_version = "1"
@@ -414,6 +629,75 @@ def set_wallpaper_direct(path, operation_name="系统", skip_history=False):
         return True
     except Exception as e:
         log("设置壁纸失败: " + str(e))
+        return False
+
+
+def get_windows_wallpaper_style():
+    if not IS_WINDOWS or winreg is None:
+        return {}
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Control Panel\Desktop") as key:
+            style = {}
+            for value_name in ("WallpaperStyle", "TileWallpaper"):
+                try:
+                    style[value_name] = winreg.QueryValueEx(key, value_name)[0]
+                except FileNotFoundError:
+                    pass
+            return style
+    except Exception as e:
+        log(f"读取原始壁纸样式失败: {e}")
+        return {}
+
+
+def restore_windows_wallpaper_style(style):
+    if not IS_WINDOWS or winreg is None or not style:
+        return
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Control Panel\Desktop", 0, winreg.KEY_SET_VALUE) as key:
+            for value_name, value in style.items():
+                winreg.SetValueEx(key, value_name, 0, winreg.REG_SZ, str(value))
+    except Exception as e:
+        log(f"恢复原始壁纸样式失败: {e}")
+
+
+def capture_session_original_wallpaper():
+    global session_original_wallpaper, session_original_wallpaper_style, session_original_wallpaper_captured
+    if session_original_wallpaper_captured:
+        return
+    session_original_wallpaper_captured = True
+    try:
+        current = get_current_wallpaper()
+        if current:
+            session_original_wallpaper = current
+            session_original_wallpaper_style = get_windows_wallpaper_style()
+            log(f"已记录启动前壁纸: {session_original_wallpaper}")
+        else:
+            log("启动前壁纸为空，退出时不执行恢复")
+    except Exception as e:
+        log(f"记录启动前壁纸失败: {e}")
+
+
+def restore_session_original_wallpaper():
+    target = session_original_wallpaper
+    if not target:
+        return False
+    if not os.path.isfile(target):
+        log(f"启动前壁纸文件不存在，跳过恢复: {target}")
+        return False
+    try:
+        current = get_current_wallpaper()
+        if current and os.path.normcase(os.path.abspath(current)) == os.path.normcase(os.path.abspath(target)):
+            log("当前壁纸已经是启动前壁纸，无需恢复")
+            return True
+    except Exception:
+        pass
+    try:
+        restore_windows_wallpaper_style(session_original_wallpaper_style)
+        set_wallpaper_platform(target)
+        log("已恢复启动前壁纸: " + os.path.basename(target))
+        return True
+    except Exception as e:
+        log(f"恢复启动前壁纸失败: {e}")
         return False
 
 
@@ -1595,7 +1879,42 @@ def monitor_wallpaper_changes_on_main_thread():
         root.after(1000, monitor_wallpaper_changes_on_main_thread)
 
 
-WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int) if IS_WINDOWS else (lambda func: func)
+def show_main_window_now():
+    global pending_show_request
+    pending_show_request = False
+    if root is None:
+        return
+    try:
+        root.deiconify()
+        root.state("normal")
+        root.lift()
+        root.focus_force()
+        if IS_WINDOWS:
+            try:
+                ctypes.windll.user32.SetForegroundWindow(root.winfo_id())
+            except Exception:
+                pass
+    except Exception as e:
+        log(f"打开已有主界面失败: {e}")
+
+
+def request_show_main_window():
+    global pending_show_request
+    pending_show_request = True
+    if root is not None:
+        try:
+            root.after(0, show_main_window_now)
+        except Exception as e:
+            log(f"请求打开主界面失败: {e}")
+
+
+WNDPROC = ctypes.WINFUNCTYPE(
+    ctypes.c_ssize_t,
+    ctypes.c_void_p,
+    ctypes.c_uint,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+) if IS_WINDOWS else (lambda func: func)
 
 
 @WNDPROC
@@ -1626,10 +1945,7 @@ def window_proc(hwnd, msg, wparam, lparam):
                     random_wallpaper()
                     return 1
                 elif command == "show":
-                    if root:
-                        root.deiconify()
-                        root.lift()
-                        root.focus_force()
+                    request_show_main_window()
                     return 1
                 elif command.startswith("set_wallpaper|"):
                     target = command.split("|", 1)[1]
@@ -1693,28 +2009,53 @@ def create_message_window():
         return None
 
 
+def message_loop():
+    if not IS_WINDOWS or ctypes.wintypes is None:
+        return
+    msg = ctypes.wintypes.MSG()
+    while True:
+        ret = ctypes.windll.user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
+        if ret <= 0:
+            break
+        ctypes.windll.user32.TranslateMessage(ctypes.byref(msg))
+        ctypes.windll.user32.DispatchMessageW(ctypes.byref(msg))
+
+
+def start_message_window():
+    global _message_loop_thread
+    if not IS_WINDOWS:
+        return None
+    if hwnd:
+        return hwnd
+    msg_hwnd = create_message_window()
+    if msg_hwnd and (_message_loop_thread is None or not _message_loop_thread.is_alive()):
+        _message_loop_thread = threading.Thread(target=message_loop, daemon=True)
+        _message_loop_thread.start()
+        log("消息循环已启动")
+    return msg_hwnd
+
+
 def send_command(command):
     if not IS_WINDOWS:
         return False
     if not hwnd or not use_message:
         return False
-    try:
-        cmd_bytes = command.encode('utf-8')
-        cds = COPYDATASTRUCT()
-        cds.dwData = 1
-        cds.cbData = len(cmd_bytes) + 1
-        cds.lpData = ctypes.cast(cmd_bytes, ctypes.c_void_p)
-        result = ctypes.windll.user32.SendMessageW(hwnd, WM_COPYDATA, 0, ctypes.byref(cds))
-        return result == 1
-    except Exception as e:
-        log(f"发送消息失败: " + str(e))
-        return False
+    return send_command_to_hwnd(hwnd, command)
 
 
-def register_context():
+def register_context(show_admin_prompt=False):
     if not IS_WINDOWS or winreg is None:
         log("当前平台不支持 Windows 桌面右键菜单注册，已跳过")
-        return
+        return False
+    if not is_windows_admin():
+        msg = (
+            "桌面右键菜单需要写入 HKEY_CLASSES_ROOT，必须以管理员身份运行一次才能添加或移除。\n\n"
+            "本次普通权限启动已跳过右键菜单注册，不会影响主程序、托盘和壁纸切换功能。"
+        )
+        log("未以管理员权限启动，已跳过右键菜单注册/同步")
+        if show_admin_prompt:
+            show_message("需要管理员权限", msg)
+        return False
     try:
         remote_script = os.path.join(BASE_DIR, "wallpaper_remote.py")
         if not os.path.exists(remote_script):
@@ -1878,16 +2219,20 @@ def register_context():
                 pass
 
 
+        return True
+
     except Exception as e:
         log("右键注册失败: " + str(e))
-        show_message("错误", "请以管理员身份运行一次本程序")
+        if show_admin_prompt:
+            show_message("错误", "右键菜单注册失败，请以管理员身份运行一次本程序。")
+        return False
 
 
 def toggle_ctx_prev():
     config["ctx_last_wallpaper"] = ctx_prev_var.get()
     save_config()
     if config["mode"] == "幻灯片放映":
-        register_context()
+        register_context(show_admin_prompt=True)
     else:
         try:
             prev_reg_path = r"DesktopBackground\Shell\LastWallpaper"
@@ -1901,7 +2246,7 @@ def toggle_ctx_prev():
 def toggle_ctx_next():
     config["ctx_next_wallpaper"] = ctx_next_var.get()
     save_config()
-    register_context()
+    register_context(show_admin_prompt=True)
 
 
 def toggle_ctx_random():
@@ -1914,21 +2259,21 @@ def toggle_ctx_random():
             log("开启随机菜单，自动关闭随机顺序")
     config["ctx_random_wallpaper"] = ctx_random_var.get()
     save_config()
-    register_context()
+    register_context(show_admin_prompt=True)
 
 
 def toggle_ctx_personalize():
     global ctx_personalize_var
     config["ctx_personalize"] = ctx_personalize_var.get()
     save_config()
-    register_context()
+    register_context(show_admin_prompt=True)
 
 
 def toggle_ctx_jump():
     global ctx_jump_var
     config["ctx_jump_to_wallpaper"] = ctx_jump_var.get()
     save_config()
-    register_context()
+    register_context(show_admin_prompt=True)
 
 
 def on_shuffle_changed():
@@ -2312,7 +2657,7 @@ class InitSettingsDialog:
             {"key": "fit_mode", "label": "适应模式", "desc": "重置壁纸适应模式为「填充」"},
             {"key": "shuffle", "label": "随机概率", "desc": "清除所有的随机概率临时文件"},
             {"key": "registry", "label": "注册表项", "desc": "删除本软件在注册表中的所有右键菜单与启动项"},
-            {"key": "startup_vbs", "label": "开机自启动VBS文件", "desc": "删除启动文件夹中的 PowerOn.vbs"}
+            {"key": "startup_vbs", "label": "开机自启动VBS文件", "desc": f"删除启动文件夹中的 {STARTUP_VBS_NAME}"}
         ]
 
         # 存储复选框变量
@@ -2349,11 +2694,11 @@ class InitSettingsDialog:
         right_frame.pack(side="left", fill="both", expand=True, padx=25, pady=20)
 
         # 标题
-        title_label = tk.Label(right_frame, text="清除数据", font=("Segoe UI", 16, "bold"),
+        title_label = tk.Label(right_frame, text="清除数据", font=(FONT_FAMILY, 16, "bold"),
                                bg="#ffffff", fg="#2c3e50")
         title_label.pack(anchor="w", pady=(0, 5))
 
-        desc_label = tk.Label(right_frame, text="选择要清除的数据类型", font=("Segoe UI", 9),
+        desc_label = tk.Label(right_frame, text="选择要清除的数据类型", font=(FONT_FAMILY, 9),
                               bg="#ffffff", fg="#7f8c8d")
         desc_label.pack(anchor="w", pady=(0, 15))
 
@@ -2433,7 +2778,7 @@ class InitSettingsDialog:
             cb.pack(side="left")
 
             # 描述文字
-            desc = tk.Label(item_frame, text=option["desc"], font=("Segoe UI", 8),
+            desc = tk.Label(item_frame, text=option["desc"], font=(FONT_FAMILY, 8),
                             bg="#ffffff", fg="#888888")
             desc.pack(side="left", padx=(12, 0))
 
@@ -2599,10 +2944,17 @@ class InitSettingsDialog:
                 try:
                     run_key = r"Software\Microsoft\Windows\CurrentVersion\Run"
                     key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_key, 0, winreg.KEY_SET_VALUE)
-                    winreg.DeleteValue(key, "xxdz_WallpaperController")
+                    removed_startup_values = []
+                    for value_name in ALL_STARTUP_VALUE_NAMES:
+                        try:
+                            winreg.DeleteValue(key, value_name)
+                            removed_startup_values.append(value_name)
+                        except FileNotFoundError:
+                            pass
                     winreg.CloseKey(key)
-                    cleared_reg_items.append("开机自启动项")
-                    log("已清理开机自启动注册表项")
+                    if removed_startup_values:
+                        cleared_reg_items.append("开机自启动项")
+                        log(f"已清理开机自启动注册表项: {', '.join(removed_startup_values)}")
                 except FileNotFoundError:
                     pass
                 except Exception as e:
@@ -2612,18 +2964,22 @@ class InitSettingsDialog:
                 else:
                     cleared_items.append("注册表项 (无残留)")
             elif key == "startup_vbs":
-                # 清理启动文件夹中的 PowerOn.vbs
+                # 清理启动文件夹中的开机自启动 VBS
                 try:
                     import ctypes.wintypes
                     CSIDL_STARTUP = 7
                     buf = ctypes.create_unicode_buffer(260)
                     ctypes.windll.shell32.SHGetFolderPathW(None, CSIDL_STARTUP, None, 0, buf)
                     startup_folder = buf.value
-                    vbs_path = os.path.join(startup_folder, "PowerOn.vbs")
-                    if os.path.exists(vbs_path):
-                        os.remove(vbs_path)
-                        cleared_items.append("开机自启动VBS文件 (已删除)")
-                        log(f"已删除启动文件夹中的 VBS: {vbs_path}")
+                    deleted_vbs = []
+                    for vbs_name in ALL_STARTUP_VBS_NAMES:
+                        vbs_path = os.path.join(startup_folder, vbs_name)
+                        if os.path.exists(vbs_path):
+                            os.remove(vbs_path)
+                            deleted_vbs.append(vbs_name)
+                            log(f"已删除启动文件夹中的 VBS: {vbs_path}")
+                    if deleted_vbs:
+                        cleared_items.append(f"开机自启动VBS文件 (已删除 {', '.join(deleted_vbs)})")
                     else:
                         cleared_items.append("开机自启动VBS文件 (不存在)")
                 except Exception as e:
@@ -2753,7 +3109,7 @@ class GlobalShortcutDialog:
         top_frame = ttk.Frame(content_frame)
         top_frame.pack(fill="x", pady=(0, 15))
 
-        ttk.Label(top_frame, text="全局快捷键设置", font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        ttk.Label(top_frame, text="全局快捷键设置", font=(FONT_FAMILY, 14, "bold")).pack(anchor="w")
 
         # 内容区域（左右分割）
         inner_content = ttk.Frame(content_frame)
@@ -3375,7 +3731,7 @@ def handle_command_line():
     sys.argv = clean_args
     # ============================================================
 
-    parser = argparse.ArgumentParser(description='xxdz_上一个桌面背景')
+    parser = argparse.ArgumentParser(description=APP_NAME)
     parser.add_argument('--previous', action='store_true', help='切换到上一张壁纸')
     parser.add_argument('--next', action='store_true', help='切换到下一张壁纸')
     parser.add_argument('--random', action='store_true', help='随机切换壁纸')
@@ -3400,23 +3756,10 @@ def handle_command_line():
         random_wallpaper()
         sys.exit(0)
     elif args.show:
-        # 显示主窗口：如果已有主窗口则激活，否则正常启动
-        hwnd_existing = ctypes.windll.user32.FindWindowW(WND_CLASS_NAME, None) if IS_WINDOWS else None
-        if hwnd_existing:
-            log("找到已有窗口，尝试激活")
-            cmd_bytes = "show".encode('utf-8')
-            cds = COPYDATASTRUCT()
-            cds.dwData = 1
-            cds.cbData = len(cmd_bytes) + 1
-            cds.lpData = ctypes.cast(cmd_bytes, ctypes.c_void_p)
-            ctypes.windll.user32.SendMessageW(hwnd_existing, WM_COPYDATA, 0, ctypes.byref(cds))
-            ctypes.windll.user32.ShowWindow(hwnd_existing, 9)
-            ctypes.windll.user32.SetForegroundWindow(hwnd_existing)
-            ctypes.windll.user32.ShowWindow(hwnd_existing, 1)
+        # 显示主窗口：如果已有主窗口则激活，否则正常启动。
+        if IS_WINDOWS and activate_existing_instance(show_notice=False):
             sys.exit(0)
-        else:
-            # 没有主窗口，正常启动（不退出，让 main 继续）
-            return False
+        return False
     elif args.jump_to_wallpaper:
         log("收到 --jump-to-wallpaper 命令，直接创建侧边栏窗口")
         try:
@@ -3534,7 +3877,7 @@ def main():
     global single_entry
     version_label = None  # 版本标签引用，用于更新
 
-    # 检查开机自启动标志文件（由 PowerOn.vbs 创建）
+    # 检查开机自启动标志文件（由开机自启动 VBS 创建）
     flag_file = os.path.join(os.environ.get('TEMP') or tempfile.gettempdir(), 'WallpaperHideFlag.tmp')
     if os.path.exists(flag_file):
         try:
@@ -3550,9 +3893,17 @@ def main():
         except Exception as e:
             log(f"处理开机自启动标志文件失败: {e}")
 
-    # 先处理命令行参数，如果已有主进程则直接退出，否则继续启动
+    # 先处理命令行参数；右键菜单/命令行动作会直接执行并退出。
     if handle_command_line():
         sys.exit(0)
+
+    # 普通快捷方式启动必须先做单实例检测。若已运行，则提醒用户并打开已有 GUI。
+    ensure_single_instance_or_exit()
+
+    # 尽早创建隐藏消息窗口，避免第二次启动时只检测到互斥体却找不到可唤醒的 GUI。
+    start_message_window()
+
+    remove_legacy_startup_entries()
 
     # 判断是否为“动作启动”（右键菜单触发），非动作启动才上报使用统计
     args_for_check = argparse.ArgumentParser()
@@ -3566,22 +3917,23 @@ def main():
         # 在独立线程中上报（避免阻塞主窗口）
         report_usage()
 
-    # 双重检查：如果已有主进程（例如 handle_command_line 因窗口未找到而未退出），则退出
+    # 双重检查：兼容旧版本实例或互斥体不可用的情况。
     existing_hwnd = ctypes.windll.user32.FindWindowW(WND_CLASS_NAME, None) if IS_WINDOWS else None
-    if existing_hwnd:
-        log("检测到已有主进程，退出本实例")
+    if existing_hwnd and existing_hwnd != hwnd:
+        log("检测到已有主进程，打开已有主界面并退出本实例")
         if pending_action:
-            cmd_bytes = pending_action.encode('utf-8')
-            cds = COPYDATASTRUCT()
-            cds.dwData = 1
-            cds.cbData = len(cmd_bytes) + 1
-            cds.lpData = ctypes.cast(cmd_bytes, ctypes.c_void_p)
-            ctypes.windll.user32.SendMessageW(existing_hwnd, WM_COPYDATA, 0, ctypes.byref(cds))
+            send_command_to_hwnd(existing_hwnd, pending_action)
+        else:
+            activate_existing_instance(show_notice=True)
         sys.exit(0)
 
     log("=== 启动新的壁纸控制器实例 ===")
+    capture_session_original_wallpaper()
 
     root = tk.Tk()
+    apply_global_font_settings(root)
+    if pending_show_request:
+        root.after(100, show_main_window_now)
     dependency_availability = {
         "PIL": Image is not None,
         "requests": requests is not None,
@@ -3811,7 +4163,7 @@ def main():
     def set_auto_start(enable):
         """设置开机自启动"""
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-        value_name = "xxdz_WallpaperController"
+        value_name = STARTUP_ITEM_NAME
         if is_frozen():
             exe_path = sys.executable
         else:
@@ -4221,30 +4573,13 @@ def main():
                             new_menu_items.append(pystray.MenuItem(display_label, lambda: show_about_window()))
                         elif action == "exit":
                             def do_exit():
-                                def exit_in_main_thread():
-                                    try:
-                                        unregister_global_hotkeys()
-                                        global wallpaper_monitor_running
-                                        wallpaper_monitor_running = False
-                                        stop_slideshow()
-                                        if tray_icon_obj:
-                                            try:
-                                                tray_icon_obj.stop()
-                                            except:
-                                                pass
-                                        if root:
-                                            root.quit()
-                                            root.destroy()
-                                        import sys
-                                        sys.exit(0)
-                                    except:
-                                        import sys
-                                        sys.exit(0)
-
-                                if root:
-                                    root.after(0, exit_in_main_thread)
-                                else:
-                                    exit_in_main_thread()
+                                log("用户通过托盘菜单退出程序")
+                                try:
+                                    root.after(0, lambda: on_closing(force_exit=True))
+                                except Exception:
+                                    destroy_tray_icon()
+                                    import os as os_module
+                                    os_module._exit(0)
 
                             new_menu_items.append(pystray.MenuItem(display_label, do_exit))
                         else:
@@ -4377,9 +4712,12 @@ def main():
                 elif action == "exit":
                     def do_exit():
                         log("用户通过托盘菜单退出程序")
-                        # 直接强制退出，避免复杂的清理逻辑导致死锁
-                        import os as os_module
-                        os_module._exit(0)
+                        try:
+                            root.after(0, lambda: on_closing(force_exit=True))
+                        except Exception:
+                            destroy_tray_icon()
+                            import os as os_module
+                            os_module._exit(0)
 
                     menu_items.append(pystray.MenuItem(display_label, do_exit))
                 else:
@@ -4401,19 +4739,28 @@ def main():
             log(f"托盘图标被单击，执行动作: {action}")
             handle_tray_action(action)
 
-        tray_icon_obj = pystray.Icon("wallpaper_controller", icon_image, "xxdz_上一个桌面背景", build_menu())
+        tray_icon_obj = pystray.Icon(STARTUP_ITEM_NAME, icon_image, APP_NAME, build_menu())
         tray_icon_obj.on_click = on_click_wrapper
         tray_icon_obj.run_detached()
 
     def destroy_tray_icon():
-        """销毁托盘图标"""
+        """销毁托盘图标。退出前先隐藏再 stop，避免 Windows 通知区残留到鼠标扫过才消失。"""
         global tray_icon_obj
         if tray_icon_obj is not None:
-            try:
-                tray_icon_obj.stop()
-            except:
-                pass
+            icon = tray_icon_obj
             tray_icon_obj = None
+            try:
+                icon.visible = False
+            except Exception as e:
+                log(f"隐藏托盘图标失败: {e}")
+            try:
+                icon.stop()
+            except Exception as e:
+                log(f"停止托盘图标失败: {e}")
+            try:
+                time.sleep(0.05)
+            except Exception:
+                pass
 
     tray_settings_btn = ttk.Button(tray_row_frame, text="托盘功能设置", state="disabled", width=12,
                                    command=open_tray_settings)
@@ -4476,18 +4823,21 @@ def main():
     update_transition_btn_state()
 
     # 全局快捷键和初始化设置按钮放在同一行
+    # 这里不要再使用带 emoji 的按钮文本，也不要把 3 个固定宽度按钮 pack 到 400px 左侧区域里。
+    # 在部分 Windows 高 DPI / 中文字体环境下，emoji 会触发字体回退，按钮宽度又会超出父容器，导致文字显示不全。
     hotkey_row_frame = ttk.Frame(util_frame)
     hotkey_row_frame.pack(anchor="w", pady=2, fill="x")
+    for column_index in range(3):
+        hotkey_row_frame.grid_columnconfigure(column_index, weight=1, uniform="hotkey_buttons")
 
-    hotkey_btn = ttk.Button(hotkey_row_frame, text="⚡设置全局快捷键", command=open_global_hotkey_dialog, width=18)
-    hotkey_btn.pack(side="left", padx=(0, 0))
+    hotkey_btn = ttk.Button(hotkey_row_frame, text="设置全局快捷键", command=open_global_hotkey_dialog)
+    hotkey_btn.grid(row=0, column=0, sticky="ew", padx=(0, 4))
 
-    init_btn = ttk.Button(hotkey_row_frame, text="⚡初始化全局设置", command=open_init_dialog, width=18)
-    init_btn.pack(side="left")
-    init_btn.pack(side="left", padx=(0, 0))
+    init_btn = ttk.Button(hotkey_row_frame, text="初始化全局设置", command=open_init_dialog)
+    init_btn.grid(row=0, column=1, sticky="ew", padx=(2, 4))
 
-    exit_btn = ttk.Button(hotkey_row_frame, text="× 一键关掉本工具", command=exit_program, width=18)
-    exit_btn.pack(side="left")
+    exit_btn = ttk.Button(hotkey_row_frame, text="关掉本工具", command=lambda: on_closing(force_exit=True))
+    exit_btn.grid(row=0, column=2, sticky="ew", padx=(2, 0))
 
     def update_tray_btn_state():
         if tray_icon_var.get():
@@ -4581,8 +4931,13 @@ def main():
                         new_menu_items.append(pystray.MenuItem(display_label, lambda: show_about_window()))
                     elif action == "exit":
                         def do_exit():
-                            import os as os_module
-                            os_module._exit(0)
+                            log("用户通过托盘菜单退出程序")
+                            try:
+                                root.after(0, lambda: on_closing(force_exit=True))
+                            except Exception:
+                                destroy_tray_icon()
+                                import os as os_module
+                                os_module._exit(0)
                         new_menu_items.append(pystray.MenuItem(display_label, do_exit))
                     elif action == "jump":
                         new_menu_items.append(pystray.MenuItem(display_label, lambda: handle_tray_action("jump")))
@@ -4691,8 +5046,13 @@ def main():
             return
 
         startup_folder = get_startup_folder_path()
-        vbs_name = "PowerOn.vbs"
+        vbs_name = STARTUP_VBS_NAME
         vbs_path = os.path.join(startup_folder, vbs_name)
+        legacy_vbs_paths = [
+            os.path.join(startup_folder, legacy_name)
+            for legacy_name in LEGACY_STARTUP_VBS_NAMES
+            if legacy_name != vbs_name
+        ]
 
         # 获取当前 exe 的完整路径（编译后是 .exe，开发时是 .py）
         if is_frozen():
@@ -4717,8 +5077,8 @@ def main():
                 # 动态生成 VBS 内容（简化版，更可靠）
                 vbs_content = []
                 vbs_content.append(
-                    "'此文件仅用做开机自启动xxdz_上一个桌面背景！\tpy哔哩哔哩_小小电子xxdz   UID:3461569935575626")
-                vbs_content.append("' PowerOn.vbs - 开机自启动时创建标志文件，然后启动主程序")
+                    "'此文件仅用做开机自启动 ShangBackground。\tpy哔哩哔哩_小小电子xxdz   UID:3461569935575626")
+                vbs_content.append("' ShangBackground.vbs - 开机自启动时创建标志文件，然后启动主程序")
                 vbs_content.append("")
                 vbs_content.append("' 创建标志文件（写入 \"T\" 表示需要无窗口启动）")
                 vbs_content.append("Dim flagFile")
@@ -4752,6 +5112,13 @@ def main():
                 # 使用 ANSI 编码写入（VBS 默认使用 ANSI）
                 with open(vbs_path, 'w', encoding='gb2312') as f:
                     f.write(vbs_string)
+                for legacy_vbs_path in legacy_vbs_paths:
+                    if os.path.exists(legacy_vbs_path):
+                        try:
+                            os.remove(legacy_vbs_path)
+                            log(f"已删除旧启动 VBS: {legacy_vbs_path}")
+                        except Exception as cleanup_error:
+                            log(f"删除旧启动 VBS 失败: {cleanup_error}")
                 log(f"已动态生成 VBS 到启动文件夹: {vbs_path}")
                 log(f"VBS 中的 exe 路径: {exe_full_path}")
 
@@ -4762,9 +5129,10 @@ def main():
         else:
             # 禁用开机自启动：删除启动文件夹中的 VBS 文件
             try:
-                if os.path.exists(vbs_path):
-                    os.remove(vbs_path)
-                    log(f"已删除启动文件夹中的 VBS: {vbs_path}")
+                for path_to_remove in [vbs_path] + legacy_vbs_paths:
+                    if path_to_remove and os.path.exists(path_to_remove):
+                        os.remove(path_to_remove)
+                        log(f"已删除启动文件夹中的 VBS: {path_to_remove}")
                 log("开机自启动已禁用（已删除启动文件夹中的文件）")
             except Exception as e:
                 log(f"删除启动文件夹中的 VBS 失败: {e}")
@@ -4794,8 +5162,32 @@ def main():
             buf = ctypes.create_unicode_buffer(260)
             ctypes.windll.shell32.SHGetFolderPathW(None, CSIDL_STARTUP, None, 0, buf)
             startup_folder = buf.value
-            vbs_path = os.path.join(startup_folder, "PowerOn.vbs")
-            vbs_exists = os.path.exists(vbs_path)
+            new_vbs_path = os.path.join(startup_folder, STARTUP_VBS_NAME)
+            legacy_vbs_paths = [
+                os.path.join(startup_folder, name)
+                for name in LEGACY_STARTUP_VBS_NAMES
+                if name != STARTUP_VBS_NAME
+            ]
+            legacy_vbs_exists = any(os.path.exists(path) for path in legacy_vbs_paths)
+            new_vbs_exists = os.path.exists(new_vbs_path)
+
+            # 如果只存在旧名 PowerOn.vbs，迁移为项目名 ShangBackground.vbs。
+            if legacy_vbs_exists and not new_vbs_exists:
+                log("检测到旧名开机自启动 VBS，正在迁移为 ShangBackground.vbs")
+                set_auto_start(True)
+                new_vbs_exists = os.path.exists(new_vbs_path)
+
+            # 若新旧启动脚本同时存在，只保留 ShangBackground.vbs。
+            if new_vbs_exists:
+                for old_vbs_path in legacy_vbs_paths:
+                    if os.path.exists(old_vbs_path):
+                        try:
+                            os.remove(old_vbs_path)
+                            log(f"同步时已清理旧启动 VBS: {old_vbs_path}")
+                        except Exception as cleanup_error:
+                            log(f"同步时清理旧启动 VBS 失败: {cleanup_error}")
+
+            vbs_exists = new_vbs_exists
 
             # 根据VBS文件是否存在来更新复选框
             if auto_start_var is not None:
@@ -5339,21 +5731,12 @@ def main():
     # 初始化复选框文本
     update_ctx_checkbutton_texts()
 
-    def message_loop():
-        msg = ctypes.wintypes.MSG()
-        while True:
-            ret = ctypes.windll.user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
-            if ret <= 0:
-                break
-            ctypes.windll.user32.TranslateMessage(ctypes.byref(msg))
-            ctypes.windll.user32.DispatchMessageW(ctypes.byref(msg))
-
-    def on_closing():
+    def on_closing(force_exit=False):
         """关闭窗口时的行为"""
         global root, tray_icon_obj
 
         # 如果开启了后台运行，则仅隐藏窗口，不退出程序
-        if config.get("run_in_background", True) and not IS_MACOS:
+        if config.get("run_in_background", True) and not IS_MACOS and not force_exit:
             log("后台运行模式：窗口隐藏到托盘")
             root.withdraw()  # 隐藏窗口
             # 确保托盘图标存在
@@ -5394,6 +5777,9 @@ def main():
             # 停止幻灯片
             stop_slideshow()
 
+            # 退出时恢复软件启动前的壁纸，避免关闭后停留在本工具切换过的壁纸。
+            restore_session_original_wallpaper()
+
             # 清理触发文件
             for f in [TRIGGER_FILE_PREV, TRIGGER_FILE_NEXT, TRIGGER_FILE_RANDOM]:
                 if os.path.exists(f):
@@ -5420,12 +5806,7 @@ def main():
                 pass
 
             # 销毁托盘图标（如果存在）
-            if tray_icon_obj:
-                try:
-                    tray_icon_obj.stop()
-                except:
-                    pass
-                tray_icon_obj = None
+            destroy_tray_icon()
 
             # 销毁消息窗口
             if hwnd:
@@ -5487,12 +5868,8 @@ def main():
     solid_color_var.trace("w", on_solid_color_change)
     color1_var.trace("w", on_gradient_color1_change)
     color2_var.trace("w", on_gradient_color2_change)
-    msg_hwnd = create_message_window()
-    if msg_hwnd:
-        msg_thread = threading.Thread(target=message_loop, daemon=True)
-        msg_thread.start()
-        log("消息循环已启动")
-    else:
+    msg_hwnd = start_message_window()
+    if not msg_hwnd:
         log("消息窗口创建失败，将使用纯壁纸切换功能")
     wallpaper_monitor_running = True
     wallpaper_monitor_last = None
@@ -5651,7 +6028,7 @@ def main():
             # 等待窗口关闭
             dialog.wait_window()
 
-    register_context()
+    register_context(show_admin_prompt=False)
     on_mode_changed()
 
     # 更新复选框状态（如果界面已创建）
@@ -5971,14 +6348,14 @@ def main():
         title_frame = ttk.Frame(main_frame)
         title_frame.pack(fill="x", pady=(0, 15))
         version_label = ttk.Label(title_frame, text=f"✨ 发现新版本 v{remote_version}.0",
-                                  font=("Segoe UI", 14, "bold"))
+                                  font=(FONT_FAMILY, 14, "bold"))
         version_label.pack(side="left")
 
         # 更新内容区域
         notes_frame = ttk.LabelFrame(main_frame, text="更新内容", padding="10 5")
         notes_frame.pack(fill="both", expand=True, pady=(0, 15))
 
-        notes_text = tk.Text(notes_frame, wrap="word", font=("Segoe UI", 10),
+        notes_text = tk.Text(notes_frame, wrap="word", font=(FONT_FAMILY, 10),
                              bg="#ffffff", relief="flat", borderwidth=0, height=5)
         notes_text.pack(fill="both", expand=True)
         notes_text.insert("1.0", remote_release_notes)
@@ -6007,7 +6384,7 @@ def main():
         # 推荐说明（恢复原始文案）
         tip_label = ttk.Label(download_frame,
                               text="夸克已与本阿婆主合作，推荐用夸克线路哈，\n文件不大不会限啥速，毕竟为爱发电嘛",
-                              font=("Segoe UI", 8), foreground="#4B8FE0")
+                              font=(FONT_FAMILY, 8), foreground="#4B8FE0")
         tip_label.pack(pady=(5, 0))
 
         # 底部按钮区域
@@ -6131,7 +6508,7 @@ def main():
 
         label = tk.Label(tip, text="关于 上一个桌面背景", bg="#FFFFE0",
                          relief="solid", borderwidth=1, padx=8, pady=4,
-                         font=("Microsoft YaHei", 10))
+                         font=(FONT_FAMILY, 10))
         label.pack()
 
         tip.update_idletasks()
@@ -6521,17 +6898,17 @@ def main():
                             # 哔哩哔哩粉 #FE7398，哔哩哔哩蓝 #0098FF
                             label_frame = tk.Frame(right_frame, bg='#ffffff')
                             label_frame.pack(anchor="w", pady=3)
-                            pink_label = tk.Label(label_frame, text=bracket_part, font=("Segoe UI", 10), fg="#FE7398",
+                            pink_label = tk.Label(label_frame, text=bracket_part, font=(FONT_FAMILY, 10), fg="#FE7398",
                                                   bg='#ffffff', cursor="hand2")
                             pink_label.pack(side="left")
-                            blue_label = tk.Label(label_frame, text=rest_part, font=("Segoe UI", 10), fg="#0098FF",
+                            blue_label = tk.Label(label_frame, text=rest_part, font=(FONT_FAMILY, 10), fg="#0098FF",
                                                   bg='#ffffff', cursor="hand2")
                             blue_label.pack(side="left")
                             # 绑定点击事件
                             pink_label.bind("<Button-1>", lambda e, u=url: open_url(u))
                             blue_label.bind("<Button-1>", lambda e, u=url: open_url(u))
                         else:
-                            link_label = tk.Label(right_frame, text=text, font=("Segoe UI", 10), fg="#0098FF",
+                            link_label = tk.Label(right_frame, text=text, font=(FONT_FAMILY, 10), fg="#0098FF",
                                                   bg='#ffffff', cursor="hand2", anchor="w")
                             link_label.pack(anchor="w", pady=3)
                             link_label.bind("<Button-1>", lambda e, u=url: open_url(u))
