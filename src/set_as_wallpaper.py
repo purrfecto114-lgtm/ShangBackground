@@ -36,7 +36,7 @@ def log_debug(msg):
         with open(LOG_FILE, 'a', encoding='utf-8') as f:
             f.write(f"[{timestamp}] {msg}\n")
         print(msg)
-    except:
+    except Exception:
         print(msg)
 
 def load_config():
@@ -110,7 +110,7 @@ def kill_all_main_processes():
                     proc.kill()
                 else:
                     log_debug(f"进程 {pid} 已正常退出")
-            except:
+            except Exception:
                 pass
     log_debug("结束旧进程完成")
 

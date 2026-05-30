@@ -39,7 +39,12 @@ def get_app_command(hidden=False, script_path=None, frozen=False):
     if frozen:
         return [sys.executable] + (["--hide"] if hidden else [])
     script = script_path or os.path.abspath(sys.argv[0])
-    return [sys.executable, script] + (["--hide"] if hidden else [])
+    executable = sys.executable
+    if IS_WINDOWS:
+        pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+        if os.path.exists(pythonw):
+            executable = pythonw
+    return [executable, script] + (["--hide"] if hidden else [])
 
 
 def quote_applescript_text(value):

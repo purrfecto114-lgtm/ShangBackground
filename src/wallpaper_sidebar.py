@@ -1,386 +1,647 @@
+# wallpaper_sidebar.py
+"""
+壁纸侧边栏 — PySide6 版
+从右侧滑入/滑出，保留原动画手感；与原调用接口完全兼容。
+点击侧边栏外部或按 Esc 键自动收起。
+"""
+
+from __future__ import annotations
+
 import os
 import threading
-import tkinter as tk
-from tkinter import ttk
+import time
 
-from PIL import Image, ImageTk
+from PySide6.QtCore import (
+    QEasingCurve, QEvent, QObject, QPoint,
+    QPropertyAnimation, Qt, QTimer, Signal,
+)
+from PySide6.QtGui import QCursor, QImage, QMouseEvent, QPixmap
+from PySide6.QtWidgets import (
+    QApplication, QFrame, QHBoxLayout, QLabel,
+    QPushButton, QScrollArea, QScroller, QScrollerProperties, QVBoxLayout, QWidget,
+)
+from PIL import Image
 
 from app_config import FONT_FAMILY
 
 
+# ── 常量 ──────────────────────────────────────────────────────────────────────
 SUPPORTED_EXT = ('.jpg', '.jpeg', '.png', '.bmp')
-COPY_PREFIX = "(xxdz_random_copy)"
-THUMB_WIDTH = 180
-THUMB_HEIGHT = 120
+COPY_PREFIX   = "(xxdz_random_copy)"
+THUMB_WIDTH   = 148
+THUMB_HEIGHT  = 94
 
 
-def log_to_file(msg, log_path=None):
-    pass
-
-
-def generate_thumbnail_fast(img_path, size=(THUMB_WIDTH, THUMB_HEIGHT)):
+# ── 工具函数 ──────────────────────────────────────────────────────────────────
+def log_to_file(msg: str, log_path=None) -> None:
     try:
-        img = Image.open(img_path)
-        img.thumbnail((size[0] * 2, size[1] * 2), Image.Resampling.LANCZOS)
-        img = img.resize(size, Image.Resampling.NEAREST)
-        return img
-    except Exception as e:
-        log_to_file(f"生成缩略图失败 {img_path}: {e}")
-        return Image.new('RGB', size, (200, 200, 200))
+        ts   = time.strftime("[%H:%M:%S]")
+        line = f"{ts} [Sidebar] {msg}"
+        print(line)
+        if log_path:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+    except Exception:
+        pass
 
 
+def generate_thumbnail_fast(
+    img_path: str,
+    size: tuple = (THUMB_WIDTH, THUMB_HEIGHT),
+) -> Image.Image:
+    try:
+        with Image.open(img_path) as src:
+            img = src.copy()
+        img.thumbnail(
+            (size[0] * 2, size[1] * 2),
+            Image.Resampling.LANCZOS,
+        )
+        return img.resize(size, Image.Resampling.NEAREST)
+    except Exception as exc:
+        log_to_file(f"生成缩略图失败 {img_path}: {exc}")
+        return Image.new("RGB", size, (200, 200, 200))
+
+
+def pil_to_qpixmap(pil_img: Image.Image) -> QPixmap:
+    rgba  = pil_img.convert("RGBA")
+    data  = rgba.tobytes("raw", "RGBA")
+    qimg  = QImage(
+        data, rgba.width, rgba.height,
+        rgba.width * 4,
+        QImage.Format.Format_RGBA8888,
+    )
+    return QPixmap.fromImage(qimg.copy())
+
+
+# ── Signal 桥 ─────────────────────────────────────────────────────────────────
+class _LoaderSignals(QObject):
+    ready = Signal(int, object, str)
+
+
+# ── 缩略图后台加载器 ──────────────────────────────────────────────────────────
 class ThumbnailLoader:
-    def __init__(self, sidebar, max_workers=8):
-        self.sidebar = sidebar
-        self.max_workers = max_workers
-        self.loading_threads = []
-        self._stop = False
+    def __init__(self, sidebar: "WallpaperSidebar"):
+        self._sidebar = sidebar
+        self._stop    = False
+        self._signals = _LoaderSignals()
+        self._signals.ready.connect(sidebar.on_thumbnail_ready)
 
-    def load_all(self):
+    def load_all(self) -> None:
         self._stop = False
-        for idx, img_path in enumerate(self.sidebar.image_paths):
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self) -> None:
+        # 顺序后台加载，避免图片很多时一次性创建大量线程导致触屏滚动卡顿。
+        for idx, path in enumerate(self._sidebar.image_paths):
             if self._stop:
                 break
-            thread = threading.Thread(target=self._load_one, args=(idx, img_path), daemon=True)
-            thread.start()
-            self.loading_threads.append(thread)
+            self._worker(idx, path)
 
-    def _load_one(self, idx, img_path):
+    def _worker(self, idx: int, path: str) -> None:
         if self._stop:
             return
         try:
-            pil_img = generate_thumbnail_fast(img_path)
+            pil_img = generate_thumbnail_fast(path)
+            if not self._stop:
+                self._signals.ready.emit(idx, pil_img, path)
+        except Exception as exc:
+            log_to_file(f"加载缩略图线程异常 {path}: {exc}")
 
-            def update_ui():
-                if self._stop or self.sidebar._is_closing:
-                    return
-                try:
-                    photo = ImageTk.PhotoImage(pil_img)
-                    self.sidebar.update_thumbnail(idx, photo, img_path)
-                except Exception as ui_error:
-                    log_to_file(f"更新缩略图到界面失败 {img_path}: {ui_error}", self.sidebar.log_path)
-
-            if self.sidebar.master and self.sidebar.master.winfo_exists():
-                self.sidebar.master.after(0, update_ui)
-        except Exception as e:
-            log_to_file(f"加载缩略图线程异常 {img_path}: {e}")
-
-    def stop(self):
+    def stop(self) -> None:
         self._stop = True
-
-
-class WallpaperSidebar:
-    def __init__(self, master, folder, current_path, log_path, show_message=None, switch_wallpaper=None):
-        self.master = master
-        self.folder = folder
-        self.current_path = current_path
-        self.log_path = log_path
-        self.show_message = show_message or (lambda title, msg: None)
-        self.switch_wallpaper = switch_wallpaper
-        self.thumbnails = []
-        self.scroll_canvas = None
-        self.scroll_frame = None
-        self.is_animating = False
-        self._is_closing = False
-        self.loader = None
-        self._global_click_id = None
-
         try:
-            images = [f for f in os.listdir(folder)
-                      if f.lower().endswith(SUPPORTED_EXT) and not f.startswith(COPY_PREFIX)]
-            log_to_file(f"找到 {len(images)} 张图片", log_path)
-        except Exception as e:
-            log_to_file(f"列出图片失败: {e}", log_path)
-            self.show_message("错误", "无法读取壁纸文件夹")
-            self.master.destroy()
-            return
-        if not images:
-            log_to_file("文件夹中没有图片", log_path)
-            self.show_message("提示喵", "壁纸文件夹中没有图片")
-            self.master.destroy()
-            return
-        self.image_paths = [os.path.join(folder, img) for img in images]
+            self._signals.ready.disconnect()
+        except RuntimeError:
+            pass
 
-        self.setup_ui()
-        self.create_placeholders()
-        self.highlight_current()
-        self.setup_click_outside_handler()
-        self.master.after(500, self.start_loading_thumbnails)
-        self.master.after(300, self.highlight_current)
-        self.master.after(1500, self.scroll_to_current_after_load)
-        log_to_file("侧边栏初始化完成", self.log_path)
 
-    def setup_ui(self):
-        self.master.title("壁纸侧边栏")
-        self.master.overrideredirect(True)
-        self.master.attributes('-topmost', True)
-        self.master.configure(bg='#f0f0f0')
-        screen_width = self.master.winfo_screenwidth()
-        screen_height = self.master.winfo_screenheight()
-        self.width = 300
-        self.height = screen_height
-        self.x = screen_width - self.width
-        self.y = 0
-        self.master.geometry(f"{self.width}x{self.height}+{screen_width}+{self.y}")
+# ── 单张壁纸卡片 ──────────────────────────────────────────────────────────────
+class ThumbnailItem(QFrame):
+    clicked = Signal(str)
 
-        close_btn = tk.Label(self.master, text="X", font=("Segoe UI", 14),
-                             bg='#f0f0f0', fg='#666', cursor="hand2")
-        close_btn.place(x=self.width - 35, y=5, width=30, height=30)
-        close_btn.bind("<Button-1>", lambda e: self.close_sidebar())
+    _S_NORMAL = (
+        "ThumbnailItem{"
+        "background:#ffffff;border:1px solid #dddddd;border-radius:6px;}"
+    )
+    _S_HOVER = (
+        "ThumbnailItem{"
+        "background:#f5f5f5;border:1px solid #aaaaaa;border-radius:6px;}"
+    )
+    _S_ACTIVE = (
+        "ThumbnailItem{"
+        "background:#deeeff;border:2px solid #4a90d9;border-radius:6px;}"
+    )
 
-        title = tk.Label(self.master, text="壁纸列表", font=(FONT_FAMILY, 12, "bold"),
-                         bg='#f0f0f0', fg='#333')
-        title.place(x=10, y=5)
+    def __init__(self, img_path: str, parent=None):
+        super().__init__(parent)
+        self.img_path     = img_path
+        self._highlighted = False
+        self._loaded      = False
+        self._press_pos   = None
+        self._build_ui()
 
-        self.scroll_canvas = tk.Canvas(self.master, bg='#f0f0f0', highlightthickness=0)
-        self.scroll_frame = tk.Frame(self.scroll_canvas, bg='#f0f0f0')
-        self.v_scrollbar = ttk.Scrollbar(self.master, orient="vertical", command=self.scroll_canvas.yview)
-        self.scroll_canvas.configure(yscrollcommand=self.v_scrollbar.set)
+    def _build_ui(self) -> None:
+        self.setFixedHeight(116)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setStyleSheet(self._S_NORMAL)
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
 
-        self.v_scrollbar.pack(side="right", fill="y")
-        self.scroll_canvas.pack(side="left", fill="both", expand=True)
-        self.canvas_window = self.scroll_canvas.create_window((0, 0), window=self.scroll_frame, anchor="nw")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(7, 7, 7, 7)
+        lay.setSpacing(0)
 
-        self.scroll_frame.bind("<Configure>", self.on_frame_configure)
-        self.scroll_canvas.bind("<Configure>", self.on_canvas_configure)
+        self.img_lbl = QLabel("加载中…")
+        self.img_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.img_lbl.setFixedSize(THUMB_WIDTH, THUMB_HEIGHT)
+        self.img_lbl.setStyleSheet(
+            f"background:#eeeeee;color:#999999;border-radius:3px;"
+            f"font-family:'{FONT_FAMILY}';font-size:9pt;"
+        )
 
-        def on_mousewheel(event):
-            self.scroll_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        self.setToolTip(self.img_path)
+        lay.addWidget(self.img_lbl,  0, Qt.AlignmentFlag.AlignCenter)
 
-        self.scroll_canvas.bind("<MouseWheel>", on_mousewheel)
-        self.scroll_frame.bind("<MouseWheel>", on_mousewheel)
-        self.animate_in()
+    def set_thumbnail(self, pixmap: QPixmap) -> None:
+        self.img_lbl.setPixmap(pixmap)
+        self.img_lbl.setText("")
+        self.img_lbl.setStyleSheet("background:transparent;border:none;")
+        self._loaded = True
 
-    def on_frame_configure(self, event):
-        self.scroll_canvas.configure(scrollregion=self.scroll_canvas.bbox("all"))
+    def set_highlighted(self, on: bool) -> None:
+        self._highlighted = on
+        self.setStyleSheet(self._S_ACTIVE if on else self._S_NORMAL)
 
-    def on_canvas_configure(self, event):
-        self.scroll_canvas.itemconfig(self.canvas_window, width=event.width)
+    @property
+    def loaded(self) -> bool:
+        return self._loaded
 
-    def create_placeholders(self):
-        for idx, img_path in enumerate(self.image_paths):
-            frame = tk.Frame(self.scroll_frame, bg='#ffffff', relief="flat", bd=1, height=150)
-            frame.pack(pady=5, padx=10, fill="x")
-            frame.pack_propagate(False)
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        super().mousePressEvent(event)
 
-            placeholder_label = tk.Label(frame, text="加载中...", bg='#ffffff', fg='#999',
-                                         font=(FONT_FAMILY, 10))
-            placeholder_label.pack(expand=True, fill="both", pady=30)
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._press_pos is not None:
+            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            if (pos - self._press_pos).manhattanLength() <= 10:
+                self.clicked.emit(self.img_path)
+        self._press_pos = None
+        super().mouseReleaseEvent(event)
 
-            name = os.path.splitext(os.path.basename(img_path))[0]
-            name_label = tk.Label(frame, text=name, bg='#ffffff', fg='#555',
-                                  font=(FONT_FAMILY, 9), wraplength=THUMB_WIDTH)
-            name_label.pack(pady=(0, 5))
+    def enterEvent(self, event) -> None:
+        if not self._highlighted:
+            self.setStyleSheet(self._S_HOVER)
+        super().enterEvent(event)
 
-            def make_callback(path):
-                return lambda e: self.on_thumbnail_click(path)
+    def leaveEvent(self, event) -> None:
+        if not self._highlighted:
+            self.setStyleSheet(self._S_NORMAL)
+        super().leaveEvent(event)
 
-            frame.bind("<Button-1>", make_callback(img_path))
-            name_label.bind("<Button-1>", make_callback(img_path))
 
-            self.thumbnails.append({
-                'path': img_path,
-                'frame': frame,
-                'photo': None,
-                'img_label': None,
-                'placeholder_label': placeholder_label,
-                'name_label': name_label
-            })
 
-    def update_thumbnail(self, idx, photo, img_path):
-        if self._is_closing or idx >= len(self.thumbnails):
-            return
-        try:
-            item = self.thumbnails[idx]
-            if item['path'] != img_path:
-                return
-            frame = item['frame']
-            if item['placeholder_label']:
-                item['placeholder_label'].destroy()
-                item['placeholder_label'] = None
-            img_label = tk.Label(frame, image=photo, bg='#ffffff', cursor="hand2")
-            img_label.image = photo
-            img_label.pack(pady=5)
-            item['name_label'].pack(pady=(0, 5))
 
-            def make_callback(path):
-                return lambda e: self.on_thumbnail_click(path)
+class _OutsideClickShield(QWidget):
+    """全屏透明点击层：触屏/鼠标点到侧边栏外部时负责收起侧边栏。"""
 
-            img_label.bind("<Button-1>", make_callback(img_path))
-            item['img_label'] = img_label
-            item['photo'] = photo
-            item['placeholder_label'] = None
-            frame.configure(bg='#ffffff')
-            if os.path.normpath(img_path) == os.path.normpath(self.current_path):
-                frame.config(bg="#e0f0ff", relief="solid", bd=2)
-            self.scroll_canvas.configure(scrollregion=self.scroll_canvas.bbox("all"))
-        except Exception as e:
-            log_to_file(f"更新缩略图失败: {e}", self.log_path)
+    def __init__(self, sidebar: "WallpaperSidebar"):
+        super().__init__(None)
+        self.sidebar = sidebar
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_AcceptTouchEvents, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setStyleSheet("background: rgba(0, 0, 0, 1);")
+        self.setWindowOpacity(0.01)
+        screen = QApplication.primaryScreen()
+        if screen:
+            self.setGeometry(screen.geometry())
 
-    def start_loading_thumbnails(self):
-        self.loader = ThumbnailLoader(self)
-        self.loader.load_all()
+    def mousePressEvent(self, event) -> None:
+        if self.sidebar and not self.sidebar._is_closing:
+            self.sidebar.close_sidebar()
+        event.accept()
 
-    def highlight_current(self):
-        def do_highlight_and_scroll():
-            if self._is_closing:
-                return
-            target_idx = -1
-            for idx, item in enumerate(self.thumbnails):
-                if os.path.normpath(item['path']) == os.path.normpath(self.current_path):
-                    target_idx = idx
-                    break
-            if target_idx == -1:
-                log_to_file("未找到当前壁纸", self.log_path)
-                return
-            item = self.thumbnails[target_idx]
-            item['frame'].config(bg="#e0f0ff", relief="solid", bd=2)
+    def event(self, event) -> bool:
+        if event.type() in (QEvent.Type.TouchBegin, QEvent.Type.TouchUpdate, QEvent.Type.TouchEnd):
+            if self.sidebar and not self.sidebar._is_closing:
+                QTimer.singleShot(0, self.sidebar.close_sidebar)
+            event.accept()
+            return True
+        return super().event(event)
 
-            def scroll_to_item():
-                if self._is_closing:
-                    return
-                try:
-                    y = item['frame'].winfo_y()
-                    canvas_h = self.scroll_canvas.winfo_height()
-                    target_y = max(0, y - (canvas_h // 3))
-                    bbox = self.scroll_canvas.bbox("all")
-                    if bbox and bbox[3] > 0:
-                        scroll_pos = target_y / bbox[3]
-                        scroll_pos = max(0, min(1, scroll_pos))
-                        self.scroll_canvas.yview_moveto(scroll_pos)
-                        log_to_file(f"滚动到当前壁纸: {os.path.basename(item['path'])} 位置={scroll_pos:.2f}",
-                                    self.log_path)
-                except Exception as e:
-                    log_to_file(f"滚动失败: {e}", self.log_path)
 
-            self.master.after(100, scroll_to_item)
-
-        self.master.after(200, do_highlight_and_scroll)
-
-    def scroll_to_current_after_load(self):
-        def check_all_loaded():
-            if self._is_closing:
-                return
-            all_loaded = all(item['photo'] is not None for item in self.thumbnails)
-            if all_loaded:
-                log_to_file("所有缩略图加载完成，重新滚动到当前壁纸", self.log_path)
-                self.highlight_current()
-            else:
-                self.master.after(500, check_all_loaded)
-
-        self.master.after(1000, check_all_loaded)
-
-    def on_thumbnail_click(self, target_path):
-        log_to_file(f"点击壁纸: {target_path}", self.log_path)
-        try:
-            if self.switch_wallpaper:
-                self.switch_wallpaper(target_path)
-            log_to_file("已切换壁纸", self.log_path)
-        except Exception as e:
-            log_to_file(f"切换壁纸失败: {e}", self.log_path)
-        self.master.after(100, self.close_sidebar)
-
-    def setup_click_outside_handler(self):
-        self.master.grab_set()
-        self.master.bind("<Button-1>", self._on_click_inside)
-        self.master.bind("<FocusOut>", self._on_focus_out)
-        self._start_click_monitor()
-        log_to_file("点击外部收起功能已启用", self.log_path)
-
-    def _on_click_inside(self, event):
+def _enable_touch_scrolling(widget) -> None:
+    try:
+        target = widget.viewport() if hasattr(widget, "viewport") else widget
+        target.setAttribute(Qt.WidgetAttribute.WA_AcceptTouchEvents, True)
+        QScroller.grabGesture(target, QScroller.ScrollerGestureType.TouchGesture)
+        scroller = QScroller.scroller(target)
+        props = scroller.scrollerProperties()
+        props.setScrollMetric(QScrollerProperties.ScrollMetric.OvershootDragResistanceFactor, 0.18)
+        props.setScrollMetric(QScrollerProperties.ScrollMetric.OvershootScrollDistanceFactor, 0.10)
+        props.setScrollMetric(QScrollerProperties.ScrollMetric.DecelerationFactor, 0.10)
+        props.setScrollMetric(QScrollerProperties.ScrollMetric.HorizontalOvershootPolicy, QScrollerProperties.OvershootPolicy.OvershootAlwaysOff)
+        scroller.setScrollerProperties(props)
+    except Exception:
         pass
 
-    def _on_focus_out(self, event):
-        log_to_file("侧边栏失去焦点，关闭", self.log_path)
-        self.close_sidebar()
 
-    def _start_click_monitor(self):
-        def check_mouse():
-            if self._is_closing or self.is_animating:
+# ── 主侧边栏窗口 ──────────────────────────────────────────────────────────────
+class WallpaperSidebar(QWidget):
+    """
+    无边框、置顶的右侧滑入侧边栏。
+
+    功能：
+      - 点击侧边栏外部区域自动收起（应用级 eventFilter）
+      - 按 Esc 键收起
+      - 侧边栏标题栏 ✕ 按钮关闭
+
+    closed Signal：侧边栏彻底关闭后发出。
+    """
+
+    closed = Signal()
+
+    def __init__(
+        self,
+        master,
+        folder: str,
+        current_path: str,
+        log_path,
+        show_message=None,
+        switch_wallpaper=None,
+    ):
+        super().__init__(None)
+
+        self.folder           = folder
+        self.current_path     = current_path or ""
+        self.log_path         = log_path
+        self.show_message     = show_message or (lambda t, m: None)
+        self.switch_wallpaper = switch_wallpaper
+
+        self.image_paths:     list[str]                  = []
+        self.thumbnail_items: list[ThumbnailItem]        = []
+        self.is_animating:    bool                       = False
+        self._is_closing:     bool                       = False
+        self.loader:          ThumbnailLoader | None     = None
+        self._anim:           QPropertyAnimation | None  = None
+        self._shield:         _OutsideClickShield | None = None
+
+        if not QApplication.instance():
+            raise RuntimeError(
+                "WallpaperSidebar 必须在 QApplication 创建之后才能实例化"
+            )
+
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint  |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+
+        # ── 收集图片路径 ──────────────────────────────────────────────────────
+        try:
+            files = sorted([
+                f for f in os.listdir(folder)
+                if f.lower().endswith(SUPPORTED_EXT)
+                and not f.startswith(COPY_PREFIX)
+            ])
+            log_to_file(f"找到 {len(files)} 张图片", log_path)
+        except Exception as exc:
+            log_to_file(f"列出图片失败: {exc}", log_path)
+            self.show_message("错误", "无法读取壁纸文件夹")
+            QTimer.singleShot(0, self.deleteLater)
+            return
+
+        if not files:
+            log_to_file("文件夹中没有图片", log_path)
+            self.show_message("提示喵", "壁纸文件夹中没有图片")
+            QTimer.singleShot(0, self.deleteLater)
+            return
+
+        self.image_paths = [os.path.join(folder, f) for f in files]
+
+        screen   = QApplication.primaryScreen()
+        geo      = screen.geometry()
+        self._sw = geo.width()
+        self._sh = geo.height()
+        self._w  = 260
+        self._tx = self._sw - self._w
+
+        self._build_ui()
+        self._create_items()
+
+        self._shield = _OutsideClickShield(self)
+        self._shield.show()
+        self._shield.raise_()
+
+        # 应用级事件过滤器保留为同一应用内点击的兜底；透明点击层负责真实桌面/触屏外部点击。
+        if app := QApplication.instance():
+            app.installEventFilter(self)
+
+        self.animate_in()
+
+        QTimer.singleShot(300,  self.highlight_current)
+        QTimer.singleShot(500,  self.start_loading_thumbnails)
+        QTimer.singleShot(1500, self.scroll_to_current_after_load)
+        log_to_file("侧边栏初始化完成", self.log_path)
+
+    # ═══════════════════════════════ UI 构建 ══════════════════════════════════
+
+    def _build_ui(self) -> None:
+        self.setFixedSize(self._w, self._sh)
+        self.setStyleSheet("background:#f0f0f0;")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ── 标题栏 ────────────────────────────────────────────────────────────
+        header = QWidget()
+        header.setFixedHeight(42)
+        header.setStyleSheet(
+            "background:#f0f0f0;border-bottom:1px solid #d8d8d8;"
+        )
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(12, 6, 10, 6)
+
+        title_lbl = QLabel("壁纸列表")
+        title_lbl.setStyleSheet(
+            f"font-family:'{FONT_FAMILY}';font-size:12pt;"
+            "font-weight:bold;color:#333333;"
+        )
+
+        close_btn = QPushButton("✕")
+        close_btn.setFixedSize(28, 28)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background:transparent; color:#777777;
+                font-size:12pt; border:none; border-radius:4px;
+            }
+            QPushButton:hover   { background:#e0e0e0; color:#333333; }
+            QPushButton:pressed { background:#c8c8c8; }
+        """)
+        close_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        close_btn.clicked.connect(self.close_sidebar)
+
+        hl.addWidget(title_lbl)
+        hl.addStretch()
+        hl.addWidget(close_btn)
+
+        # ── 滚动区域 ──────────────────────────────────────────────────────────
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.scroll_area.setStyleSheet("""
+            QScrollArea { background:#f0f0f0; border:none; }
+            QScrollBar:vertical {
+                background:#f0f0f0; width:7px; margin:0;
+            }
+            QScrollBar::handle:vertical {
+                background:#c0c0c0; border-radius:3px; min-height:24px;
+            }
+            QScrollBar::handle:vertical:hover { background:#999999; }
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical    { height:0; }
+        """)
+        _enable_touch_scrolling(self.scroll_area)
+
+        self._container = QWidget()
+        self._container.setStyleSheet("background:#f0f0f0;")
+        self._vlay = QVBoxLayout(self._container)
+        self._vlay.setContentsMargins(8, 8, 8, 8)
+        self._vlay.setSpacing(8)
+        self.scroll_area.setWidget(self._container)
+
+        root.addWidget(header)
+        root.addWidget(self.scroll_area)
+
+    def _create_items(self) -> None:
+        for path in self.image_paths:
+            item = ThumbnailItem(path)
+            item.clicked.connect(self.on_thumbnail_click)
+            self._vlay.addWidget(item)
+            self.thumbnail_items.append(item)
+        self._vlay.addStretch()
+
+    # ═══════════════════════════════ 缩略图加载 ═══════════════════════════════
+
+    def start_loading_thumbnails(self) -> None:
+        if self._is_closing:
+            return
+        self.loader = ThumbnailLoader(self)
+        self.loader.load_all()
+        log_to_file("开始后台加载缩略图", self.log_path)
+
+    def on_thumbnail_ready(self, idx: int, pil_img, path: str) -> None:
+        if self._is_closing or idx >= len(self.thumbnail_items):
+            return
+        try:
+            item = self.thumbnail_items[idx]
+            if item.img_path != path:
                 return
-            try:
-                cursor_pos = self.master.winfo_pointerxy()
-                x = self.master.winfo_x()
-                y = self.master.winfo_y()
-                w = self.master.winfo_width()
-                h = self.master.winfo_height()
-                if not (x <= cursor_pos[0] <= x + w and y <= cursor_pos[1] <= y + h):
-                    if self.master.focus_get() is None:
-                        log_to_file("检测到点击外部，关闭侧边栏", self.log_path)
-                        self.close_sidebar()
-                        return
-            except Exception:
-                pass
-            if not self._is_closing:
-                self.master.after(200, check_mouse)
+            item.set_thumbnail(pil_to_qpixmap(pil_img))
+            if os.path.normpath(path) == os.path.normpath(self.current_path):
+                item.set_highlighted(True)
+        except Exception as exc:
+            log_to_file(f"更新缩略图 UI 失败: {exc}", self.log_path)
 
-        self.master.after(500, check_mouse)
+    # ═══════════════════════════════ 高亮 / 滚动 ══════════════════════════════
 
-    def animate_in(self):
-        screen_width = self.master.winfo_screenwidth()
-        start_x = screen_width
-        end_x = self.x
-        steps = 15
-        delay = 8
-        self.is_animating = True
+    def highlight_current(self) -> None:
+        if self._is_closing:
+            return
+        target = -1
+        for i, item in enumerate(self.thumbnail_items):
+            is_cur = (
+                os.path.normpath(item.img_path) ==
+                os.path.normpath(self.current_path)
+            )
+            item.set_highlighted(is_cur)
+            if is_cur:
+                target = i
 
-        def step(step_idx):
-            if step_idx <= steps and self.is_animating:
-                t = step_idx / steps
-                ease = 1 - (1 - t) ** 1.5
-                cur_x = start_x - (start_x - end_x) * ease
-                self.master.geometry(f"{self.width}x{self.height}+{int(cur_x)}+{self.y}")
-                self.master.update_idletasks()
-                self.master.after(delay, lambda: step(step_idx + 1))
+        if target >= 0:
+            log_to_file(
+                f"高亮当前壁纸: "
+                f"{os.path.basename(self.thumbnail_items[target].img_path)}",
+                self.log_path,
+            )
+            QTimer.singleShot(120, lambda: self._scroll_to(target))
+
+    def _scroll_to(self, idx: int) -> None:
+        if self._is_closing or idx >= len(self.thumbnail_items):
+            return
+        self.scroll_area.ensureWidgetVisible(
+            self.thumbnail_items[idx], xMargin=0, yMargin=60
+        )
+
+    def scroll_to_current_after_load(self) -> None:
+        def _check() -> None:
+            if self._is_closing:
+                return
+            if all(it.loaded for it in self.thumbnail_items):
+                log_to_file("所有缩略图加载完成，重新定位", self.log_path)
+                self.highlight_current()
             else:
-                self.master.geometry(f"{self.width}x{self.height}+{end_x}+{self.y}")
-                self.master.grab_set()
-                self.master.focus_force()
-                self.is_animating = False
+                QTimer.singleShot(500, _check)
 
-        step(1)
+        QTimer.singleShot(1000, _check)
 
-    def animate_out(self, on_complete=None):
+    # ═══════════════════════════════ 交互逻辑 ═════════════════════════════════
+
+    def on_thumbnail_click(self, path: str) -> None:
+        log_to_file(f"点击壁纸: {path}", self.log_path)
+        try:
+            if self.switch_wallpaper:
+                self.switch_wallpaper(path)
+            log_to_file("已切换壁纸", self.log_path)
+        except Exception as exc:
+            log_to_file(f"切换壁纸失败: {exc}", self.log_path)
+        QTimer.singleShot(100, self.close_sidebar)
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        """
+        应用级事件过滤器：点击侧边栏外部时自动收起。
+
+        逻辑：
+          1. 动画播放中（is_animating=True）或已在关闭流程中，不响应。
+          2. 确认是 MouseButtonPress 且是真实的 QMouseEvent。
+          3. 全局坐标不在侧边栏矩形内 → 触发 close_sidebar。
+        """
+        if not self._is_closing and not self.is_animating:
+            if event.type() == QEvent.Type.MouseButtonPress:
+                if isinstance(event, QMouseEvent):
+                    try:
+                        pos = event.globalPosition().toPoint()
+                        # 使用 frameGeometry 获取全局坐标下的窗口矩形
+                        if not self.frameGeometry().contains(pos):
+                            QTimer.singleShot(0, self.close_sidebar)
+                    except Exception:
+                        pass
+        return False  # 不拦截事件，让其继续传递
+
+    # ═══════════════════════════════ 键盘支持 ═════════════════════════════════
+
+    def keyPressEvent(self, event) -> None:
+        """
+        Esc 键快速关闭侧边栏。
+        与点击外部收起的行为等效，同样经过动画滑出流程。
+        """
+        if event.key() == Qt.Key.Key_Escape:
+            self.close_sidebar()
+        else:
+            super().keyPressEvent(event)
+
+    # ═══════════════════════════════ /滑出动画 ════════════════════════════
+
+    def animate_in(self) -> None:
+        """从屏幕右边缘滑入（OutCubic 200 ms）。"""
+        start = QPoint(self._sw, 0)
+        end   = QPoint(self._tx, 0)
+
+        self.move(start)
+        if self._shield:
+            self._shield.show()
+            self._shield.raise_()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+        self.is_animating = True
+        self._anim = QPropertyAnimation(self, b"pos", self)
+        self._anim.setDuration(200)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.setStartValue(start)
+        self._anim.setEndValue(end)
+        self._anim.finished.connect(self._on_in_done)
+        self._anim.start()
+
+    def _on_in_done(self) -> None:
+        self.is_animating = False
+        self.raise_()
+        self.activateWindow()
+
+    def animate_out(self, on_complete=None) -> None:
+        """滑出至屏幕右边缘（InCubic 160 ms）。"""
         if self.is_animating:
             return
         self.is_animating = True
-        screen_width = self.master.winfo_screenwidth()
-        start_x = self.x
-        end_x = screen_width
-        steps = 12
-        delay = 8
 
-        def step(step_idx):
-            if step_idx <= steps and self.is_animating:
-                t = step_idx / steps
-                ease = t ** 1.2
-                cur_x = start_x + (end_x - start_x) * ease
-                self.master.geometry(f"{self.width}x{self.height}+{int(cur_x)}+{self.y}")
-                self.master.update_idletasks()
-                self.master.after(delay, lambda: step(step_idx + 1))
-            else:
-                if on_complete:
-                    on_complete()
-                self.is_animating = False
+        start = QPoint(self._tx, 0)
+        end   = QPoint(self._sw, 0)
 
-        step(1)
+        self._anim = QPropertyAnimation(self, b"pos", self)
+        self._anim.setDuration(160)
+        self._anim.setEasingCurve(QEasingCurve.Type.InCubic)
+        self._anim.setStartValue(start)
+        self._anim.setEndValue(end)
 
-    def close_sidebar(self):
+        def _done() -> None:
+            self.is_animating = False
+            if on_complete:
+                on_complete()
+
+        self._anim.finished.connect(_done)
+        self._anim.start()
+
+    # ═══════════════════════════════ 关闭逻辑 ═════════════════════════════════
+
+    def close_sidebar(self) -> None:
+        """触发滑出动画后关闭。双重 guard 防止重入。"""
         if self.is_animating or self._is_closing:
             return
         self._is_closing = True
+
         if self.loader:
             self.loader.stop()
         log_to_file("关闭侧边栏", self.log_path)
-        try:
-            self.master.grab_release()
-        except Exception:
-            pass
+        self._remove_event_filter()
+        self._close_click_shield()
 
-        def on_animation_complete():
+        def _finish() -> None:
             try:
-                self.master.destroy()
+                self.close()
+                self.deleteLater()
             except Exception:
                 pass
 
-        self.animate_out(on_animation_complete)
+        self.animate_out(_finish)
+
+    def _remove_event_filter(self) -> None:
+        if app := QApplication.instance():
+            try:
+                app.removeEventFilter(self)
+            except Exception:
+                pass
+
+    def _close_click_shield(self) -> None:
+        shield = getattr(self, "_shield", None)
+        self._shield = None
+        if shield is not None:
+            try:
+                shield.close()
+                shield.deleteLater()
+            except Exception:
+                pass
+
+    def closeEvent(self, event) -> None:
+        """Alt+F4 / 系统强制关闭时的安全兜底。"""
+        self._is_closing = True
+        if self.loader:
+            self.loader.stop()
+        if self._anim:
+            self._anim.stop()
+        self._remove_event_filter()
+        self._close_click_shield()
+        super().closeEvent(event)
+        try:
+            self.closed.emit()
+        except RuntimeError:
+            pass
