@@ -1,0 +1,7 @@
+PySide6>=6.7
+pillow>=10.0
+requests>=2.31
+httpx>=0.27
+numpy>=1.26
+psutil>=5.9
+pyinstaller>=6.6
