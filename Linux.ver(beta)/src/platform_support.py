@@ -49,17 +49,6 @@ def run_osascript(script: str) -> str:
     return out
 
 
-def _run_cmd(cmd: str, timeout: int = 10) -> tuple[int, str, str]:
-    """Compatibility wrapper for read-only shell snippets."""
-    try:
-        result = subprocess.run(
-            cmd, shell=True, text=True, capture_output=True, timeout=timeout, check=False
-        )
-        return result.returncode, result.stdout.strip(), result.stderr.strip()
-    except Exception as exc:
-        return -1, "", str(exc)
-
-
 def _file_uri(path: str) -> str:
     return Path(path).expanduser().resolve().as_uri()
 

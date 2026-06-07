@@ -97,18 +97,36 @@ def _try_windows_mutex() -> bool | None:
         return None
 
 
+def _user_lock_suffix() -> str:
+    if hasattr(os, "getuid"):
+        try:
+            return str(os.getuid())
+        except OSError:
+            pass
+    return os.environ.get("USERNAME") or os.environ.get("USER") or "default"
+
+
 def _runtime_dir() -> Path:
-    """返回当前用户可写的运行时目录。"""
+    """返回当前用户私有且可写的运行时目录。"""
     if os.name == "nt":
         root = os.environ.get("LOCALAPPDATA") or os.environ.get("TEMP") or tempfile.gettempdir()
+        dirname = APP_LOCK_ID
     else:
         root = os.environ.get("XDG_RUNTIME_DIR") or os.environ.get("TMPDIR") or tempfile.gettempdir()
-    path = Path(root) / APP_LOCK_ID
+        dirname = f"{APP_LOCK_ID}-{_user_lock_suffix()}"
+    path = Path(root) / dirname
     try:
-        path.mkdir(parents=True, exist_ok=True)
+        path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if os.name != "nt":
+            os.chmod(path, 0o700)
     except Exception:
-        path = Path(tempfile.gettempdir()) / APP_LOCK_ID
-        path.mkdir(parents=True, exist_ok=True)
+        path = Path(tempfile.gettempdir()) / dirname
+        path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if os.name != "nt":
+            try:
+                os.chmod(path, 0o700)
+            except OSError:
+                pass
     return path
 
 
@@ -177,7 +195,7 @@ def _write_identity(file_obj) -> None:
 
 
 def _lock_port() -> int:
-    user = os.environ.get("USERNAME") or os.environ.get("USER") or "default"
+    user = _user_lock_suffix()
     digest = hashlib.sha1(f"{APP_LOCK_ID}:{user}".encode("utf-8", errors="ignore")).digest()
     return 42000 + (int.from_bytes(digest[:2], "big") % 12000)
 
@@ -218,8 +236,18 @@ def acquire() -> bool:
     path = _runtime_dir() / _LOCK_FILE_NAME
     _lock_path = path
     try:
-        # 使用 a+ 不要求文件不存在；老版本残留的空文件或 PID 文件不会导致误判。
-        fh = open(path, "a+", encoding="utf-8")
+        # 使用 O_NOFOLLOW（支持时）拒绝符号链接，并将锁文件限制为当前用户读写。
+        flags = os.O_RDWR | os.O_CREAT
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(path, flags, 0o600)
+        try:
+            if os.name != "nt":
+                os.fchmod(fd, 0o600)
+            fh = os.fdopen(fd, "r+", encoding="utf-8")
+        except Exception:
+            os.close(fd)
+            raise
     except Exception:
         fh = None
 

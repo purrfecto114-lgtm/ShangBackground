@@ -22,8 +22,16 @@ from PySide6.QtWidgets import (
 )
 from PIL import Image
 
+import core_engine as core
 from app_config import FONT_FAMILY
 from i18n import t
+
+
+def _sidebar_colors() -> dict[str, str]:
+    dark = bool(getattr(core, "config", {}).get("dark_mode", False))
+    if dark:
+        return {"panel":"#1e1e2e","card":"#252536","card_hover":"#2d2d3f","active":"#123456","active_border":"#58a6ff","border":"#4d4d65","text":"#e6e6f0","muted":"#a7a7ba","thumb":"#2d2d3f","scroll_bg":"#1e1e2e","scroll_handle":"#4d4d65","scroll_hover":"#6d6d85","close_hover":"#3d3d55","close_pressed":"#4d4d65"}
+    return {"panel":"#f7f8fa","card":"#ffffff","card_hover":"#f5f5f5","active":"#deeeff","active_border":"#4a90d9","border":"#dddddd","text":"#333333","muted":"#777777","thumb":"#eeeeee","scroll_bg":"#f1f3f5","scroll_handle":"#c9d1d9","scroll_hover":"#8c959f","close_hover":"#e0e0e0","close_pressed":"#c8c8c8"}
 
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
@@ -55,9 +63,9 @@ def generate_thumbnail_fast(
             img = src.copy()
         img.thumbnail(
             (size[0] * 2, size[1] * 2),
-            Image.Resampling.LANCZOS,
+            Image.Resampling.BILINEAR,
         )
-        return img.resize(size, Image.Resampling.NEAREST)
+        return img.resize(size, Image.Resampling.BILINEAR)
     except Exception as exc:
         log_to_file(f"生成缩略图失败 {img_path}: {exc}")
         return Image.new("RGB", size, (200, 200, 200))
@@ -133,6 +141,15 @@ class ThumbnailItem(QFrame):
         "background:#deeeff;border:2px solid #4a90d9;border-radius:6px;}"
     )
 
+    @staticmethod
+    def _item_style(kind: str = "normal") -> str:
+        c = _sidebar_colors()
+        if kind == "active":
+            return f"ThumbnailItem{{background:{c['active']};border:2px solid {c['active_border']};border-radius:6px;}}"
+        if kind == "hover":
+            return f"ThumbnailItem{{background:{c['card_hover']};border:1px solid {c['scroll_hover']};border-radius:6px;}}"
+        return f"ThumbnailItem{{background:{c['card']};border:1px solid {c['border']};border-radius:6px;}}"
+
     def __init__(self, img_path: str, parent=None):
         super().__init__(parent)
         self.img_path     = img_path
@@ -144,7 +161,7 @@ class ThumbnailItem(QFrame):
     def _build_ui(self) -> None:
         self.setFixedHeight(116)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
-        self.setStyleSheet(self._S_NORMAL)
+        self.setStyleSheet(self._item_style("normal"))
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
 
         lay = QVBoxLayout(self)
@@ -154,8 +171,9 @@ class ThumbnailItem(QFrame):
         self.img_lbl = QLabel(t("加载中…"))
         self.img_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.img_lbl.setFixedSize(THUMB_WIDTH, THUMB_HEIGHT)
+        c = _sidebar_colors()
         self.img_lbl.setStyleSheet(
-            f"background:#eeeeee;color:#999999;border-radius:3px;"
+            f"background:{c['thumb']};color:{c['muted']};border-radius:3px;"
             f"font-family:'{FONT_FAMILY}';font-size:9pt;"
         )
 
@@ -170,7 +188,7 @@ class ThumbnailItem(QFrame):
 
     def set_highlighted(self, on: bool) -> None:
         self._highlighted = on
-        self.setStyleSheet(self._S_ACTIVE if on else self._S_NORMAL)
+        self.setStyleSheet(self._item_style("active") if on else self._item_style("normal"))
 
     @property
     def loaded(self) -> bool:
@@ -191,12 +209,12 @@ class ThumbnailItem(QFrame):
 
     def enterEvent(self, event) -> None:
         if not self._highlighted:
-            self.setStyleSheet(self._S_HOVER)
+            self.setStyleSheet(self._item_style("hover"))
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:
         if not self._highlighted:
-            self.setStyleSheet(self._S_NORMAL)
+            self.setStyleSheet(self._item_style("normal"))
         super().leaveEvent(event)
 
 
@@ -219,7 +237,7 @@ class _OutsideClickShield(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_AcceptTouchEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setStyleSheet("background: rgba(255, 255, 255, 1);")
+        self.setStyleSheet("background: transparent;")
         self.setWindowOpacity(0.001)
         screens = QApplication.screens()
         if screens:
@@ -371,7 +389,8 @@ class WallpaperSidebar(QWidget):
 
     def _build_ui(self) -> None:
         self.setFixedSize(self._w, self._sh)
-        self.setStyleSheet("background:#f7f8fa;")
+        c = _sidebar_colors()
+        self.setStyleSheet(f"background:{c['panel']}; color:{c['text']};")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -380,27 +399,25 @@ class WallpaperSidebar(QWidget):
         # ── 标题栏 ────────────────────────────────────────────────────────────
         header = QWidget()
         header.setFixedHeight(42)
-        header.setStyleSheet(
-            "background:#f7f8fa;border-bottom:1px solid #d8dee4;"
-        )
+        header.setStyleSheet(f"background:{c['panel']};border-bottom:1px solid {c['border']};")
         hl = QHBoxLayout(header)
         hl.setContentsMargins(12, 6, 10, 6)
 
         title_lbl = QLabel(t("壁纸列表"))
         title_lbl.setStyleSheet(
             f"font-family:'{FONT_FAMILY}';font-size:12pt;"
-            "font-weight:bold;color:#333333;"
+            f"font-weight:bold;color:{c['text']};"
         )
 
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(28, 28)
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background:transparent; color:#777777;
+        close_btn.setStyleSheet(f"""
+            QPushButton {{
+                background:transparent; color:{c['muted']};
                 font-size:12pt; border:none; border-radius:4px;
-            }
-            QPushButton:hover   { background:#e0e0e0; color:#333333; }
-            QPushButton:pressed { background:#c8c8c8; }
+            }}
+            QPushButton:hover   {{ background:{c['close_hover']}; color:{c['text']}; }}
+            QPushButton:pressed {{ background:{c['close_pressed']}; }}
         """)
         close_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         close_btn.clicked.connect(self.close_sidebar)
@@ -416,18 +433,18 @@ class WallpaperSidebar(QWidget):
         self.scroll_area.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
-        self.scroll_area.setStyleSheet("""
-            QScrollArea { background:#f7f8fa; border:none; }
-            QScrollBar:vertical { background:#f1f3f5; width:10px; margin:0; border-radius:5px; }
-            QScrollBar::handle:vertical { background:#c9d1d9; border-radius:5px; min-height:30px; }
-            QScrollBar::handle:vertical:hover { background:#8c959f; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; background:transparent; }
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background:transparent; }
+        self.scroll_area.setStyleSheet(f"""
+            QScrollArea {{ background:{c['panel']}; border:none; }}
+            QScrollBar:vertical {{ background:{c['scroll_bg']}; width:10px; margin:0; border-radius:5px; }}
+            QScrollBar::handle:vertical {{ background:{c['scroll_handle']}; border-radius:5px; min-height:30px; }}
+            QScrollBar::handle:vertical:hover {{ background:{c['scroll_hover']}; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height:0; background:transparent; }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background:transparent; }}
         """)
         _enable_touch_scrolling(self.scroll_area)
 
         self._container = QWidget()
-        self._container.setStyleSheet("background:#f7f8fa;")
+        self._container.setStyleSheet(f"background:{c['panel']};")
         self._vlay = QVBoxLayout(self._container)
         self._vlay.setContentsMargins(8, 8, 8, 8)
         self._vlay.setSpacing(8)

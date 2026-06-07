@@ -14,7 +14,7 @@
 
 - 保留桌面右键菜单、注册表壁纸样式、自启动、管理员权限重启、Windows 消息单实例/唤醒等逻辑。
 - 不把 macOS 的 `osascript` 或 Linux 的 `gsettings/xfconf/feh` 当成 Windows 专属路径。
-- 配置路径保持原 Windows 版行为，便于兼容现有右键菜单与旧配置。
+- 配置与随机概率数据存放在 `%LOCALAPPDATA%/ShangBackground`；首次运行会尽量迁移旧目录中的配置，避免安装目录只读和多用户互相影响。
 
 ## 运行源码
 
@@ -25,7 +25,7 @@ python src\main.py
 
 ## 打包
 
-推荐先用 `build_windows_onedir.bat`。该脚本不写 `--noupx`，所以如果 UPX 在 PATH 中，PyInstaller 会自动使用；同时脚本显式排除 Qt/Python 关键 DLL，降低 UPX 破坏 Qt 插件的概率。
+推荐先用 `build_windows_onedir.bat`。脚本优先使用项目内 `upx\upx.exe`，不存在时再尝试 PATH 中的 UPX；同时显式排除 Qt/Python 关键 DLL，降低压缩破坏 Qt 插件的概率。
 
 ```bat
 build_windows_onedir.bat

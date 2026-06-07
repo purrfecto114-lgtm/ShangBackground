@@ -1,3 +1,4 @@
 src/__pycache__/
-src/settings.json
+src/shezhi.json
+src/random.json
 src/wallpaper_debug.log

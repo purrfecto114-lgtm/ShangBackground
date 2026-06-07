@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import shlex
 import sys
 import threading
 import shutil
@@ -15,17 +16,18 @@ import single_instance
 from app_config import DEFAULT_THEME_COLOR, MODE_KEYS, STYLE_KEYS, normalize_mode_key, normalize_style_key
 from i18n import t, init_i18n, get_language, set_language, load_language
 from ui_scaling import apply_dpi_environment, clamp_dpi_scale, dpi_percent
+from update_services import UpdateChecker
 
 # Load configured UI language before any translated constants/widgets are created.
 init_i18n(core.config)
 
 # ---------- 版本号 ----------
-APP_VERSION = "1.3"
+APP_VERSION = "1.3.0"
 APP_ID = "xxdz.ShangBackground"
 APP_PROCESS_NAME = "ShangBackground"
 APP_DISPLAY_NAME = t("上一个桌面背景")
 APP_ORGANIZATION = t("XXDZ工作室")
-core.VERSION = APP_VERSION          # 兼容 core 模块读取
+core.VERSION = APP_VERSION
 
 
 def _set_windows_app_identity() -> None:
@@ -223,6 +225,7 @@ try:
     from PySide6.QtGui import QAction, QColor, QIcon, QPixmap, QDesktopServices, QPainter, QImageReader, QFont, QFontDatabase, QPalette
     from PySide6.QtWidgets import (
         QApplication,
+        QAbstractSpinBox,
         QCheckBox,
         QColorDialog,
         QComboBox,
@@ -257,6 +260,7 @@ try:
         QScrollerProperties,
         QVBoxLayout,
         QWidget,
+        QStyleFactory,
     )
     PYSIDE_AVAILABLE = True
 except Exception as exc:  # pragma: no cover - 运行环境缺 PySide6 时回退
@@ -342,6 +346,7 @@ if PYSIDE_AVAILABLE:
                 target = QSize(500, self.PREVIEW_HEIGHT)
             reader = QImageReader(image_path)
             reader.setAutoTransform(True)
+            reader.setAllocationLimit(256)  # 限制单张图片解码内存上限 256MB，防止超大图 OOM
             original = reader.size()
             if original.isValid():
                 scaled = original.scaled(target, Qt.KeepAspectRatio)
@@ -547,10 +552,8 @@ if PYSIDE_AVAILABLE:
         return app.font().family()
 
 
-from updater import UpdateChecker
 
-
-class ShangBackgroundWindow(QMainWindow):
+    class ShangBackgroundWindow(QMainWindow):
         log_signal = Signal(str)
         bing_result_signal = Signal(bool, str, str)
         core_result_signal = Signal(bool, str, object)
@@ -565,6 +568,7 @@ class ShangBackgroundWindow(QMainWindow):
             self._closing_for_exit = False
             self.tray: QSystemTrayIcon | None = None
             self._bing_worker_thread: threading.Thread | None = None
+            self._startup_bing_automation_done = False
             self._core_worker_thread: threading.Thread | None = None
             self._core_busy = False
             self._animations = []
@@ -690,14 +694,20 @@ class ShangBackgroundWindow(QMainWindow):
                 pass
 
         def _header_lang_button_style(self, selected: bool) -> str:
+            qcolor = QColor(self._theme_color)
+            brightness = (qcolor.red() * 299 + qcolor.green() * 587 + qcolor.blue() * 114) / 1000 if qcolor.isValid() else 80
+            colors = self._theme_role_colors()
             if selected:
+                text = "#24292f" if brightness >= 170 else "#ffffff"
+                border = self._theme_color if brightness < 230 else ("#8c959f" if not self._theme_is_dark() else "#6d6d85")
+                bg = self._theme_color if brightness < 235 else ("#eaeef2" if not self._theme_is_dark() else "#3a3a50")
                 return (
-                    f"background: {self._theme_color}; color: #24292f; border: 1px solid #8c959f;"
+                    f"background: {bg}; color: {text}; border: 1px solid {border};"
                     " border-radius: 6px; padding: 0; font-size: 12px; font-weight: 700;"
                     " min-width: 31px; max-width: 31px; min-height: 24px; max-height: 24px;"
                 )
             return (
-                "background: #ffffff; color: #57606a; border: 1px solid #d0d7de;"
+                f"background: {colors['bg_input']}; color: {colors['fg_secondary']}; border: 1px solid {colors['border']};"
                 " border-radius: 6px; padding: 0; font-size: 12px; font-weight: 600;"
                 " min-width: 31px; max-width: 31px; min-height: 24px; max-height: 24px;"
             )
@@ -732,6 +742,21 @@ class ShangBackgroundWindow(QMainWindow):
                 return
             except Exception:
                 return
+
+        def _prepare_combo_popup(self, combo: QComboBox) -> QComboBox:
+            """Use a styled QListView popup so combo drop-downs match the current GUI theme."""
+            try:
+                view = QListView(combo)
+                view.setObjectName("ComboPopupView")
+                view.setMouseTracking(True)
+                view.setUniformItemSizes(True)
+                view.setSpacing(2)
+                view.installEventFilter(self)
+                combo.setView(view)
+                combo.setMaxVisibleItems(max(8, combo.count()))
+            except Exception:
+                pass
+            return combo
 
         def _create_header_language_switch(self) -> QWidget:
             """Create the compact CN/EN switch placed immediately after txtlogo."""
@@ -831,6 +856,7 @@ class ShangBackgroundWindow(QMainWindow):
             QTimer.singleShot(260, self.apply_native_window_effect)
             QTimer.singleShot(360, lambda: self.create_or_update_tray() if core.config.get("tray_icon", True) else None)
             QTimer.singleShot(700, self.maybe_show_auto_start_prompt)
+            QTimer.singleShot(1150, self.run_bing_startup_tasks)
             # 更新检查保留在“关于”窗口手动触发，启动流程最后只显示欢迎。
             QTimer.singleShot(950, lambda: self.finish_operation(t("欢迎使用")) if self._current_operation_name == t("正在读取配置…") else None)
 
@@ -854,6 +880,11 @@ class ShangBackgroundWindow(QMainWindow):
         def _apply_theme(self):
             """应用 UI 主题：使用精心调校的 QSS 样式表美化界面，支持主题色。"""
             app = QApplication.instance()
+            try:
+                if app is not None:
+                    app.setStyle(QStyleFactory.create("Fusion"))
+            except Exception:
+                pass
             self.setMinimumSize(1020, 700)
             self._theme_color = core.config.get("theme_color", DEFAULT_THEME_COLOR) or DEFAULT_THEME_COLOR
             self._rebuild_stylesheet()
@@ -880,6 +911,144 @@ class ShangBackgroundWindow(QMainWindow):
                     seen.append(family)
             return ", ".join(f'"{family}"' for family in seen) or '"Segoe UI"'
 
+
+        def _theme_is_dark(self) -> bool:
+            return bool(core.config.get("dark_mode", False))
+
+        def _theme_role_colors(self) -> dict[str, str]:
+            if self._theme_is_dark():
+                return {
+                    "bg_main": "#1e1e2e", "bg_widget": "#252536", "bg_input": "#2d2d3f",
+                    "fg_primary": "#e6e6f0", "fg_secondary": "#c7c7d8", "fg_muted": "#a7a7ba",
+                    "border": "#4d4d65", "note_bg": "#2d2d3f", "danger_bg": "#3b1010",
+                }
+            return {
+                "bg_main": "#ffffff", "bg_widget": "#ffffff", "bg_input": "#ffffff",
+                "fg_primary": "#24292f", "fg_secondary": "#57606a", "fg_muted": "#57606a",
+                "border": "#d0d7de", "note_bg": "#f6f8fa", "danger_bg": "#fff5f5",
+            }
+
+        def _text_style(self, role: str = "primary", extra: str = "") -> str:
+            colors = self._theme_role_colors()
+            key = "fg_primary" if role == "primary" else "fg_muted" if role == "muted" else "fg_secondary"
+            prefix = (extra.strip().rstrip(";") + "; ") if extra else ""
+            return f"{prefix}color: {colors[key]};"
+
+        def _surface_note_style(self, extra: str = "") -> str:
+            colors = self._theme_role_colors()
+            prefix = (extra.strip().rstrip(";") + "; ") if extra else ""
+            return (f"{prefix}color: {colors['fg_secondary']}; background: {colors['note_bg']}; "
+                    f"border: 1px solid {colors['border']}; border-radius: 8px;")
+
+        def _extra_theme_qss(self, dark: bool) -> str:
+            if dark:
+                bg_widget = "#252536"; bg_input = "#2d2d3f"; fg_primary = "#e6e6f0"; fg_muted = "#a7a7ba"
+                border = "#4d4d65"; hover = "#34344a"; disabled_bg = "#3d3d55"; disabled_fg = "#8b8ba3"
+            else:
+                bg_widget = "#ffffff"; bg_input = "#ffffff"; fg_primary = "#24292f"; fg_muted = "#57606a"
+                border = "#d0d7de"; hover = "#f6f8fa"; disabled_bg = "#d8dee4"; disabled_fg = "#8c959f"
+            icon_dir = os.path.join(getattr(core, "BASE_DIR", os.path.dirname(os.path.abspath(__file__))), "img")
+            spin_up_fg_icon = "spin_arrow_up_light.svg" if dark else "spin_arrow_up_dark.svg"
+            spin_down_fg_icon = "spin_arrow_down_light.svg" if dark else "spin_arrow_down_dark.svg"
+            spin_up_disabled_name = "spin_arrow_up_disabled_dark.svg" if dark else "spin_arrow_up_disabled_light.svg"
+            spin_down_disabled_name = "spin_arrow_down_disabled_dark.svg" if dark else "spin_arrow_down_disabled_light.svg"
+            spin_up_icon = Path(os.path.join(icon_dir, spin_up_fg_icon)).as_posix()
+            spin_down_icon = Path(os.path.join(icon_dir, spin_down_fg_icon)).as_posix()
+            spin_up_disabled_icon = Path(os.path.join(icon_dir, spin_up_disabled_name)).as_posix()
+            spin_down_disabled_icon = Path(os.path.join(icon_dir, spin_down_disabled_name)).as_posix()
+            checkbox_check_icon = Path(os.path.join(icon_dir, "checkbox_check.svg")).as_posix()
+            checkbox_dash_icon = Path(os.path.join(icon_dir, "checkbox_dash.svg")).as_posix()
+            checkbox_check_disabled_icon = Path(os.path.join(icon_dir, "checkbox_check_disabled.svg")).as_posix()
+            qss = """
+/* Extra cross-platform contrast fixes */
+QMessageBox, QFileDialog, QColorDialog, QInputDialog, QDialogButtonBox { background-color: __BG_WIDGET__; color: __FG_PRIMARY__; }
+QDialog QLabel, QMessageBox QLabel, QFileDialog QLabel, QColorDialog QLabel { background-color: transparent; color: __FG_PRIMARY__; }
+QDialogButtonBox QPushButton { background: %%tc%%; color: %%btn_text%%; border: 1px solid %%btn_border%%; border-radius: 6px; padding: 5px 14px; min-height: 28px; }
+QDialogButtonBox QPushButton:hover:enabled { background: %%hover_c%%; }
+QDialogButtonBox QPushButton:disabled { background: __DISABLED_BG__; color: __DISABLED_FG__; border-color: __BORDER__; }
+QAbstractItemView { background-color: __BG_INPUT__; color: __FG_PRIMARY__; border: 1px solid __BORDER__; selection-background-color: %%visible_accent%%; selection-color: %%accent_text%%; }
+QComboBox QAbstractItemView, QListView#ComboPopupView { background-color: __BG_INPUT__; color: __FG_PRIMARY__; border: 1px solid __BORDER__; border-radius: 8px; padding: 4px; outline: 0; }
+QComboBox QAbstractItemView::item, QListView#ComboPopupView::item { min-height: 28px; padding: 6px 10px; border-radius: 5px; }
+QComboBox QAbstractItemView::item:hover, QListView#ComboPopupView::item:hover { background-color: __HOVER__; }
+QComboBox QAbstractItemView::item:selected, QListView#ComboPopupView::item:selected { background-color: %%visible_accent%%; color: %%accent_text%%; }
+QHeaderView::section { background-color: __HOVER__; color: __FG_PRIMARY__; border: 1px solid __BORDER__; padding: 4px; }
+QTableWidget, QTreeWidget, QTableView, QTreeView { background-color: __BG_INPUT__; color: __FG_PRIMARY__; gridline-color: __BORDER__; alternate-background-color: __BG_WIDGET__; }
+QSpinBox, QDoubleSpinBox {
+    border: 1px solid __BORDER__;
+    border-radius: 8px;
+    padding: 5px 36px 5px 10px;
+    background-color: __BG_INPUT__;
+    color: __FG_PRIMARY__;
+    font-size: 13px;
+    min-height: 36px;
+    min-width: 82px;
+}
+QSpinBox:focus, QDoubleSpinBox:focus { border: 2px solid %%visible_accent%%; padding: 4px 35px 4px 9px; }
+QSpinBox:disabled, QDoubleSpinBox:disabled, QLineEdit:disabled, QComboBox:disabled, QTextEdit:disabled { background-color: __DISABLED_BG__; color: __DISABLED_FG__; border-color: __BORDER__; }
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 30px;
+    height: 18px;
+    border-left: 1px solid __BORDER__;
+    border-bottom: 0px solid transparent;
+    border-top-right-radius: 7px;
+    background-color: __HOVER__;
+}
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 30px;
+    height: 18px;
+    border-left: 1px solid __BORDER__;
+    border-top: 1px solid __BORDER__;
+    border-bottom-right-radius: 7px;
+    background-color: __HOVER__;
+}
+QSpinBox::up-button:hover:enabled, QDoubleSpinBox::up-button:hover:enabled,
+QSpinBox::down-button:hover:enabled, QDoubleSpinBox::down-button:hover:enabled { background-color: __BG_INPUT__; border-color: %%visible_accent%%; }
+QSpinBox::up-button:pressed:enabled, QDoubleSpinBox::up-button:pressed:enabled,
+QSpinBox::down-button:pressed:enabled, QDoubleSpinBox::down-button:pressed:enabled { background-color: __HOVER__; border-color: %%visible_accent%%; }
+QSpinBox::up-button:disabled, QDoubleSpinBox::up-button:disabled,
+QSpinBox::down-button:disabled, QDoubleSpinBox::down-button:disabled { background-color: __DISABLED_BG__; border-color: __BORDER__; }
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { width: 13px; height: 13px; margin: 0px; image: url("%%spin_up_icon%%"); }
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { width: 13px; height: 13px; margin: 0px; image: url("%%spin_down_icon%%"); }
+QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled { image: url("%%spin_up_disabled_icon%%"); }
+QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled { image: url("%%spin_down_disabled_icon%%"); }
+QCheckBox { spacing: 9px; font-size: 13px; font-weight: 400; min-height: 24px; background-color: transparent; color: __FG_PRIMARY__; }
+QCheckBox:hover { font-size: 13px; font-weight: 400; }
+QCheckBox:disabled { color: __DISABLED_FG__; }
+QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border: 1px solid __BORDER__;
+    border-radius: 4px;
+    background-color: __BG_INPUT__;
+}
+QCheckBox::indicator:hover:enabled { border: 1px solid %%visible_accent%%; background-color: __HOVER__; }
+QCheckBox::indicator:checked { border-color: %%visible_accent%%; background-color: %%visible_accent%%; image: url("%%checkbox_check_icon%%"); }
+QCheckBox::indicator:checked:hover:enabled { border-color: %%pressed_c%%; background-color: %%pressed_c%%; }
+QCheckBox::indicator:indeterminate { border-color: %%visible_accent%%; background-color: %%visible_accent%%; image: url("%%checkbox_dash_icon%%"); }
+QCheckBox::indicator:disabled { border-color: __BORDER__; background-color: __DISABLED_BG__; }
+QCheckBox::indicator:checked:disabled { border-color: __BORDER__; background-color: __DISABLED_BG__; image: url("%%checkbox_check_disabled_icon%%"); }
+QSlider::groove:horizontal { height: 6px; background: __BORDER__; border-radius: 3px; }
+QSlider::handle:horizontal { width: 18px; margin: -6px 0; border-radius: 9px; background: %%visible_accent%%; }
+QToolTip { background-color: __BG_INPUT__; color: __FG_PRIMARY__; border: 1px solid __BORDER__; padding: 4px; }
+QMenu { background-color: __BG_WIDGET__; color: __FG_PRIMARY__; border: 1px solid __BORDER__; }
+QMenu::item { padding: 6px 18px; }
+QMenu::item:disabled { color: __DISABLED_FG__; }
+QFrame#HeaderLangSwitch { background-color: transparent; }
+QLabel[muted="true"] { color: __FG_MUTED__; }
+"""
+            return (qss.replace("__BG_WIDGET__", bg_widget).replace("__BG_INPUT__", bg_input)
+                       .replace("__FG_PRIMARY__", fg_primary).replace("__FG_MUTED__", fg_muted)
+                       .replace("__BORDER__", border).replace("__HOVER__", hover)
+                       .replace("__DISABLED_BG__", disabled_bg).replace("__DISABLED_FG__", disabled_fg)
+                       .replace("%%spin_up_icon%%", spin_up_icon).replace("%%spin_down_icon%%", spin_down_icon)
+                       .replace("%%spin_up_disabled_icon%%", spin_up_disabled_icon).replace("%%spin_down_disabled_icon%%", spin_down_disabled_icon)
+                       .replace("%%checkbox_check_icon%%", checkbox_check_icon).replace("%%checkbox_dash_icon%%", checkbox_dash_icon)
+                       .replace("%%checkbox_check_disabled_icon%%", checkbox_check_disabled_icon))
+
         def _rebuild_stylesheet(self):
             """根据当前主题色和暗色模式重建 QSS 样式表。布局属性（padding/min-height/font-size）在暗色模式下保持不变。"""
             app = QApplication.instance()
@@ -904,15 +1073,30 @@ class ShangBackgroundWindow(QMainWindow):
                 scroll_bg = "#1e1e2e"
                 scroll_handle = "#4d4d65"
                 scroll_handle_hover = "#6d6d85"
-                btn_text = "#e0e0e0"
-                btn_border = "#4d4d65"
-                hover_c = base.lighter(115).name()
-                pressed_c = base.lighter(130).name()
-                btn_top = base.name()
-                btn_hover_top = base.lighter(110).name()
-                visible_accent = tc
-                progress_chunk = tc
-                accent_text = "#ffffff"
+                theme_brightness = (base.red() * 299 + base.green() * 587 + base.blue() * 114) / 1000
+                if theme_brightness >= 230:
+                    # Very light accent colors turn buttons white in dark mode; use a darkened accent-safe surface instead.
+                    tc_for_buttons = "#3a3a50"
+                    hover_c = "#45455f"
+                    pressed_c = "#50506a"
+                    btn_top = tc_for_buttons
+                    btn_hover_top = hover_c
+                    btn_text = "#e6e6f0"
+                    btn_border = "#5a5a73"
+                    visible_accent = "#8b8ba3"
+                    progress_chunk = visible_accent
+                    accent_text = "#ffffff"
+                else:
+                    tc_for_buttons = tc
+                    hover_c = base.lighter(115).name()
+                    pressed_c = base.lighter(130).name()
+                    btn_top = base.name()
+                    btn_hover_top = base.lighter(110).name()
+                    btn_text = "#e0e0e0" if theme_brightness >= 170 else "#ffffff"
+                    btn_border = base.darker(118).name()
+                    visible_accent = tc
+                    progress_chunk = tc
+                    accent_text = "#ffffff"
                 disabled_bg = "#3d3d55"
                 disabled_text = "#6d6d85"
                 muted_color = "#8888a0"
@@ -953,7 +1137,8 @@ class ShangBackgroundWindow(QMainWindow):
                     f"QComboBox::drop-down {{ border: none; width: 24px; }}\n"
                     "\n"
                     "/* 复选框 */\n"
-                    f"QCheckBox {{ spacing: 8px; font-size: 13px; background-color: transparent; color: {fg_primary}; }}\n"
+                    f"QCheckBox {{ spacing: 8px; font-size: 13px; font-weight: 400; min-height: 24px; background-color: transparent; color: {fg_primary}; }}\n"
+                    f"QCheckBox:hover {{ font-size: 13px; font-weight: 400; }}\n"
                     "\n"
                     "/* 选项卡 */\n"
                     f"QTabWidget::pane {{ border: 1px solid {border_color}; border-radius: 8px;"
@@ -1107,7 +1292,7 @@ class ShangBackgroundWindow(QMainWindow):
                     "QPushButton#CancelOperationButton:pressed:enabled { background: #ffe3e3; }\n"
                 )
             stylesheet = (
-                _TPL.replace("%%tc%%", tc)
+                _TPL.replace("%%tc%%", tc_for_buttons if dark else tc)
                 .replace("%%hover_c%%", hover_c)
                 .replace("%%pressed_c%%", pressed_c)
                 .replace("%%btn_top%%", btn_top)
@@ -1121,6 +1306,15 @@ class ShangBackgroundWindow(QMainWindow):
                 .replace("%%accent_text%%", accent_text)
                 .replace("%%font_family%%", self._stylesheet_font_family())
             )
+            stylesheet += self._extra_theme_qss(dark)
+            stylesheet = (stylesheet
+                .replace("%%tc%%", tc_for_buttons if dark else tc)
+                .replace("%%hover_c%%", hover_c)
+                .replace("%%pressed_c%%", pressed_c)
+                .replace("%%btn_border%%", btn_border)
+                .replace("%%btn_text%%", btn_text)
+                .replace("%%visible_accent%%", visible_accent)
+                .replace("%%accent_text%%", accent_text))
             self._theme_stylesheet = stylesheet
             if app is not None:
                 app.setStyleSheet(stylesheet)
@@ -1157,12 +1351,28 @@ class ShangBackgroundWindow(QMainWindow):
                     pal.setColor(QPalette.ColorRole.Text, QColor("#e0e0e0"))
                     pal.setColor(QPalette.ColorRole.Button, QColor("#2d2d3f"))
                     pal.setColor(QPalette.ColorRole.ButtonText, QColor("#e0e0e0"))
-                    pal.setColor(QPalette.ColorRole.PlaceholderText, QColor("#6d6d85"))
+                    pal.setColor(QPalette.ColorRole.PlaceholderText, QColor("#a7a7ba"))
+                    pal.setColor(QPalette.ColorRole.ToolTipBase, QColor("#2d2d3f"))
+                    pal.setColor(QPalette.ColorRole.ToolTipText, QColor("#e6e6f0"))
+                    pal.setColor(QPalette.ColorRole.Link, QColor(self._theme_color))
+                    for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text, QPalette.ColorRole.ButtonText):
+                        pal.setColor(QPalette.ColorGroup.Disabled, role, QColor("#8b8ba3"))
+                    for role in (QPalette.ColorRole.Window, QPalette.ColorRole.Base, QPalette.ColorRole.Button):
+                        pal.setColor(QPalette.ColorGroup.Disabled, role, QColor("#3d3d55"))
                 app.setPalette(pal)
             except Exception:
                 pass
             try:
                 for widget in app.allWidgets():
+                    if isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+                        try:
+                            widget.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+                            if widget.minimumHeight() < 36:
+                                widget.setMinimumHeight(36)
+                            if widget.minimumWidth() < 90:
+                                widget.setMinimumWidth(90)
+                        except Exception:
+                            pass
                     widget.style().unpolish(widget)
                     widget.style().polish(widget)
                     widget.update()
@@ -1283,7 +1493,7 @@ class ShangBackgroundWindow(QMainWindow):
                     header.addWidget(QLabel(t("上一个桌面背景")))
             else:
                 title = QLabel(t("上一个桌面背景"))
-                title.setStyleSheet("font-size: 22px; font-weight: 700; color: #24292f;")
+                title.setStyleSheet(self._text_style("primary", "font-size: 22px; font-weight: 700;"))
                 header.addWidget(title)
             self.header_lang_switch = self._create_header_language_switch()
             header.addWidget(self.header_lang_switch, 0, Qt.AlignVCenter)
@@ -1292,7 +1502,7 @@ class ShangBackgroundWindow(QMainWindow):
             self.status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.status_label.setMinimumWidth(220)
             self.status_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-            self.status_label.setStyleSheet("color: #57606a; font-size: 12px;")
+            self.status_label.setStyleSheet(self._text_style("muted", "font-size: 12px;"))
             header.addWidget(self.status_label, 1)
             self.operation_expand_btn = QPushButton()
             self.operation_expand_btn.setObjectName("OperationInfoButton")
@@ -1362,11 +1572,13 @@ class ShangBackgroundWindow(QMainWindow):
             self.mode_combo = QComboBox()
             for mode_key in MODE_KEYS:
                 self.mode_combo.addItem(t(mode_key), mode_key)
+            self._prepare_combo_popup(self.mode_combo)
             self.mode_combo.currentIndexChanged.connect(self.on_mode_changed)
             form.addRow(t("当前模式"), self.mode_combo)
             self.fit_combo = QComboBox()
             for style_key in STYLE_KEYS:
                 self.fit_combo.addItem(t(style_key), style_key)
+            self._prepare_combo_popup(self.fit_combo)
             self.fit_combo.currentIndexChanged.connect(self.on_fit_changed)
             form.addRow(t("适应方式"), self.fit_combo)
             left.addWidget(mode_box)
@@ -1400,8 +1612,8 @@ class ShangBackgroundWindow(QMainWindow):
             self.btn_prev = btn_prev = QPushButton(t("上一张"))
             self.btn_next = btn_next = QPushButton(t("下一张"))
             self.btn_random = btn_random = QPushButton(t("随机"))
-            self.btn_random_prob = btn_random_prob = QPushButton(t("随机概率"))
-            btn_random_prob.setToolTip(t("打开新窗口，为每张壁纸设置随机出现权重/概率"))
+            self.btn_random_prob = btn_random_prob = QPushButton(t("随机概率（百分比）"))
+            btn_random_prob.setToolTip(t("打开百分比编辑器，为每张壁纸分配 0% 到 100% 的随机概率"))
             self.btn_start = btn_start = QPushButton(t("应用并播放"))
             self.btn_stop = btn_stop = QPushButton(t("暂停"))
             for btn in (btn_prev, btn_next, btn_random, btn_random_prob, btn_start, btn_stop):
@@ -1615,8 +1827,9 @@ class ShangBackgroundWindow(QMainWindow):
             self.about_sprite_btn.setToolTip(t("悬停播放，点击打开关于"))
             self.about_sprite_btn.setFlat(True)
             self.about_sprite_btn.setFixedSize(80, 80)
+            sprite_bg = self._theme_role_colors()["bg_widget"]
             self.about_sprite_btn.setStyleSheet(
-                "background-color: #ffffff; border: 1px solid #ffffff; border-radius: 10px;")
+                f"background-color: {sprite_bg}; border: 1px solid {sprite_bg}; border-radius: 10px;")
             self.about_sprite_btn.clicked.connect(self.show_about_dialog)
             self.about_sprite_btn.installEventFilter(self)
             about_box.addWidget(self.about_sprite_btn, alignment=Qt.AlignCenter)
@@ -1655,7 +1868,7 @@ class ShangBackgroundWindow(QMainWindow):
                 scroll = QScrollArea()
                 scroll.setWidgetResizable(True)
                 scroll.setFrameShape(QFrame.NoFrame)
-                scroll.viewport().setStyleSheet("background-color: #ffffff;")
+                scroll.viewport().setStyleSheet(f"background-color: {self._theme_role_colors()['bg_widget']};")
                 widget.setAutoFillBackground(True)
                 scroll.setWidget(widget)
                 item = QListWidgetItem(title)
@@ -1786,6 +1999,7 @@ class ShangBackgroundWindow(QMainWindow):
             self.lang_combo.setMaximumWidth(140)
             self.lang_combo.addItem(t("中文"), "zh")
             self.lang_combo.addItem("English", "en")
+            self._prepare_combo_popup(self.lang_combo)
             # Set current language
             cur_lang = core.config.get("language", "zh")
             idx = self.lang_combo.findData(cur_lang)
@@ -2097,7 +2311,7 @@ class ShangBackgroundWindow(QMainWindow):
                 "必应壁纸可同步到本地缓存，也可以直接设置为桌面背景；“继续同步更早壁纸”会从上次记录的位置继续向前获取。"
             )
             info.setWordWrap(True)
-            info.setStyleSheet("color: #57606a; font-size: 12px; padding: 4px 0;")
+            info.setStyleSheet(self._text_style("muted", "font-size: 12px; padding: 4px 0;"))
             layout.addWidget(info)
 
             cache_box = QGroupBox(t("缓存与同步设置"))
@@ -2112,6 +2326,7 @@ class ShangBackgroundWindow(QMainWindow):
             btn_cache.clicked.connect(self.choose_bing_cache_dir)
             self.bing_resolution = QComboBox()
             self.bing_resolution.addItems(["auto", "1920x1080", "2560x1440", "3840x2160", "1366x768", "1920x1200"])
+            self._prepare_combo_popup(self.bing_resolution)
             self.bing_resolution.setMinimumWidth(150)
             self.bing_resolution.setMaximumWidth(220)
             self.bing_count_spin = QSpinBox()
@@ -2121,12 +2336,33 @@ class ShangBackgroundWindow(QMainWindow):
             self.bing_count_spin.setAlignment(Qt.AlignCenter)
             self.bing_count_spin.setValue(min(16, int(core.config.get("bing_sync_count", 1))))
 
+            self.bing_auto_update_check = QCheckBox(t("程序启动时自动更新"))
+            self.bing_auto_update_check.setToolTip(t("程序启动后自动同步指定数量的必应壁纸，并把最新一张设为桌面背景。"))
+            self.bing_auto_update_count_spin = QSpinBox()
+            self.bing_auto_update_count_spin.setRange(1, 16)
+            self.bing_auto_update_count_spin.setMinimumWidth(90)
+            self.bing_auto_update_count_spin.setMaximumWidth(110)
+            self.bing_auto_update_count_spin.setAlignment(Qt.AlignCenter)
+            self.bing_auto_update_count_spin.setValue(max(1, min(16, int(core.config.get("bing_auto_update_count", core.config.get("bing_sync_count", 1)) or 1))))
+            self.bing_auto_delete_check = QCheckBox(t("程序启动时自动删除"))
+            self.bing_auto_delete_check.setToolTip(t("程序启动后只删除必应缓存目录中最旧的指定数量图片；不会删除文件名不含 bing 的用户图片。"))
+            self.bing_auto_delete_count_spin = QSpinBox()
+            self.bing_auto_delete_count_spin.setRange(1, 200)
+            self.bing_auto_delete_count_spin.setMinimumWidth(90)
+            self.bing_auto_delete_count_spin.setMaximumWidth(110)
+            self.bing_auto_delete_count_spin.setAlignment(Qt.AlignCenter)
+            self.bing_auto_delete_count_spin.setValue(max(1, min(200, int(core.config.get("bing_auto_delete_count", 1) or 1))))
+            self.bing_auto_update_check.setChecked(bool(core.config.get("bing_auto_update_on_start", False)))
+            self.bing_auto_delete_check.setChecked(bool(core.config.get("bing_auto_delete_on_start", False)))
+            for _widget in (self.bing_auto_update_check, self.bing_auto_update_count_spin, self.bing_auto_delete_check, self.bing_auto_delete_count_spin):
+                if hasattr(_widget, "toggled"):
+                    _widget.toggled.connect(self.on_bing_auto_options_changed)
+                else:
+                    _widget.valueChanged.connect(self.on_bing_auto_options_changed)
+
             self.bing_sync_btn = QPushButton(t("同步今日并设为壁纸"))
             self.bing_sync_btn.setToolTip(t("下载最新必应壁纸，完成后立即设置为当前桌面背景。"))
             self.bing_sync_btn.clicked.connect(lambda: self.sync_bing_wallpaper(set_latest=True))
-            self.bing_auto_one_btn = QPushButton(t("自动更新同步1张"))
-            self.bing_auto_one_btn.setToolTip(t("只同步最新 1 张必应壁纸，并自动清理缓存目录中过量的 bing 图片。"))
-            self.bing_auto_one_btn.clicked.connect(lambda: self.sync_bing_wallpaper(set_latest=True, force_count=1))
             self.bing_multi_btn = QPushButton(t("仅缓存多张壁纸"))
             self.bing_multi_btn.setToolTip(t("按同步张数下载壁纸到缓存目录，但不改变当前桌面背景。"))
             self.bing_multi_btn.clicked.connect(lambda: self.sync_bing_wallpaper(set_latest=False))
@@ -2139,7 +2375,7 @@ class ShangBackgroundWindow(QMainWindow):
             self.bing_saveas_btn = QPushButton(t("另存选中壁纸"))
             self.bing_saveas_btn.setToolTip(t("把下方列表中选中的缓存壁纸另存到其他位置。"))
             self.bing_saveas_btn.clicked.connect(self.save_selected_bing_as)
-            for _btn in (self.bing_sync_btn, self.bing_auto_one_btn, self.bing_multi_btn, self.bing_continue_btn, self.bing_play_btn, self.bing_saveas_btn):
+            for _btn in (self.bing_sync_btn, self.bing_multi_btn, self.bing_continue_btn, self.bing_play_btn, self.bing_saveas_btn):
                 _btn.setProperty("wideAction", True)
                 _btn.setMinimumHeight(40)
                 _btn.setMinimumWidth(180)
@@ -2160,13 +2396,19 @@ class ShangBackgroundWindow(QMainWindow):
             actions_grid.setVerticalSpacing(10)
             for _col in range(3):
                 actions_grid.setColumnStretch(_col, 1)
+            grid.addWidget(self.bing_auto_update_check, 2, 0, 1, 2)
+            grid.addWidget(self.bing_auto_update_count_spin, 2, 2)
+            grid.addWidget(QLabel(t("张壁纸")), 2, 3, 1, 2)
+            grid.addWidget(self.bing_auto_delete_check, 3, 0, 1, 2)
+            grid.addWidget(self.bing_auto_delete_count_spin, 3, 2)
+            grid.addWidget(QLabel(t("张最旧缓存壁纸")), 3, 3, 1, 2)
+
             actions_grid.addWidget(self.bing_sync_btn, 0, 0)
-            actions_grid.addWidget(self.bing_auto_one_btn, 0, 1)
-            actions_grid.addWidget(self.bing_multi_btn, 0, 2)
-            actions_grid.addWidget(self.bing_continue_btn, 1, 0)
-            actions_grid.addWidget(self.bing_play_btn, 1, 1)
+            actions_grid.addWidget(self.bing_multi_btn, 0, 1)
+            actions_grid.addWidget(self.bing_continue_btn, 0, 2)
+            actions_grid.addWidget(self.bing_play_btn, 1, 0, 1, 2)
             actions_grid.addWidget(self.bing_saveas_btn, 1, 2)
-            grid.addLayout(actions_grid, 2, 0, 2, 5)
+            grid.addLayout(actions_grid, 4, 0, 2, 5)
             layout.addWidget(cache_box)
 
             self.bing_progress = QProgressBar()
@@ -2175,7 +2417,7 @@ class ShangBackgroundWindow(QMainWindow):
             layout.addWidget(self.bing_progress)
             self.bing_status = QLabel(t("未同步；请选择缓存目录后再开始。"))
             self.bing_status.setWordWrap(True)
-            self.bing_status.setStyleSheet("color: #57606a; font-size: 12px;")
+            self.bing_status.setStyleSheet(self._text_style("muted", "font-size: 12px;"))
             layout.addWidget(self.bing_status)
 
             list_title = QLabel(t("已缓存的必应壁纸（选择后可预览或另存）"))
@@ -2194,12 +2436,12 @@ class ShangBackgroundWindow(QMainWindow):
             layout.setSpacing(10)
 
             title = QLabel(f"{APP_DISPLAY_NAME} v{APP_VERSION}")
-            title.setStyleSheet("font-size: 24px; font-weight: 700; color: #24292f;")
+            title.setStyleSheet(self._text_style("primary", "font-size: 24px; font-weight: 700;"))
             layout.addWidget(title)
 
             desc = QLabel(t("一个用于快速切换、随机和管理桌面背景的小工具。"))
             desc.setWordWrap(True)
-            desc.setStyleSheet("color: #57606a; font-size: 13px;")
+            desc.setStyleSheet(self._text_style("muted", "font-size: 13px;"))
             layout.addWidget(desc)
 
             links = QLabel(
@@ -2217,7 +2459,7 @@ class ShangBackgroundWindow(QMainWindow):
 
             note = QLabel(t("右键菜单命令会直接调用本程序的 --previous、--next、--random、--jump-to-wallpaper 和 --set-wallpaper 参数。"))
             note.setWordWrap(True)
-            note.setStyleSheet("color: #57606a; font-size: 12px;")
+            note.setStyleSheet(self._text_style("muted", "font-size: 12px;"))
             layout.addWidget(note)
             layout.addStretch(1)
             return page
@@ -2333,6 +2575,11 @@ class ShangBackgroundWindow(QMainWindow):
             self.about_sprite_btn.setIcon(QIcon(self._blend_about_frames(self._about_anim_from, self._about_anim_to, ratio)))
 
         def eventFilter(self, obj, event):
+            try:
+                if isinstance(obj, QListView) and obj.objectName() == "ComboPopupView" and event.type() == QEvent.Type.Show:
+                    self._animate_widget_flash(obj, 120)
+            except Exception:
+                pass
             if getattr(self, "about_sprite_btn", None) is obj:
                 if event.type() == QEvent.Type.Enter:
                     self._fade_about_sprite_to(1)
@@ -2869,265 +3116,56 @@ class ShangBackgroundWindow(QMainWindow):
                 pass
             self.set_status(t("已打开全局设置"))
 
-        # ---------- 优化后的随机概率设置 ----------
+        # ---------- 随机概率（百分比） ----------
         def open_random_probability_settings(self):
             folder = (self.folder_edit.text().strip() if hasattr(self, "folder_edit") else "") or core.config.get("slide_folder", "")
             if not folder or not os.path.isdir(folder):
                 QMessageBox.information(self, t("随机概率"), t("请先在幻灯片放映中选择有效的壁纸文件夹。"))
                 return
 
-            try:
-                import random_copy
-            except ImportError as e:
-                QMessageBox.warning(self, t("随机概率"), t("加载 random_copy 模块失败：") + str(e))
-                return
+            existing = getattr(self, "_random_probability_dialog", None)
+            if existing is not None:
+                try:
+                    existing.show()
+                    existing.raise_()
+                    existing.activateWindow()
+                    return
+                except RuntimeError:
+                    self._random_probability_dialog = None
 
             try:
+                import random_copy
+                from probability_dialog import RandomProbabilityDialog
                 images = random_copy.get_original_image_paths(folder)
-            except Exception as e:
-                QMessageBox.warning(self, t("随机概率"), t("获取壁纸列表失败：") + str(e))
+            except Exception as exc:
+                QMessageBox.warning(self, t("随机概率"), t("加载随机概率设置失败：") + str(exc))
                 return
 
             if not images:
                 QMessageBox.information(self, t("随机概率"), t("当前文件夹中没有可设置的壁纸图片。"))
                 return
 
-            # 清理旧引用，防止访问已销毁的 C++ 对象
-            if hasattr(self, "prob_widgets"):
-                self.prob_widgets.clear()
+            def on_saved():
+                self.set_status(t("随机壁纸百分比已保存"))
 
-            dialog = QDialog(self)
+            dialog = RandomProbabilityDialog(
+                self,
+                folder,
+                images,
+                random_copy,
+                translate=t,
+                on_saved=on_saved,
+                logger=core.log,
+            )
             self._random_probability_dialog = dialog
-            dialog.setWindowTitle(t("随机壁纸概率设置"))
-            dialog.setModal(False)
-            dialog.resize(880, 680)
-            dialog.setMinimumSize(760, 540)
             if not getattr(self, "app_icon", QIcon()).isNull():
                 dialog.setWindowIcon(self.app_icon)
             if getattr(self, "_theme_stylesheet", ""):
                 dialog.setStyleSheet(self._theme_stylesheet)
 
-            layout = QVBoxLayout(dialog)
-            layout.setContentsMargins(18, 18, 18, 18)
-            layout.setSpacing(12)
-
-            title = QLabel(t("随机壁纸概率设置"))
-            title.setStyleSheet("font-size: 18px; font-weight: 700; color: #24292f;")
-            layout.addWidget(title)
-
-            explain = QLabel(t("每张壁纸可以设置一个相对权重；权重越大，被随机选中的概率越高。实际概率 = 单项权重 ÷ 总权重；权重为 0 的壁纸不会被随机选中。"))
-            explain.setWordWrap(True)
-            explain.setProperty("muted", True)
-            explain.setStyleSheet("color: #57606a; background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 8px; padding: 10px;")
-            layout.addWidget(explain)
-
-            scroll = QScrollArea()
-            scroll.setWidgetResizable(True)
-            scroll.setFrameShape(QFrame.NoFrame)
-            self._enable_touch_scrolling(scroll)
-
-            container = QWidget()
-            grid_layout = QGridLayout(container)
-            grid_layout.setColumnStretch(0, 3)
-            grid_layout.setColumnStretch(1, 4)
-            grid_layout.setColumnStretch(2, 2)
-            grid_layout.setColumnStretch(3, 1)
-            grid_layout.setSpacing(8)
-
-            for col, text in enumerate((t("壁纸名称"), t("权重滑动条"), t("权重数值"), t("当前概率"))):
-                header_label = QLabel(text)
-                header_label.setStyleSheet("font-weight: 700; color: #24292f; padding: 4px;")
-                grid_layout.addWidget(header_label, 0, col)
-
-            self.prob_widgets = {}
-
-            # 防御性读取权重
-            try:
-                weights = random_copy.get_probability_weights(folder)
-                if not isinstance(weights, dict):
-                    weights = {}
-            except Exception as e:
-                core.log(f"读取概率权重失败: {e}")
-                weights = {}
-            
-            default_weight = getattr(random_copy, "DEFAULT_WEIGHT", 100.0)
-
-            for row, path in enumerate(images, start=1):
-                filename = os.path.basename(path)
-                name_label = QLabel(filename)
-                name_label.setToolTip(path)
-                name_label.setWordWrap(False)
-
-                slider = QSlider(Qt.Orientation.Horizontal)
-                slider.setRange(0, 10000)
-                slider.setSingleStep(100)
-                slider.setPageStep(1000)
-
-                spin = QDoubleSpinBox()
-                spin.setRange(0.0, 10000.0)
-                spin.setDecimals(2)
-                spin.setSingleStep(10.0)
-                spin.setSuffix(" " + t("权重"))
-
-                percent_label = QProgressBar()
-                percent_label.setRange(0, 1000)
-                percent_label.setValue(0)
-                percent_label.setFormat("0%")
-                percent_label.setTextVisible(True)
-                percent_label.setMinimumWidth(90)
-
-                try:
-                    initial = float(weights.get(filename, default_weight))
-                except (TypeError, ValueError):
-                    initial = float(default_weight)
-
-                spin.setValue(initial)
-                slider.setValue(int(initial))
-
-                # 使用闭包绑定控件，避免 lambda 在循环中捕获同一变量
-                def make_sync(spin_ref=spin, slider_ref=slider):
-                    def sync_spin_to_slider():
-                        try:
-                            slider_ref.blockSignals(True)
-                            slider_ref.setValue(int(spin_ref.value()))
-                            slider_ref.blockSignals(False)
-                        except RuntimeError:
-                            pass
-                    def sync_slider_to_spin():
-                        try:
-                            spin_ref.blockSignals(True)
-                            spin_ref.setValue(float(slider_ref.value()))
-                            spin_ref.blockSignals(False)
-                        except RuntimeError:
-                            pass
-                    return sync_spin_to_slider, sync_slider_to_spin
-
-                sync_s2l, sync_l2s = make_sync()
-                spin.valueChanged.connect(sync_s2l)
-                slider.valueChanged.connect(sync_l2s)
-
-                grid_layout.addWidget(name_label, row, 0)
-                grid_layout.addWidget(slider, row, 1)
-                grid_layout.addWidget(spin, row, 2)
-                grid_layout.addWidget(percent_label, row, 3)
-
-                self.prob_widgets[filename] = (spin, slider, percent_label)
-
-            scroll.setWidget(container)
-            layout.addWidget(scroll, 1)
-
-            total_label = QLabel()
-            total_label.setProperty("muted", True)
-            total_label.setStyleSheet("color: #57606a; font-weight: 600;")
-
-            def refresh_total():
-                if not getattr(self, "prob_widgets", None):
-                    return
-                total = 0.0
-                valid_items = []
-                for filename, widgets in self.prob_widgets.items():
-                    try:
-                        spin = widgets[0]
-                        total += spin.value()
-                        valid_items.append((filename, widgets))
-                    except (RuntimeError, AttributeError):
-                        continue
-
-                if total <= 0:
-                    total_label.setText(t("总权重为 0：至少给一张壁纸设置大于 0 的权重。"))
-                    for _, widgets in valid_items:
-                        try:
-                            widgets[2].setValue(0)
-                            widgets[2].setFormat("0%")
-                        except (RuntimeError, AttributeError):
-                            continue
-                    return
-
-                for filename, widgets in valid_items:
-                    try:
-                        spin, _slider, pct_label = widgets
-                        percent = (spin.value() / total) * 100
-                        pct_label.setValue(max(0, min(1000, int(round(percent * 10)))))
-                        pct_label.setFormat(f"{percent:.1f}%")
-                    except (RuntimeError, AttributeError, ZeroDivisionError):
-                        continue
-
-                enabled = sum(1 for _, w in valid_items if w[0].value() > 0)
-                total_label.setText(
-                    t("总权重：") + f"{total:.2f}  " + t("已启用壁纸数量：") + f"{enabled} / {len(self.prob_widgets)}"
-                )
-
-            # 连接刷新
-            for widgets in self.prob_widgets.values():
-                try:
-                    widgets[0].valueChanged.connect(lambda _v, _ref=refresh_total: _ref())
-                except Exception:
-                    pass
-            refresh_total()
-
-            btn_layout = QHBoxLayout()
-            btn_equal = QPushButton(t("平均分配（全部设为100）"))
-            btn_zero_all = QPushButton(t("全部权重清零"))
-            btn_save = QPushButton(t("保存设置"))
-            btn_close = QPushButton(t("关闭"))
-            for _btn in (btn_equal, btn_zero_all, btn_save, btn_close):
-                _btn.setMinimumHeight(34)
-            btn_equal.setProperty("secondary", True)
-            btn_zero_all.setProperty("secondary", True)
-            btn_close.setProperty("secondary", True)
-            btn_layout.addWidget(btn_equal)
-            btn_layout.addWidget(btn_zero_all)
-            btn_layout.addStretch()
-            btn_layout.addWidget(btn_save)
-            btn_layout.addWidget(btn_close)
-
-            def set_all_weights(value: float):
-                if not getattr(self, "prob_widgets", None):
-                    return
-                for widgets in self.prob_widgets.values():
-                    try:
-                        spin, slider, _ = widgets
-                        spin.blockSignals(True)
-                        slider.blockSignals(True)
-                        spin.setValue(value)
-                        slider.setValue(int(value))
-                        spin.blockSignals(False)
-                        slider.blockSignals(False)
-                    except (RuntimeError, AttributeError):
-                        continue
-                refresh_total()
-
-            def save_weights():
-                if not getattr(self, "prob_widgets", None):
-                    return
-                values = {}
-                for fn, widgets in self.prob_widgets.items():
-                    try:
-                        values[fn] = widgets[0].value()
-                    except (RuntimeError, AttributeError):
-                        continue
-                if not values or sum(values.values()) <= 0:
-                    QMessageBox.warning(dialog, t("随机概率"), t("请至少保留一张权重大于 0 的壁纸。"))
-                    return
-                try:
-                    random_copy.save_probability_weights(folder, values)
-                    self.set_status(t("随机壁纸概率已保存"))
-                    QMessageBox.information(dialog, t("随机概率"), t("已保存随机概率设置。"))
-                except Exception as e:
-                    QMessageBox.warning(dialog, t("随机概率"), t("保存失败：") + str(e))
-
-            btn_equal.clicked.connect(lambda: set_all_weights(100.0))
-            btn_zero_all.clicked.connect(lambda: set_all_weights(0.0))
-            btn_save.clicked.connect(save_weights)
-            btn_close.clicked.connect(dialog.close)
-
-            layout.addWidget(total_label)
-            layout.addLayout(btn_layout)
-
-            def cleanup_dialog():
-                if hasattr(self, "prob_widgets"):
-                    self.prob_widgets.clear()
-                self._random_probability_dialog = None
+            def cleanup_dialog(*_args):
+                if getattr(self, "_random_probability_dialog", None) is dialog:
+                    self._random_probability_dialog = None
 
             dialog.destroyed.connect(cleanup_dialog)
             dialog.show()
@@ -3158,7 +3196,7 @@ class ShangBackgroundWindow(QMainWindow):
                 desktop_path = os.path.join(autostart_dir, "shangbackground.desktop")
                 if enable:
                     os.makedirs(autostart_dir, exist_ok=True)
-                    exec_cmd = f"{sys.executable} {os.path.abspath(__file__)} --hide"
+                    exec_cmd = shlex.join([sys.executable, os.path.abspath(__file__), "--hide"])
                     desktop_content = (
                         "[Desktop Entry]\n"
                         "Type=Application\n"
@@ -3506,6 +3544,7 @@ class ShangBackgroundWindow(QMainWindow):
         def _load_icon_pixmap(self, path: str, size: QSize) -> QPixmap:
             reader = QImageReader(path)
             reader.setAutoTransform(True)
+            reader.setAllocationLimit(128)  # 图标尺寸较小，128MB 足够
             original = reader.size()
             if original.isValid():
                 scaled = original.scaled(size, Qt.KeepAspectRatio)
@@ -3589,6 +3628,55 @@ class ShangBackgroundWindow(QMainWindow):
             )
             self._sidebar.closed.connect(lambda: setattr(self, "_sidebar", None))
 
+        def on_bing_auto_options_changed(self, *args, save: bool = True):
+            if not hasattr(self, "bing_auto_update_check"):
+                return
+            try:
+                core.config["bing_auto_update_on_start"] = bool(self.bing_auto_update_check.isChecked())
+                core.config["bing_auto_update_count"] = max(1, min(16, int(self.bing_auto_update_count_spin.value())))
+                core.config["bing_auto_delete_on_start"] = bool(self.bing_auto_delete_check.isChecked())
+                core.config["bing_auto_delete_count"] = max(1, min(200, int(self.bing_auto_delete_count_spin.value())))
+                if save:
+                    core.save_config()
+            except Exception as exc:
+                core.log(f"保存必应启动选项失败: {exc}")
+
+        def _delete_oldest_bing_cached(self, count: int) -> int:
+            cache_dir = core.config.get("bing_cache_dir", "") or ""
+            if not cache_dir or not os.path.isdir(cache_dir):
+                return 0
+            try:
+                from bing_downloader import BingDownloader
+                return BingDownloader(cache_dir=cache_dir).delete_oldest_cached_wallpapers(count=count, keyword="bing")
+            except Exception as exc:
+                core.log(f"自动删除必应缓存失败: {exc}")
+                return 0
+
+        def run_bing_startup_tasks(self):
+            if getattr(self, "_startup_bing_automation_done", False):
+                return
+            self._startup_bing_automation_done = True
+            cache_dir = core.config.get("bing_cache_dir", "") or ""
+            do_delete = bool(core.config.get("bing_auto_delete_on_start", False))
+            do_update = bool(core.config.get("bing_auto_update_on_start", False))
+            if not (do_delete or do_update):
+                return
+            if not cache_dir:
+                self.set_status(t("必应启动自动操作已跳过：未设置缓存目录"))
+                return
+            if do_delete:
+                count = max(1, min(200, int(core.config.get("bing_auto_delete_count", 1) or 1)))
+                deleted = self._delete_oldest_bing_cached(count)
+                self.set_status(f"启动时已自动删除 {deleted} 张最旧必应缓存壁纸")
+                self.refresh_bing_cache_list()
+            if do_update:
+                count = max(1, min(16, int(core.config.get("bing_auto_update_count", 1) or 1)))
+                if hasattr(self, "bing_cache_edit"):
+                    self.bing_cache_edit.setText(cache_dir)
+                if hasattr(self, "bing_count_spin"):
+                    self.bing_count_spin.setValue(count)
+                self.sync_bing_wallpaper(set_latest=True, force_count=count)
+
         def _bing_downloader(self):
             from bing_downloader import BingDownloader
             cache_dir = self.bing_cache_edit.text().strip()
@@ -3596,6 +3684,8 @@ class ShangBackgroundWindow(QMainWindow):
                 raise ValueError("请先填写或选择必应壁纸缓存目录")
             core.config["bing_cache_dir"] = cache_dir
             core.config["bing_sync_count"] = int(self.bing_count_spin.value())
+            if hasattr(self, "bing_auto_update_check"):
+                self.on_bing_auto_options_changed(save=False)
             core.save_config()
             return BingDownloader(cache_dir=cache_dir)
 
@@ -3693,7 +3783,7 @@ class ShangBackgroundWindow(QMainWindow):
             core.config["bing_sync_count"] = count
             core.save_config()
 
-            for btn in (self.bing_sync_btn, getattr(self, "bing_auto_one_btn", None), self.bing_multi_btn, getattr(self, "bing_continue_btn", None)):
+            for btn in (self.bing_sync_btn, self.bing_multi_btn, getattr(self, "bing_continue_btn", None)):
                 if btn is not None:
                     btn.setEnabled(False)
             self.bing_progress.setValue(0)
@@ -3728,7 +3818,7 @@ class ShangBackgroundWindow(QMainWindow):
                         core.save_config()
 
                     deleted = 0
-                    if core.config.get("bing_auto_cleanup", True):
+                    if core.config.get("bing_auto_cleanup", False):
                         deleted = downloader.cleanup_cached_wallpapers(max_count=count, keyword="bing")
 
                     latest = paths[0]
@@ -3756,8 +3846,6 @@ class ShangBackgroundWindow(QMainWindow):
             is_progress = t("进度") in message
             if not is_progress:
                 self.bing_sync_btn.setEnabled(True)
-                if hasattr(self, "bing_auto_one_btn"):
-                    self.bing_auto_one_btn.setEnabled(True)
                 self.bing_multi_btn.setEnabled(True)
                 if hasattr(self, "bing_continue_btn"):
                     self.bing_continue_btn.setEnabled(True)
@@ -3802,7 +3890,7 @@ class ShangBackgroundWindow(QMainWindow):
             if button is not None:
                 button.setEnabled(False)
             self.begin_operation(t("正在检查更新…"))
-            self._set_update_status_text("正在检查内置更新源（GitHub Release）...")
+            self._set_update_status_text("正在检查 GitHub Release 更新源...")
             if hasattr(self, "update_download_btn"):
                 self.update_download_btn.setEnabled(False)
             self._update_checker = UpdateChecker()
@@ -3837,7 +3925,7 @@ class ShangBackgroundWindow(QMainWindow):
             if len(notes) > 3000:
                 notes = notes[:3000].rstrip() + "..."
             self._set_update_status_text(
-                f"{message}\n统一更新源：GitHub Release（已合并旧内置 update 状态）\n当前版本：v{APP_VERSION}\n最新版本：{info.get('tag') or info.get('version')}\n"
+                f"{message}\n更新源：GitHub Release\n当前版本：v{APP_VERSION}\n最新版本：{info.get('tag') or info.get('version')}\n"
                 f"发布名称：{info.get('name') or '未命名'}{asset_text}\n\n{notes or '暂无更新说明'}"
             )
 
@@ -3893,7 +3981,7 @@ class ShangBackgroundWindow(QMainWindow):
             self.update_status_label.setMinimumHeight(150)
             self.update_status_label.setMaximumHeight(230)
             self.update_status_label.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
-            self.update_status_label.setPlainText(t("点击下方按钮检查统一 GitHub Release 更新源；旧内置更新状态会同步到这里。检查结果、附件和更新说明会显示在这里，可滚动查看。"))
+            self.update_status_label.setPlainText(t("点击下方按钮检查 GitHub Release 更新源；检查结果、附件和更新说明会显示在这里，可滚动查看。"))
             update_layout.addWidget(self.update_status_label)
             update_buttons = QHBoxLayout()
             check_btn = QPushButton(t("检查更新"))

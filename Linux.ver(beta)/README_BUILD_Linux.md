@@ -97,7 +97,7 @@ tar -xzf ShangBackground-linux-x86_64.tar.gz
 - 壁纸设置按顺序尝试 `gsettings`、`plasma-apply-wallpaperimage`、`qdbus/qdbus6`、`xfconf-query`、`feh`、`nitrogen`。
 - 开机自启动只写入 `~/.config/autostart/shangbackground.desktop`，不再保留 Windows/macOS 启动项分支。
 - 依赖检查不再创建额外 tkinter 根窗口：PySide6 可用时使用当前 Qt 主窗口；PySide6 不可用时只在终端输出命令。
-- 更新检查已拆分到 `src/update_service.py`，统一使用 GitHub Release，并同步旧版 `remote_version/remote_release_notes/remote_download_urls` 状态，避免两个更新源冲突。
+- 更新检查使用 `src/update_services.py` 读取 GitHub Release；版本策略固定为 `1.3.0`，可解析 `1.3.0`、`v1.3.0`、`app_ver=1.3.0` 以及带前后缀的 Release 名称。
 - PyInstaller 命令不再 `--collect-all PySide6`，只补充实际需要的 QtSvg/QtSvgWidgets，并显式排除 tkinter、其他 Qt 绑定和常见大体积无关科学/Notebook 库。
 
 ## Debian/KDE Live 运行提示

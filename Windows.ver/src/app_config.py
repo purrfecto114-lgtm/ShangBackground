@@ -40,7 +40,7 @@ DEPENDENCIES = [
     {"module": "PIL", "package": "pillow", "required": True, "desc": "图片读取、缩略图和壁纸生成"},
     {"module": "requests", "package": "requests", "required": False, "desc": "网络请求（版本检查等）"},
     {"module": "numpy", "package": "numpy", "required": False, "desc": "更快的渐变壁纸生成"},
-    {"module": "PySide6", "package": "PySide6", "required": True, "desc": "新版 PySide6 图形界面与系统托盘"},
+    {"module": "PySide6", "package": "PySide6-Essentials", "required": True, "desc": "新版 PySide6 图形界面与系统托盘"},
     {"module": "httpx", "package": "httpx", "required": False, "desc": "Bing 壁纸 API 下载"},
     {"module": "psutil", "package": "psutil", "required": False, "desc": "进程清理与辅助控制"},
 ]

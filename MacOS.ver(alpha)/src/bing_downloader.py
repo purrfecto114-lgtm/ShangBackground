@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 try:
     import httpx
@@ -30,6 +30,7 @@ except ImportError:
 
 # 单次同步最大张数限制，防止用户设置过大导致请求过多
 MAX_SYNC_COUNT = 16
+MAX_IMAGE_BYTES = 64 * 1024 * 1024
 
 
 @dataclass
@@ -64,6 +65,25 @@ class BingDownloader:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.fallback_resolution = fallback_resolution
+        self._http_client = None
+
+    def _get_http_client(self):
+        """获取或创建复用的 httpx 客户端（连接池复用，减少 TCP 握手开销）。"""
+        if self._http_client is None and httpx is not None:
+            self._http_client = httpx.Client(
+                headers=self.HEADERS, timeout=20, follow_redirects=True,
+                limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
+            )
+        return self._http_client
+
+    def close(self):
+        """关闭 HTTP 客户端，释放连接池资源。"""
+        if self._http_client is not None:
+            try:
+                self._http_client.close()
+            except Exception:
+                pass
+            self._http_client = None
 
     def _fetch_metadata(self, index: int, mkt: str) -> Optional[dict]:
         if httpx is None:
@@ -71,19 +91,28 @@ class BingDownloader:
             return None
         params = {"format": "js", "idx": index, "n": 1, "mkt": mkt}
         last_error: Exception | None = None
+        client = self._get_http_client()
         for api in self.API_URLS:
             try:
-                with httpx.Client(headers=self.HEADERS, timeout=20, follow_redirects=True) as client:
-                    response = client.get(api, params=params)
-                    response.raise_for_status()
-                    data = response.json()
-                    images = data.get("images") or []
-                    if images:
-                        return images[0]
+                response = client.get(api, params=params)
+                response.raise_for_status()
+                data = response.json()
+                images = data.get("images") or []
+                if images:
+                    return images[0]
             except Exception as exc:
                 last_error = exc
         print(f"获取壁纸信息失败: {last_error}")
         return None
+
+    @staticmethod
+    def _is_allowed_bing_url(url: str) -> bool:
+        try:
+            parsed = urlparse(url)
+        except ValueError:
+            return False
+        host = (parsed.hostname or "").lower()
+        return parsed.scheme == "https" and (host == "bing.com" or host.endswith(".bing.com"))
 
     def _url_candidates(self, img: dict, resolution: str) -> list[str]:
         urlbase = img.get("urlbase") or ""
@@ -98,8 +127,13 @@ class BingDownloader:
         if raw:
             for base in self.IMAGE_BASES:
                 candidates.append(urljoin(base, raw))
-        seen = set()
-        return [u for u in candidates if u and not (u in seen or seen.add(u))]
+        seen: set[str] = set()
+        result: list[str] = []
+        for url in candidates:
+            if url and url not in seen and self._is_allowed_bing_url(url):
+                seen.add(url)
+                result.append(url)
+        return result
 
     def fetch_wallpaper_info(self, index: int = 0, mkt: str = "zh-CN", resolution: str | None = "auto") -> Optional[WallpaperInfo]:
         res = choose_resolution(resolution, fallback=self.fallback_resolution)
@@ -163,20 +197,46 @@ class BingDownloader:
         img_stub = {"urlbase": info.urlbase, "url": info.url}
         urls = self._url_candidates(img_stub, info.resolution) or [info.url]
         last_error: Exception | None = None
-        with httpx.Client(headers=self.HEADERS, timeout=30, follow_redirects=True) as client:
-            for url in urls:
+        client = self._get_http_client()
+        for url in urls:
+            try:
+                if not self._is_allowed_bing_url(url):
+                    raise ValueError("拒绝非 Bing HTTPS 图片地址")
+                temp_path = filepath.with_suffix(filepath.suffix + ".part")
+                total = 0
+                first_chunk = b""
                 try:
-                    response = client.get(url)
-                    response.raise_for_status()
-                    ctype = response.headers.get("content-type", "")
-                    if "image" not in ctype.lower() and not response.content.startswith(b"\xff\xd8"):
+                    with client.stream("GET", url, timeout=30) as response:
+                        response.raise_for_status()
+                        ctype = response.headers.get("content-type", "")
+                        content_length = response.headers.get("content-length")
+                        if content_length and int(content_length) > MAX_IMAGE_BYTES:
+                            raise ValueError("图片超过 64MB 限制")
+                        with temp_path.open("wb") as output:
+                            for chunk in response.iter_bytes(64 * 1024):
+                                if not chunk:
+                                    continue
+                                if not first_chunk:
+                                    first_chunk = chunk[:16]
+                                total += len(chunk)
+                                if total > MAX_IMAGE_BYTES:
+                                    raise ValueError("图片超过 64MB 限制")
+                                output.write(chunk)
+                    if total <= 1024:
+                        raise ValueError("图片内容过小或为空")
+                    if "image" not in ctype.lower() and not first_chunk.startswith(b"\xff\xd8"):
                         raise ValueError(f"响应不是图片: {ctype}")
-                    filepath.write_bytes(response.content)
-                    info.url = url
-                    print(f"壁纸已下载: {filepath}")
-                    return str(filepath)
-                except Exception as exc:
-                    last_error = exc
+                    os.replace(temp_path, filepath)
+                finally:
+                    try:
+                        temp_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                info.url = url
+                print(f"壁纸已下载: {filepath}")
+                return str(filepath)
+            except Exception as exc:
+                last_error = exc
         print(f"下载壁纸失败: {last_error}")
         return None
 
@@ -204,10 +264,10 @@ class BingDownloader:
             batch_found = False
             for api in self.API_URLS:
                 try:
-                    with httpx.Client(headers=self.HEADERS, timeout=20, follow_redirects=True) as client:
-                        response = client.get(api, params=params)
-                        response.raise_for_status()
-                        data = response.json()
+                    client = self._get_http_client()
+                    response = client.get(api, params=params)
+                    response.raise_for_status()
+                    data = response.json()
                     images = data.get("images") or []
                     if images:
                         batch_found = True
@@ -260,6 +320,35 @@ class BingDownloader:
         files = [f for f in self.cache_dir.iterdir() if self.is_bing_cache_file(f)]
         files.sort(key=lambda p: (p.stat().st_mtime if p.exists() else 0, p.name.lower()), reverse=True)
         return [str(f) for f in files]
+
+
+    def delete_oldest_cached_wallpapers(self, count: int, keyword: str = "bing") -> int:
+        """Delete a fixed number of oldest cached Bing images, safely limited by filename keyword."""
+        count = max(0, int(count or 0))
+        if count <= 0:
+            return 0
+        directory = Path(self.cache_dir)
+        if not directory.exists():
+            return 0
+        candidates: list[Path] = []
+        keyword_lower = (keyword or "").lower()
+        for item in directory.iterdir():
+            if not item.is_file():
+                continue
+            if item.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}:
+                continue
+            if keyword_lower and keyword_lower not in item.name.lower():
+                continue
+            candidates.append(item)
+        candidates.sort(key=lambda p: (p.stat().st_mtime, p.name))
+        deleted = 0
+        for item in candidates[:count]:
+            try:
+                item.unlink()
+                deleted += 1
+            except Exception:
+                pass
+        return deleted
 
     def cleanup_cached_wallpapers(self, max_count: int, keyword: str = 'bing') -> int:
         """Delete old managed Bing cache files beyond max_count.

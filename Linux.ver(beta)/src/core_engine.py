@@ -131,8 +131,8 @@ def _user_data_dir() -> str:
         root = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
         path = os.path.join(root, APP_NAME.lower())
     else:
-        # Keep Windows behavior unchanged; the Windows branch in this package is only used as reference.
-        path = _resource_base_dir()
+        root = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+        path = os.path.join(root, APP_NAME)
     try:
         os.makedirs(path, exist_ok=True)
     except Exception:
@@ -143,9 +143,14 @@ def _user_data_dir() -> str:
 
 BASE_DIR = _resource_base_dir()
 DATA_DIR = _user_data_dir()
+try:
+    random_copy.configure_storage(DATA_DIR)
+except Exception as exc:
+    log_message = f"随机概率配置目录初始化失败: {exc}"
+    print(log_message)
 
 # 全局常量
-VERSION = "1.3"  # Kept as fallback; main.py overrides via core.VERSION = APP_VERSION
+VERSION = "1.3.0"
 CONFIG_PATH = os.path.join(DATA_DIR, "settings.json")
 BUNDLED_CONFIG_PATH = os.path.join(BASE_DIR, "settings.json")
 LEGACY_CONFIG_PATH = os.path.join(DATA_DIR, "shezhi.json")
@@ -253,7 +258,7 @@ def show_message(title, msg):
     if IS_LINUX:
         try:
             subprocess.run(
-                ["zenity", "--info", f"--title={title}", f"--text={msg}", "--no-wrap"],
+                ["zenity", "--info", "--title", str(title), "--text", str(msg), "--no-wrap"],
                 timeout=10, capture_output=True,
             )
             return
@@ -261,7 +266,7 @@ def show_message(title, msg):
             pass
         try:
             subprocess.run(
-                ["kdialog", f"--title={title}", f"--msgbox={msg}"],
+                ["kdialog", "--title", str(title), "--msgbox", str(msg)],
                 timeout=10, capture_output=True,
             )
             return
@@ -867,11 +872,14 @@ def load_config():
         "bing_cache_dir": "",
         "bing_sync_count": 1,
         "bing_next_index": 0,
-        "bing_auto_cleanup": True,
+        "bing_auto_cleanup": False,
+        "bing_auto_update_on_start": False,
+        "bing_auto_update_count": 1,
+        "bing_auto_delete_on_start": False,
+        "bing_auto_delete_count": 1,
         "log_enabled": False,  # 默认关闭日志文件记录；在新版日志页开启时需要先选择路径
         "log_file_path": "",  # 日志文件保存路径，首次开启日志时填写
         "ignored_version": "",  # 用户选择忽略的版本号
-        "user_id": "",  # 用户唯一标识（10位随机数字）
         "app_theme": "default",  # 默认使用 Qt/系统原生样式
         "font_path": "",
         "dpi_scale": 1.0,
@@ -885,10 +893,17 @@ def load_config():
     if source_path:
         try:
             with open(source_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+                loaded = json.load(f)
+            if not isinstance(loaded, dict):
+                raise ValueError("settings.json 根节点必须是对象")
+            data = default.copy()
+            data.update(loaded)
             log(f"配置加载成功: {os.path.basename(source_path)}")
-            # 自动转换旧的托盘菜单格式
+            # 自动转换旧配置。
             converted = False
+            if "user_id" in data:
+                data.pop("user_id", None)
+                converted = True
             if "tray_menu_items" in data and data["tray_menu_items"]:
                 first_item = data["tray_menu_items"][0]
                 if isinstance(first_item, dict) and "action" in first_item:
@@ -944,8 +959,17 @@ def load_config():
                 data["bing_next_index"] = 0
                 converted = True
             if "bing_auto_cleanup" not in data:
-                data["bing_auto_cleanup"] = True
+                data["bing_auto_cleanup"] = False
                 converted = True
+            for _key, _default in {
+                "bing_auto_update_on_start": False,
+                "bing_auto_update_count": 1,
+                "bing_auto_delete_on_start": False,
+                "bing_auto_delete_count": 1,
+            }.items():
+                if _key not in data:
+                    data[_key] = _default
+                    converted = True
             cleaned_history = dedupe_wallpaper_history(data.get("history", []), keep_missing=True)
             if cleaned_history != data.get("history", []):
                 data["history"] = cleaned_history
@@ -969,8 +993,14 @@ def load_config():
             # 转换完或从旧 shezhi.json 读取时，统一保存到 settings.json。
             if converted or source_path != CONFIG_PATH:
                 try:
-                    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                    tmp_path = CONFIG_PATH + ".tmp"
+                    with open(tmp_path, "w", encoding="utf-8") as f:
                         json.dump(data, f, ensure_ascii=False, indent=2)
+                    try:
+                        os.chmod(tmp_path, 0o600)
+                    except OSError:
+                        pass
+                    os.replace(tmp_path, CONFIG_PATH)
                     log("已保存转换后的 settings.json 配置文件")
                 except Exception as e:
                     log(f"保存转换后的配置失败: {e}")
@@ -985,6 +1015,7 @@ def save_config():
     """保存配置到文件，使用线程锁保护写入操作。"""
     with _config_lock:
         try:
+            config.pop("user_id", None)
             if "tray_click_action" not in config:
                 config["tray_click_action"] = "next"
             if "tray_menu_items" not in config:
@@ -1014,7 +1045,17 @@ def save_config():
                 config.setdefault(_key, _default)
             if config.get("bing_cache_dir") is None:
                 config["bing_cache_dir"] = ""
-            config["bing_auto_cleanup"] = bool(config.get("bing_auto_cleanup", True))
+            config["bing_auto_cleanup"] = bool(config.get("bing_auto_cleanup", False))
+            config["bing_auto_update_on_start"] = bool(config.get("bing_auto_update_on_start", False))
+            config["bing_auto_delete_on_start"] = bool(config.get("bing_auto_delete_on_start", False))
+            try:
+                config["bing_auto_update_count"] = max(1, min(16, int(config.get("bing_auto_update_count", 1))))
+            except Exception:
+                config["bing_auto_update_count"] = 1
+            try:
+                config["bing_auto_delete_count"] = max(1, min(200, int(config.get("bing_auto_delete_count", 1))))
+            except Exception:
+                config["bing_auto_delete_count"] = 1
             try:
                 config["bing_next_index"] = max(0, int(config.get("bing_next_index", 0)))
             except Exception:
@@ -1025,8 +1066,14 @@ def save_config():
             config["mode"] = normalize_mode_key(config.get("mode", "幻灯片放映"))
             config["fit_mode"] = normalize_style_key(config.get("fit_mode", "填充"))
             os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            tmp_path = CONFIG_PATH + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
+            try:
+                os.chmod(tmp_path, 0o600)
+            except OSError:
+                pass
+            os.replace(tmp_path, CONFIG_PATH)
             log("配置已保存")
         except Exception as e:
             log("保存配置失败: " + str(e))
@@ -1037,12 +1084,6 @@ _config_lock = threading.Lock()
 
 config = load_config()
 
-# 第一次运行的话，生成一个10位的随机用户ID
-import random as _random
-
-if not config.get("user_id"):
-    config["user_id"] = ''.join(str(_random.randint(0, 9)) for _ in range(10))
-    save_config()
 
 
 # 上报用户使用情况（另开个线程，能不卡界面）

@@ -1,347 +1,272 @@
-import os
-import json
-import shutil
-import time
-import logging
-import random
+from __future__ import annotations
 
-# 日志默认不落盘，由主程序日志设置控制。
+import json
+import logging
+import math
+import os
+import random
+import sys
+import threading
+import time
+from pathlib import Path
+
 logger = logging.getLogger("ShangBackground.random_copy")
 logger.addHandler(logging.NullHandler())
 
 COPY_PREFIX = "(xxdz_random_copy)"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-RANDOM_CONFIG_PATH = os.path.join(BASE_DIR, "random.json")
+LEGACY_RANDOM_CONFIG_PATH = os.path.join(BASE_DIR, "random.json")
+RANDOM_CONFIG_PATH = LEGACY_RANDOM_CONFIG_PATH
+IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".gif")
+DEFAULT_WEIGHT = 100.0
+MAX_WEIGHT = 1_000_000.0
+_CONFIG_LOCK = threading.RLock()
 
-# 支持的图片扩展名（统一常量）
-IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.bmp', '.gif')
-DEFAULT_WEIGHT = 100
 
-
-def log(msg):
-    """带时间戳的日志输出函数。"""
+def log(message: str) -> None:
     timestamp = time.strftime("[%H:%M:%S]")
-    print(f"{timestamp} {msg}")
-    logger.info(msg)
+    print(f"{timestamp} {message}")
+    logger.info(message)
 
 
-def _load_config():
-    """加载随机概率配置文件。"""
-    if os.path.exists(RANDOM_CONFIG_PATH):
+def configure_storage(data_dir: str) -> str:
+    """Store random.json in the per-user writable data directory."""
+    global RANDOM_CONFIG_PATH
+    target_dir = Path(data_dir).expanduser()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / "random.json"
+    legacy_candidates = [Path(LEGACY_RANDOM_CONFIG_PATH)]
+    if getattr(sys, "frozen", False):
+        legacy_candidates.append(Path(sys.executable).resolve().parent / "random.json")
+    if not target.exists():
+        for legacy in legacy_candidates:
+            if target == legacy or not legacy.is_file():
+                continue
+            try:
+                payload = legacy.read_bytes()
+                json.loads(payload.decode("utf-8"))
+                temp = target.with_suffix(".json.tmp")
+                temp.write_bytes(payload)
+                os.replace(temp, target)
+                break
+            except Exception as exc:
+                log(f"迁移旧随机配置失败: {exc}")
+    RANDOM_CONFIG_PATH = str(target)
+    return RANDOM_CONFIG_PATH
+
+
+def _load_config() -> dict:
+    with _CONFIG_LOCK:
+        path = Path(RANDOM_CONFIG_PATH)
+        if not path.is_file():
+            return {"__version__": 3, "folders": {}}
         try:
-            with open(RANDOM_CONFIG_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {"__version__": 3, "folders": {}}
+        except Exception as exc:
+            log(f"读取随机配置失败: {exc}")
+            return {"__version__": 3, "folders": {}}
+
+
+def _save_config(data: dict) -> None:
+    with _CONFIG_LOCK:
+        path = Path(RANDOM_CONFIG_PATH)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_suffix(path.suffix + ".tmp")
+        try:
+            temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            try:
+                os.chmod(temp, 0o600)
+            except OSError:
+                pass
+            os.replace(temp, path)
         except Exception:
-            return {}
-    return {}
+            try:
+                temp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
 
-def _save_config(data):
-    """保存随机概率配置文件。"""
+def _folder_key(folder_path: str) -> str:
+    return os.path.normcase(os.path.realpath(os.path.abspath(folder_path)))
+
+
+def _folder_data(config: dict, folder_abs: str) -> dict:
+    if isinstance(config.get("folders"), dict):
+        value = config["folders"].get(folder_abs, {})
+        return value if isinstance(value, dict) else {}
+    value = config.get(folder_abs, {})
+    return value if isinstance(value, dict) else {}
+
+
+def _safe_weight(value, default: float = 0.0) -> float:
     try:
-        with open(RANDOM_CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        log(f"保存随机配置失败: {e}")
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(number):
+        return default
+    return min(MAX_WEIGHT, max(0.0, number))
 
 
-
-def _folder_data(config, folder_abs):
-    """兼容新版 folders 结构和旧版 {folder: {filename: value}} 结构。"""
-    if isinstance(config, dict) and isinstance(config.get("folders"), dict):
-        return config.get("folders", {}).get(folder_abs, {})
-    return config.get(folder_abs, {}) if isinstance(config, dict) else {}
-
-
-def get_original_image_paths(folder_path):
-    """获取文件夹中的原始壁纸路径，不包含旧概率副本文件。"""
+def get_original_image_paths(folder_path: str) -> list[str]:
     folder_abs = os.path.abspath(folder_path)
     if not os.path.isdir(folder_abs):
         return []
-    paths = []
-    for name in sorted(os.listdir(folder_abs), key=str.lower):
-        if name.startswith(COPY_PREFIX):
-            continue
-        path = os.path.join(folder_abs, name)
-        if os.path.isfile(path) and name.lower().endswith(IMAGE_EXTENSIONS):
-            paths.append(path)
-    return paths
-
-
-def get_probability_weights(folder_path):
-    """读取当前文件夹的随机权重；未设置的图片由调用方按 DEFAULT_WEIGHT 处理。"""
-    folder_abs = os.path.abspath(folder_path)
-    config = _load_config()
-    folder_data = _folder_data(config, folder_abs)
-    weights = {}
-    if isinstance(folder_data, dict):
-        for filename, value in folder_data.items():
-            try:
-                weights[filename] = max(0.0, float(value))
-            except Exception:
+    paths: list[str] = []
+    try:
+        entries = os.scandir(folder_abs)
+    except OSError:
+        return []
+    with entries:
+        for entry in entries:
+            name = entry.name
+            if name.startswith(COPY_PREFIX):
                 continue
-    return weights
+            try:
+                is_file = entry.is_file(follow_symlinks=True)
+            except OSError:
+                continue
+            if is_file and name.lower().endswith(IMAGE_EXTENSIONS):
+                paths.append(entry.path)
+    return sorted(paths, key=lambda value: os.path.basename(value).casefold())
 
 
-def save_probability_weights(folder_path, weights_dict):
-    """保存每张原始壁纸的随机权重，不再通过物理副本实现概率。"""
-    folder_abs = os.path.abspath(folder_path)
-    if not os.path.isdir(folder_abs):
-        raise ValueError("壁纸文件夹无效")
+def get_probability_weights(folder_path: str) -> dict[str, float]:
+    folder_abs = _folder_key(folder_path)
+    folder_data = _folder_data(_load_config(), folder_abs)
+    return {
+        str(filename): _safe_weight(value)
+        for filename, value in folder_data.items()
+        if isinstance(filename, str)
+    }
 
-    cleaned = {}
-    originals = {os.path.basename(path) for path in get_original_image_paths(folder_abs)}
-    for filename, weight in (weights_dict or {}).items():
-        if filename not in originals:
-            continue
-        try:
-            value = max(0.0, float(weight))
-        except Exception:
-            value = 0.0
-        if value > 0:
-            cleaned[filename] = round(value, 4)
 
-    config = _load_config()
-    # 迁移旧结构到新版 folders，同时保留其它未知字段。
+def _migrate_folders(config: dict) -> dict:
     folders = config.get("folders") if isinstance(config, dict) else None
     if not isinstance(folders, dict):
         folders = {}
         if isinstance(config, dict):
-            for key, value in list(config.items()):
+            for key, value in config.items():
                 if isinstance(value, dict) and os.path.isabs(str(key)):
-                    folders[str(key)] = value
-        config = {"__version__": 2, "folders": folders}
-    else:
-        config["__version__"] = 2
+                    folders[_folder_key(str(key))] = value
+    return {"__version__": 3, "folders": folders}
 
-    if cleaned:
-        folders[folder_abs] = cleaned
-    else:
-        folders.pop(folder_abs, None)
+
+def save_probability_weights(folder_path: str, weights_dict: dict) -> None:
+    folder_abs = _folder_key(folder_path)
+    if not os.path.isdir(folder_abs):
+        raise ValueError("壁纸文件夹无效")
+
+    originals = [os.path.basename(path) for path in get_original_image_paths(folder_abs)]
+    if not originals:
+        raise ValueError("壁纸文件夹中没有支持的图片")
+
+    config = _migrate_folders(_load_config())
+    folders = config["folders"]
+    previous = _folder_data(config, folder_abs)
+    requested = weights_dict if isinstance(weights_dict, dict) else {}
+    cleaned: dict[str, float] = {}
+    for filename in originals:
+        if filename in requested:
+            value = _safe_weight(requested[filename])
+        elif filename in previous:
+            value = _safe_weight(previous[filename])
+        else:
+            value = DEFAULT_WEIGHT
+        # Keep explicit zeroes: zero means disabled and must not fall back to DEFAULT_WEIGHT.
+        cleaned[filename] = round(value, 4)
+
+    if not any(value > 0 for value in cleaned.values()):
+        raise ValueError("至少需要一张壁纸的概率大于 0%")
+    folders[folder_abs] = cleaned
     _save_config(config)
-    # 新版使用内存权重，清理旧物理副本，避免文件夹膨胀和列表误读。
     cleanup_physical_only(folder_abs)
 
 
-def weighted_choice(folder_path, current_path=""):
-    """按 random.json 中的权重挑选一张原始壁纸。权重为 0 的图片不会被选中。"""
+def weighted_choice(folder_path: str, current_path: str = "") -> str | None:
     originals = get_original_image_paths(folder_path)
     if not originals:
         return None
 
-    current_abs = os.path.abspath(current_path) if current_path else ""
-    candidates = [path for path in originals if os.path.abspath(path) != current_abs]
-    if not candidates:
-        candidates = originals
-
     weights_map = get_probability_weights(folder_path)
-    weighted = []
-    weights = []
-    for path in candidates:
+    eligible: list[str] = []
+    weights: list[float] = []
+    for path in originals:
         filename = os.path.basename(path)
-        weight = weights_map.get(filename, DEFAULT_WEIGHT)
-        try:
-            weight = float(weight)
-        except Exception:
-            weight = DEFAULT_WEIGHT
-        if weight <= 0:
-            continue
-        weighted.append(path)
-        weights.append(weight)
+        weight = _safe_weight(weights_map.get(filename, DEFAULT_WEIGHT), DEFAULT_WEIGHT)
+        if weight > 0:
+            eligible.append(path)
+            weights.append(weight)
 
-    if not weighted:
-        return random.choice(candidates)
-    return random.choices(weighted, weights=weights, k=1)[0]
+    if not eligible:
+        eligible = list(originals)
+        weights = [1.0] * len(eligible)
 
-def get_copy_count(folder_path, filename):
-    """获取指定图片的旧副本数量 / 新权重值。"""
-    folder_abs = os.path.abspath(folder_path)
-    config = _load_config()
-    folder_data = _folder_data(config, folder_abs)
-    return folder_data.get(filename, 0) if isinstance(folder_data, dict) else 0
+    current_abs = os.path.realpath(os.path.abspath(current_path)) if current_path else ""
+    if current_abs and len(eligible) > 1:
+        filtered = [(path, weight) for path, weight in zip(eligible, weights) if os.path.realpath(os.path.abspath(path)) != current_abs]
+        if filtered:
+            eligible, weights = map(list, zip(*filtered))
+    return random.choices(eligible, weights=weights, k=1)[0]
 
 
-def _delete_copies(folder_abs, filename=None):
-    """删除指定文件夹中的副本文件。
-
-    参数:
-        folder_abs: 文件夹绝对路径
-        filename: 如果指定，只删除该图片的副本；否则删除所有副本
-
-    返回:
-        删除的文件数量
-    """
+def _delete_copies(folder_abs: str, filename: str | None = None) -> int:
     if not os.path.isdir(folder_abs):
         return 0
     deleted = 0
-    for f in os.listdir(folder_abs):
-        if not f.startswith(COPY_PREFIX):
+    try:
+        names = os.listdir(folder_abs)
+    except OSError:
+        return 0
+    for name in names:
+        if not name.startswith(COPY_PREFIX):
             continue
-        if filename is not None and not f.endswith(filename):
+        if filename is not None and not name.endswith(filename):
             continue
+        path = os.path.join(folder_abs, name)
         try:
-            os.remove(os.path.join(folder_abs, f))
-            deleted += 1
+            if os.path.isfile(path):
+                os.remove(path)
+                deleted += 1
         except OSError:
-            pass
+            continue
     return deleted
 
 
-def _create_copies(folder_abs, filename, copy_count):
-    """为指定图片创建副本文件。
-
-    参数:
-        folder_abs: 文件夹绝对路径
-        filename: 原始图片文件名
-        copy_count: 需要创建的副本数量
-
-    返回:
-        实际创建的副本数量
-    """
-    original_path = os.path.join(folder_abs, filename)
-    if not os.path.exists(original_path):
-        return 0
-    created = 0
-    for i in range(1, copy_count + 1):
-        copy_name = f"{COPY_PREFIX}_{i}_{filename}"
-        copy_path = os.path.join(folder_abs, copy_name)
-        try:
-            shutil.copy2(original_path, copy_path)
-            created += 1
-        except Exception as e:
-            log(f"复制失败 {copy_name}: {e}")
-    return created
-
-
-def _apply_copy_count(folder_path, filename, copy_count):
-    """实际执行文件复制/删除（不保存配置）。
-
-    参数:
-        folder_path: 文件夹路径
-        filename: 原始图片文件名
-        copy_count: 目标副本数量
-
-    返回:
-        操作是否成功
-    """
+def cleanup_physical_only(folder_path: str) -> int:
     folder_abs = os.path.abspath(folder_path)
-    log(f"_apply_copy_count: folder={folder_abs}, filename={filename}, copy_count={copy_count}")
-
-    if not os.path.isdir(folder_abs):
-        return False
-    original_path = os.path.join(folder_abs, filename)
-    if not os.path.exists(original_path):
-        log(f"_apply_copy_count: 原图不存在 {original_path}")
-        return False
-
-    copy_count = max(0, int(copy_count))
-
-    # 删除该图片的所有旧副本
-    deleted = _delete_copies(folder_abs, filename)
-    log(f"_apply_copy_count: 删除 {deleted} 个旧副本")
-
-    # 创建新副本
-    created = _create_copies(folder_abs, filename, copy_count)
-    log(f"_apply_copy_count: 创建 {created} 个副本 (目标: {copy_count})")
-    return True
+    deleted = _delete_copies(folder_abs)
+    if deleted:
+        log(f"已清理 {deleted} 个旧版概率副本文件")
+    return deleted
 
 
-def save_all_changes(folder_path, changes_dict):
-    """批量保存所有更改。
+# Compatibility API: legacy callers keep working, but no longer create physical copies.
+def get_copy_count(folder_path: str, filename: str) -> float:
+    return get_probability_weights(folder_path).get(filename, 0.0)
 
-    参数:
-        folder_path: 文件夹路径
-        changes_dict: {filename: copy_count} 字典
-    """
-    folder_abs = os.path.abspath(folder_path)
-    log(f"save_all_changes: folder={folder_abs}, changes={changes_dict}")
 
-    for filename, copy_count in changes_dict.items():
-        _apply_copy_count(folder_abs, filename, copy_count)
+def save_all_changes(folder_path: str, changes_dict: dict) -> None:
+    save_probability_weights(folder_path, changes_dict)
 
-    # 更新配置文件
-    config = _load_config()
 
-    if not changes_dict:
-        if folder_abs in config:
-            del config[folder_abs]
-    else:
-        if folder_abs not in config:
-            config[folder_abs] = {}
-        for filename, copy_count in changes_dict.items():
-            if copy_count == 0:
-                config[folder_abs].pop(filename, None)
-            else:
-                config[folder_abs][filename] = copy_count
-        # 如果文件夹配置为空，删除该条目
-        if not config[folder_abs]:
-            del config[folder_abs]
-
+def cleanup_folder(folder_path: str) -> None:
+    folder_abs = _folder_key(folder_path)
+    cleanup_physical_only(folder_abs)
+    config = _migrate_folders(_load_config())
+    config["folders"].pop(folder_abs, None)
     _save_config(config)
-    log("save_all_changes: 保存完成")
 
 
-def cleanup_folder(folder_path):
-    """删除指定文件夹下所有副本文件，并清空配置。"""
-    folder_abs = os.path.abspath(folder_path)
-    deleted = _delete_copies(folder_abs)
-    log(f"cleanup_folder: 删除了 {deleted} 个副本文件")
-
-    config = _load_config()
-    if folder_abs in config:
-        del config[folder_abs]
-        _save_config(config)
+def restore_weights(folder_path: str) -> None:
+    cleanup_physical_only(folder_path)
 
 
-def cleanup_physical_only(folder_path):
-    """仅删除指定文件夹下所有副本文件，不清空配置文件（保留权重）。"""
-    folder_abs = os.path.abspath(folder_path)
-    deleted = _delete_copies(folder_abs)
-    log(f"cleanup_physical_only: 删除了 {deleted} 个副本文件，配置未改动")
-
-
-def restore_weights(folder_path):
-    """根据 random.json 中的配置恢复副本文件。"""
-    folder_abs = os.path.abspath(folder_path)
-    log(f"restore_weights: folder={folder_abs}")
-
-    if not os.path.isdir(folder_abs):
-        log(f"restore_weights: 文件夹无效 {folder_abs}")
-        return
-
-    config = _load_config()
-    folder_data = _folder_data(config, folder_abs)
-
-    if not folder_data:
-        log(f"restore_weights: 没有找到权重配置 for {folder_abs}")
-        return
-
-    log(f"restore_weights: 开始恢复 {len(folder_data)} 个图片的副本")
-
-    for filename, copy_count in folder_data.items():
-        original_path = os.path.join(folder_abs, filename)
-        if not os.path.exists(original_path):
-            log(f"restore_weights: 原图不存在 {filename}")
-            continue
-
-        # 删除该图片已有的所有副本，然后创建新副本
-        _delete_copies(folder_abs, filename)
-        created = _create_copies(folder_abs, filename, copy_count)
-        log(f"restore_weights: {filename} 创建 {created} 个副本 (目标: {copy_count})")
-
-    log("restore_weights: 恢复完成")
-
-
-def get_all_images_with_copies(folder_path):
-    """获取文件夹中所有图片文件路径（包括副本）。"""
-    folder_abs = os.path.abspath(folder_path)
-    if not os.path.isdir(folder_abs):
-        return []
-    all_files = os.listdir(folder_abs)
-    return [os.path.join(folder_abs, f) for f in all_files
-            if f.lower().endswith(IMAGE_EXTENSIONS)]
-
+def get_all_images_with_copies(folder_path: str) -> list[str]:
+    return get_original_image_paths(folder_path)
 
 
 def open_random_probability_window(parent, folder):
-    raise RuntimeError("随机概率图形设置已整合到 PySide6 主界面，请从新版界面调整随机顺序相关设置。")
+    raise RuntimeError("随机概率图形设置已整合到 PySide6 主界面，请从新版界面调整随机百分比。")
