@@ -5,18 +5,18 @@ NOTICE / 版权声明
 ================================================================================
 
 The source code of this project (all files except those explicitly excluded
-below) is licensed under the MIT License as described in the LICENSE file.
+below) is licensed under the GPLv3 License as described in the LICENSE file.
 
-本项目源代码（除下文明确排除的文件外）采用 MIT 许可证，详见 LICENSE 文件。
+本项目源代码（除下文明确排除的文件外）采用 GPLv3 许可证，详见 LICENSE 文件。
 
 ================================================================================
 2. Excluded Assets / 排除资产
 ================================================================================
 
-The following assets are NOT covered by the MIT License and remain the
+The following assets are NOT covered by the GPLv3 License and remain the
 exclusive property of 小小电子xxdz. All rights reserved.
 
-以下资产不受 MIT 许可证覆盖，版权归 小小电子xxdz 所有，保留所有权利。
+以下资产不受 GPLv3 许可证覆盖，版权归 小小电子xxdz 所有，保留所有权利。
 
 Excluded directories and files / 排除的目录和文件：
   - /img/ 目录下的所有图像文件（包括但不限于 LOGO.png、壁纸图片、图标等）
