@@ -188,7 +188,6 @@ def log(msg):
 
 
 def apply_image_fit_mode(img, mode, target_size):
-    mode = normalize_style_key(mode)
     """根据适应模式处理图片，统一5种适应模式的处理逻辑。
 
     参数:
@@ -199,6 +198,7 @@ def apply_image_fit_mode(img, mode, target_size):
     返回:
         处理后的 PIL.Image 对象
     """
+    mode = normalize_style_key(mode)
     target_w, target_h = target_size
     orig_w, orig_h = img.size
 

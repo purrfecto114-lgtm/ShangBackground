@@ -9,6 +9,7 @@ import threading
 import time
 import random
 import tempfile
+import plistlib
 try:
     import ctypes.wintypes
 except ImportError:

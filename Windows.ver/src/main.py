@@ -16,7 +16,7 @@ import single_instance
 from app_config import DEFAULT_THEME_COLOR, MODE_KEYS, STYLE_KEYS, normalize_mode_key, normalize_style_key
 from i18n import t, init_i18n, get_language, set_language, load_language
 from ui_scaling import apply_dpi_environment, clamp_dpi_scale, dpi_percent
-from update_services import UpdateChecker
+from update_services import GITHUB_LATEST_RELEASE_URL, GITHUB_PROJECT_URL, UpdateChecker
 
 # Load configured UI language before any translated constants/widgets are created.
 init_i18n(core.config)
@@ -45,10 +45,6 @@ def _set_windows_app_identity() -> None:
     except Exception:
         pass
 
-GITHUB_REPO = "purrfecto114-lgtm/ShangBackground"
-GITHUB_PROJECT_URL = f"https://github.com/{GITHUB_REPO}"
-GITHUB_LATEST_RELEASE_URL = f"{GITHUB_PROJECT_URL}/releases/latest"
-GITHUB_LATEST_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
 
 def _is_action_launch(args: argparse.Namespace) -> bool:
@@ -1158,9 +1154,17 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                     "/* 列表视图 */\n"
                     f"QListWidget {{ border: 1px solid {border_color}; border-radius: 6px;"
                     f" background-color: {bg_widget}; color: {fg_primary}; padding: 4px; }}\n"
-                    f"QListWidget::item:selected, QComboBox QAbstractItemView::item:selected {{ background: %%visible_accent%%; color: %%accent_text%%; }}\n"
-                    f"QMenu::item:selected {{ background: %%visible_accent%%; color: %%accent_text%%; }}\n"
+                    f"QListWidget::item {{ padding: 4px 8px; border-radius: 4px; }}\n"
+                    f"QListWidget::item:hover {{ background: {nav_hover}; }}\n"
+                    f"QListWidget::item:selected {{ background: %%visible_accent%%; color: %%accent_text%%; }}\n"
+                    f"QComboBox QAbstractItemView::item:selected {{ background: %%visible_accent%%; color: %%accent_text%%; }}\n"
                     f"QTextEdit selection, QLineEdit selection {{ background: %%visible_accent%%; color: %%accent_text%%; }}\n"
+                    "\n"
+                    "/* 上下文菜单 */\n"
+                    f"QMenu {{ background: {bg_widget}; color: {fg_primary}; border: 1px solid {border_color}; border-radius: 6px; padding: 4px; }}\n"
+                    f"QMenu::item {{ padding: 6px 24px; border-radius: 4px; }}\n"
+                    f"QMenu::item:selected {{ background: {nav_hover}; }}\n"
+                    f"QMenu::separator {{ height: 1px; background: {border_color}; margin: 4px 8px; }}\n"
                     "\n"
                     "/* 滚动区域与滚动条 */\n"
                     f"QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget, QStackedWidget {{ border: none; background-color: {bg_widget}; }}\n"
@@ -1188,6 +1192,8 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                     f" border-radius: 6px; padding: 4px 10px; min-height: 24px; }}\n"
                     f"QPushButton#CancelOperationButton:hover:enabled {{ color: #f87171; border-color: #7f1d1d; background: #3b1010; }}\n"
                     f"QPushButton#CancelOperationButton:pressed:enabled {{ background: #2d0a0a; }}\n"
+                    "/* 灰度提示 */\n"
+                    f"*[muted=\"true\"] {{ color: {muted_color}; }}\n"
                 )
             else:
                 hover_c = base.darker(110).name()
@@ -1260,9 +1266,17 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                     "/* 列表视图 */\n"
                     "QListWidget { border: 1px solid #d0d7de; border-radius: 6px;"
                     " background-color: #ffffff; padding: 4px; }\n"
-                    "QListWidget::item:selected, QComboBox QAbstractItemView::item:selected { background: %%visible_accent%%; color: %%accent_text%%; }\n"
-                    "QMenu::item:selected { background: %%visible_accent%%; color: %%accent_text%%; }\n"
+                    "QListWidget::item { padding: 4px 8px; border-radius: 4px; }\n"
+                    "QListWidget::item:hover { background: #f0f2f5; }\n"
+                    "QListWidget::item:selected { background: %%visible_accent%%; color: %%accent_text%%; }\n"
+                    "QComboBox QAbstractItemView::item:selected { background: %%visible_accent%%; color: %%accent_text%%; }\n"
                     "QTextEdit selection, QLineEdit selection { background: %%visible_accent%%; color: %%accent_text%%; }\n"
+                    "\n"
+                    "/* 上下文菜单 */\n"
+                    "QMenu { background: #ffffff; color: #24292f; border: 1px solid #d0d7de; border-radius: 6px; padding: 4px; }\n"
+                    "QMenu::item { padding: 6px 24px; border-radius: 4px; }\n"
+                    "QMenu::item:selected { background: #f0f2f5; }\n"
+                    "QMenu::separator { height: 1px; background: #d0d7de; margin: 4px 8px; }\n"
                     "\n"
                     "/* 滚动区域与滚动条 */\n"
                     "QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget, QStackedWidget { border: none; background-color: #ffffff; }\n"
@@ -1290,6 +1304,8 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                     " border-radius: 6px; padding: 4px 10px; min-height: 24px; }\n"
                     "QPushButton#CancelOperationButton:hover:enabled { color: #b42318; border-color: #f1aeb5; background: #fff5f5; }\n"
                     "QPushButton#CancelOperationButton:pressed:enabled { background: #ffe3e3; }\n"
+                    "/* 灰度提示 */\n"
+                    "*[muted=\"true\"] { color: #6b7280; }\n"
                 )
             stylesheet = (
                 _TPL.replace("%%tc%%", tc_for_buttons if dark else tc)

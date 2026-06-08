@@ -473,5 +473,9 @@
   "首次开启日志时请选择保存路径": "Select log path on first enable",
   "首页": "Home",
   "黄": "Y",
-  "默认 Qt 原生主题不额外套玻璃效果。": "Default Qt native theme, no glass effect."
+  "默认 Qt 原生主题不额外套玻璃效果。": "Default Qt native theme, no glass effect.",
+  "httpx 未安装，无法下载 Bing 壁纸": "httpx is missing; cannot download Bing wallpapers.",
+  "httpx 未安装，无法获取 Bing 壁纸信息": "httpx is missing; cannot fetch Bing wallpaper info.",
+  "正在检查内置更新源（GitHub Release）...": "Checking GitHub Release update source...",
+  "缺少必需依赖：": "Missing required dependency:"
 }

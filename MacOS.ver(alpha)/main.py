@@ -4,10 +4,12 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import shlex
 import sys
 import threading
 import shutil
 import subprocess
+import plistlib
 from pathlib import Path
 
 import core_engine as core
@@ -43,6 +45,9 @@ def _set_windows_app_identity() -> None:
         ctypes.windll.kernel32.SetConsoleTitleW(APP_DISPLAY_NAME)
     except Exception:
         pass
+
+
+
 
 def _is_action_launch(args: argparse.Namespace) -> bool:
     return any([
@@ -146,6 +151,9 @@ def _handle_action_args(args: argparse.Namespace) -> bool:
     if args.jump_to_wallpaper:
         _open_sidebar_standalone()
         return True
+    if args.show and core.IS_WINDOWS:
+        if core.activate_existing_instance(show_notice=False):
+            return True
     return False
 
 
@@ -542,6 +550,9 @@ if PYSIDE_AVAILABLE:
         return app.font().family()
 
 
+    # UpdateChecker implementation moved to `update_services.UpdateChecker`.
+    # Import and use that implementation instead of inlining here.
+
 
     class ShangBackgroundWindow(QMainWindow):
         log_signal = Signal(str)
@@ -629,7 +640,6 @@ if PYSIDE_AVAILABLE:
                 if os.path.exists(path):
                     button.setIcon(QIcon(path))
                     button.setIconSize(QSize(size, size))
-                    # 记录需要刷新的按钮及其 SVG 路径
                     if not hasattr(self, "_svg_button_icons"):
                         self._svg_button_icons = {}
                     self._svg_button_icons[id(button)] = (button, path, size)
@@ -1041,7 +1051,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                        .replace("%%checkbox_check_disabled_icon%%", checkbox_check_disabled_icon))
 
         def _rebuild_stylesheet(self):
-            """根据当前主题色和暗色模式重建 QSS 样式表。"""
+            """根据当前主题色和暗色模式重建 QSS 样式表。布局属性（padding/min-height/font-size）在暗色模式下保持不变。"""
             app = QApplication.instance()
             tc = self._theme_color
             dark = bool(core.config.get("dark_mode", False))
@@ -1053,7 +1063,6 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                 base = QColor(tc)
 
             if dark:
-                # ── 暗色模式配色 ──
                 bg_main = "#1e1e2e"
                 bg_widget = "#252536"
                 bg_input = "#2d2d3f"
@@ -1066,12 +1075,9 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                 scroll_handle_hover = "#6d6d85"
                 theme_brightness = (base.red() * 299 + base.green() * 587 + base.blue() * 114) / 1000
                 if theme_brightness >= 230:
-                    # Very light accent colors turn buttons white in dark mode; use a darkened accent-safe surface instead.
                     tc_for_buttons = "#3a3a50"
                     hover_c = "#45455f"
                     pressed_c = "#50506a"
-                    btn_top = tc_for_buttons
-                    btn_hover_top = hover_c
                     btn_text = "#e6e6f0"
                     btn_border = "#5a5a73"
                     visible_accent = "#8b8ba3"
@@ -1081,8 +1087,6 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                     tc_for_buttons = tc
                     hover_c = base.lighter(115).name()
                     pressed_c = base.lighter(130).name()
-                    btn_top = base.name()
-                    btn_hover_top = base.lighter(110).name()
                     btn_text = "#e0e0e0" if theme_brightness >= 170 else "#ffffff"
                     btn_border = base.darker(118).name()
                     visible_accent = tc
@@ -1090,106 +1094,104 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                     accent_text = "#ffffff"
                 disabled_bg = "#3d3d55"
                 disabled_text = "#6d6d85"
-                muted_color = "#8888a0"
                 nav_hover = "#2d2d3f"
-                # ── 暗色模板：布局属性与亮色完全一致 ──
                 _TPL = (
                     "/* ── 暗色模式 ── */\n"
                     f"QMainWindow, QDialog {{ background-color: {bg_main}; }}\n"
                     f"QWidget {{ background-color: {bg_widget}; color: {fg_primary}; font-family: %%font_family%%; }}\n"
                     f"QLabel {{ background-color: transparent; color: {fg_primary}; }}\n"
-                    "\n"
-                    "/* 分组框样式 */\n"
-                    f"QGroupBox {{ font-weight: 600; font-size: 13px; border: 1px solid {border_color}; border-radius: 8px;"
-                    f" margin-top: 12px; padding: 16px 12px 10px 12px; background-color: {group_bg}; }}\n"
-                    f"QGroupBox::title {{ subcontrol-origin: margin; subcontrol-position: top left;"
-                    f" padding: 2px 10px; color: {fg_primary}; background-color: {group_bg}; border-radius: 4px; }}\n"
-                    "\n"
-                    "/* 按钮 */\n"
-                    f"QPushButton {{ background: %%tc%%; color: %%btn_text%%; border: 1px solid %%btn_border%%; border-radius: 6px;"
-                    f" padding: 5px 14px; font-size: 13px; font-weight: 500; min-height: 28px; }}\n"
-                    f"QPushButton:hover:enabled {{ background: %%hover_c%%; }}\n"
-                    f"QPushButton:pressed:enabled {{ background: %%pressed_c%%; padding-top: 6px; padding-bottom: 4px; }}\n"
-                    f"QPushButton:disabled {{ background: {disabled_bg}; border-color: {border_color}; color: {disabled_text}; }}\n"
-                    f"QPushButton[secondary=\"true\"] {{ background: %%tc%%; color: %%btn_text%%; border: 1px solid %%btn_border%%; }}\n"
-                    f"QPushButton[secondary=\"true\"]:hover:enabled {{ background: %%hover_c%%; }}\n"
-                    f"QPushButton[secondary=\"true\"]:pressed:enabled {{ background: %%pressed_c%%; padding-top: 6px; padding-bottom: 4px; }}\n"
-                    f"QPushButton[secondary=\"true\"]:disabled {{ background: {disabled_bg}; border-color: {border_color}; color: {disabled_text}; }}\n"
-                    "\n"
-                    "/* 输入框 */\n"
-                    f"QLineEdit {{ border: 1px solid {border_color}; border-radius: 6px; padding: 6px 10px;"
-                    f" background-color: {bg_input}; color: {fg_primary}; font-size: 13px; min-height: 28px; }}\n"
-                    f"QLineEdit:focus {{ border-color: %%visible_accent%%; border-width: 2px; padding: 5px 9px; }}\n"
-                    "\n"
-                    "/* 下拉框 */\n"
-                    f"QComboBox {{ border: 1px solid {border_color}; border-radius: 6px; padding: 5px 10px;"
-                    f" background-color: {bg_input}; color: {fg_primary}; font-size: 13px; min-height: 28px; }}\n"
-                    f"QComboBox:focus {{ border-color: %%visible_accent%%; }}\n"
-                    f"QComboBox::drop-down {{ border: none; width: 24px; }}\n"
-                    "\n"
-                    "/* 复选框 */\n"
-                    f"QCheckBox {{ spacing: 8px; font-size: 13px; font-weight: 400; min-height: 24px; background-color: transparent; color: {fg_primary}; }}\n"
+                "\n"
+                "/* 分组框样式 */\n"
+                f"QGroupBox {{ font-weight: 600; font-size: 13px; border: 1px solid {border_color}; border-radius: 8px;"
+                f" margin-top: 12px; padding: 16px 12px 10px 12px; background-color: {group_bg}; }}\n"
+                f"QGroupBox::title {{ subcontrol-origin: margin; subcontrol-position: top left;"
+                f" padding: 2px 10px; color: {fg_primary}; background-color: {group_bg}; border-radius: 4px; }}\n"
+                "\n"
+                "/* 按钮 */\n"
+                f"QPushButton {{ background: %%tc%%; color: %%btn_text%%; border: 1px solid %%btn_border%%; border-radius: 6px;"
+                f" padding: 5px 14px; font-size: 13px; font-weight: 500; min-height: 28px; }}\n"
+                f"QPushButton:hover:enabled {{ background: %%hover_c%%; }}\n"
+                f"QPushButton:pressed:enabled {{ background: %%pressed_c%%; padding-top: 6px; padding-bottom: 4px; }}\n"
+                f"QPushButton:disabled {{ background: {disabled_bg}; border-color: {border_color}; color: {disabled_text}; }}\n"
+                f"QPushButton[secondary=\"true\"] {{ background: %%tc%%; color: %%btn_text%%; border: 1px solid %%btn_border%%; }}\n"
+                f"QPushButton[secondary=\"true\"]:hover:enabled {{ background: %%hover_c%%; }}\n"
+                f"QPushButton[secondary=\"true\"]:pressed:enabled {{ background: %%pressed_c%%; padding-top: 6px; padding-bottom: 4px; }}\n"
+                f"QPushButton[secondary=\"true\"]:disabled {{ background: {disabled_bg}; border-color: {border_color}; color: {disabled_text}; }}\n"
+                "\n"
+                "/* 输入框 */\n"
+                f"QLineEdit {{ border: 1px solid {border_color}; border-radius: 6px; padding: 6px 10px;"
+                f" background-color: {bg_input}; color: {fg_primary}; font-size: 13px; min-height: 28px; }}\n"
+                f"QLineEdit:focus {{ border-color: %%visible_accent%%; border-width: 2px; padding: 5px 9px; }}\n"
+                "\n"
+                "/* 下拉框 */\n"
+                f"QComboBox {{ border: 1px solid {border_color}; border-radius: 6px; padding: 5px 10px;"
+                f" background-color: {bg_input}; color: {fg_primary}; font-size: 13px; min-height: 28px; }}\n"
+                f"QComboBox:focus {{ border-color: %%visible_accent%%; }}\n"
+                f"QComboBox::drop-down {{ border: none; width: 24px; }}\n"
+                "\n"
+                "/* 复选框 */\n"
+                f"QCheckBox {{ spacing: 8px; font-size: 13px; font-weight: 400; min-height: 24px; background-color: transparent; color: {fg_primary}; }}\n"
                     f"QCheckBox:hover {{ font-size: 13px; font-weight: 400; }}\n"
-                    "\n"
-                    "/* 选项卡 */\n"
-                    f"QTabWidget::pane {{ border: 1px solid {border_color}; border-radius: 8px;"
-                    f" background-color: {bg_widget}; padding: 4px; }}\n"
-                    f"QTabBar::tab {{ padding: 8px 20px; font-size: 13px; font-weight: 500;"
-                    f" border-top-left-radius: 6px; border-top-right-radius: 6px; margin-right: 2px;"
-                    f" background-color: {bg_widget}; color: {fg_secondary}; border: 1px solid transparent; border-bottom: none; }}\n"
-                    f"QTabBar::tab:selected {{ background-color: {bg_widget}; color: {fg_primary};"
-                    f" border: 1px solid {border_color}; border-bottom: 2px solid %%visible_accent%%; }}\n"
-                    f"QTabBar::tab:hover:!selected {{ background-color: {nav_hover}; }}\n"
-                    "\n"
-                    "/* 进度条 */\n"
-                    f"QProgressBar {{ border: 1px solid {border_color}; border-radius: 6px; text-align: center;"
-                    f" background-color: {bg_input}; color: {fg_primary}; height: 20px; font-size: 12px; }}\n"
-                    f"QProgressBar::chunk {{ background-color: %%progress_chunk%%; border-radius: 5px; }}\n"
-                    "\n"
-                    "/* 列表视图 */\n"
-                    f"QListWidget {{ border: 1px solid {border_color}; border-radius: 6px;"
-                    f" background-color: {bg_widget}; color: {fg_primary}; padding: 4px; }}\n"
-                    f"QListWidget::item {{ padding: 4px 8px; border-radius: 4px; }}\n"
-                    f"QListWidget::item:hover {{ background: {nav_hover}; }}\n"
-                    f"QListWidget::item:selected {{ background: %%visible_accent%%; color: %%accent_text%%; }}\n"
-                    f"QComboBox QAbstractItemView::item:selected {{ background: %%visible_accent%%; color: %%accent_text%%; }}\n"
-                    f"QTextEdit selection, QLineEdit selection {{ background: %%visible_accent%%; color: %%accent_text%%; }}\n"
-                    "\n"
-                    "/* 上下文菜单 */\n"
-                    f"QMenu {{ background: {bg_widget}; color: {fg_primary}; border: 1px solid {border_color}; border-radius: 6px; padding: 4px; }}\n"
-                    f"QMenu::item {{ padding: 6px 24px; border-radius: 4px; }}\n"
-                    f"QMenu::item:selected {{ background: {nav_hover}; }}\n"
-                    f"QMenu::separator {{ height: 1px; background: {border_color}; margin: 4px 8px; }}\n"
-                    "\n"
-                    "/* 滚动区域与滚动条 */\n"
-                    f"QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget, QStackedWidget {{ border: none; background-color: {bg_widget}; }}\n"
-                    f"QScrollBar:vertical {{ background: {scroll_bg}; width: 10px; margin: 0; border-radius: 5px; }}\n"
-                    f"QScrollBar::handle:vertical {{ background: %%scroll_handle%%; min-height: 30px; border-radius: 5px; }}\n"
-                    f"QScrollBar::handle:vertical:hover {{ background: %%scroll_handle_hover%%; }}\n"
-                    f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; background: transparent; }}\n"
-                    f"QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}\n"
-                    f"QScrollBar:horizontal {{ background: {scroll_bg}; height: 10px; margin: 0; border-radius: 5px; }}\n"
-                    f"QScrollBar::handle:horizontal {{ background: %%scroll_handle%%; min-width: 30px; border-radius: 5px; }}\n"
-                    f"QScrollBar::handle:horizontal:hover {{ background: %%scroll_handle_hover%%; }}\n"
-                    f"QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0px; background: transparent; }}\n"
-                    f"QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: transparent; }}\n"
-                    "\n"
-                    "/* 文本编辑框 */\n"
-                    f"QTextEdit, QPlainTextEdit {{ border: 1px solid {border_color}; border-radius: 6px;"
-                    f" background-color: {bg_input}; color: {fg_primary}; padding: 6px;"
-                    f" font-family: \"Cascadia Code\", \"Consolas\", \"Microsoft YaHei UI\", monospace;"
-                    f" font-size: 12px; }}\n"
-                    f"QPushButton#OperationInfoButton {{ background: {bg_widget}; color: {fg_secondary}; border: 1px solid {border_color};"
-                    f" border-radius: 13px; padding: 0; min-width: 24px; max-width: 24px; min-height: 24px; max-height: 24px; }}\n"
-                    f"QPushButton#OperationInfoButton:hover {{ border-color: %%visible_accent%%; color: %%visible_accent%%; background: {bg_widget}; }}\n"
-                    f"QPushButton#OperationInfoButton:pressed {{ background: {bg_input}; }}\n"
-                    f"QPushButton#CancelOperationButton {{ background: {bg_widget}; color: {fg_secondary}; border: 1px solid {border_color};"
-                    f" border-radius: 6px; padding: 4px 10px; min-height: 24px; }}\n"
-                    f"QPushButton#CancelOperationButton:hover:enabled {{ color: #f87171; border-color: #7f1d1d; background: #3b1010; }}\n"
-                    f"QPushButton#CancelOperationButton:pressed:enabled {{ background: #2d0a0a; }}\n"
-                    "/* 灰度提示 */\n"
-                    f"*[muted=\"true\"] {{ color: {muted_color}; }}\n"
-                )
+                "\n"
+                "/* 选项卡 */\n"
+                f"QTabWidget::pane {{ border: 1px solid {border_color}; border-radius: 8px;"
+                f" background-color: {bg_widget}; padding: 4px; }}\n"
+                f"QTabBar::tab {{ padding: 8px 20px; font-size: 13px; font-weight: 500;"
+                f" border-top-left-radius: 6px; border-top-right-radius: 6px; margin-right: 2px;"
+                f" background-color: {bg_widget}; color: {fg_secondary}; border: 1px solid transparent; border-bottom: none; }}\n"
+                f"QTabBar::tab:selected {{ background-color: {bg_widget}; color: {fg_primary};"
+                f" border: 1px solid {border_color}; border-bottom: 2px solid %%visible_accent%%; }}\n"
+                f"QTabBar::tab:hover:!selected {{ background-color: {nav_hover}; }}\n"
+                "\n"
+                "/* 进度条 */\n"
+                f"QProgressBar {{ border: 1px solid {border_color}; border-radius: 6px; text-align: center;"
+                f" background-color: {bg_input}; color: {fg_primary}; height: 20px; font-size: 12px; }}\n"
+                f"QProgressBar::chunk {{ background-color: %%progress_chunk%%; border-radius: 5px; }}\n"
+                "\n"
+                "/* 列表视图 */\n"
+                f"QListWidget {{ border: 1px solid {border_color}; border-radius: 6px;"
+                f" background-color: {bg_widget}; color: {fg_primary}; padding: 4px; }}\n"
+                f"QListWidget::item {{ padding: 4px 8px; border-radius: 4px; }}\n"
+                f"QListWidget::item:hover {{ background: {nav_hover}; }}\n"
+                f"QListWidget::item:selected {{ background: %%visible_accent%%; color: %%accent_text%%; }}\n"
+                f"QComboBox QAbstractItemView::item:selected {{ background: %%visible_accent%%; color: %%accent_text%%; }}\n"
+                f"QTextEdit selection, QLineEdit selection {{ background: %%visible_accent%%; color: %%accent_text%%; }}\n"
+                "\n"
+                "/* 上下文菜单 */\n"
+                f"QMenu {{ background: {bg_widget}; color: {fg_primary}; border: 1px solid {border_color}; border-radius: 6px; padding: 4px; }}\n"
+                f"QMenu::item {{ padding: 6px 24px; border-radius: 4px; }}\n"
+                f"QMenu::item:selected {{ background: {nav_hover}; }}\n"
+                f"QMenu::separator {{ height: 1px; background: {border_color}; margin: 4px 8px; }}\n"
+                "\n"
+                "/* 滚动区域与滚动条 */\n"
+                f"QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget, QStackedWidget {{ border: none; background-color: {bg_widget}; }}\n"
+                f"QScrollBar:vertical {{ background: {scroll_bg}; width: 10px; margin: 0; border-radius: 5px; }}\n"
+                f"QScrollBar::handle:vertical {{ background: %%scroll_handle%%; min-height: 30px; border-radius: 5px; }}\n"
+                f"QScrollBar::handle:vertical:hover {{ background: %%scroll_handle_hover%%; }}\n"
+                f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; background: transparent; }}\n"
+                f"QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}\n"
+                f"QScrollBar:horizontal {{ background: {scroll_bg}; height: 10px; margin: 0; border-radius: 5px; }}\n"
+                f"QScrollBar::handle:horizontal {{ background: %%scroll_handle%%; min-width: 30px; border-radius: 5px; }}\n"
+                f"QScrollBar::handle:horizontal:hover {{ background: %%scroll_handle_hover%%; }}\n"
+                f"QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0px; background: transparent; }}\n"
+                f"QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: transparent; }}\n"
+                "\n"
+                "/* 文本编辑框 */\n"
+                f"QTextEdit, QPlainTextEdit {{ border: 1px solid {border_color}; border-radius: 6px;"
+                f" background-color: {bg_input}; color: {fg_primary}; padding: 6px;"
+                f" font-family: \"Cascadia Code\", \"Consolas\", \"Microsoft YaHei UI\", monospace;"
+                f" font-size: 12px; }}\n"
+                f"QPushButton#OperationInfoButton {{ background: {bg_widget}; color: {fg_secondary}; border: 1px solid {border_color};"
+                f" border-radius: 13px; padding: 0; min-width: 24px; max-width: 24px; min-height: 24px; max-height: 24px; }}\n"
+                f"QPushButton#OperationInfoButton:hover {{ border-color: %%visible_accent%%; color: %%visible_accent%%; background: {bg_widget}; }}\n"
+                f"QPushButton#OperationInfoButton:pressed {{ background: {bg_input}; }}\n"
+                f"QPushButton#CancelOperationButton {{ background: {bg_widget}; color: {fg_secondary}; border: 1px solid {border_color};"
+                f" border-radius: 6px; padding: 4px 10px; min-height: 24px; }}\n"
+                f"QPushButton#CancelOperationButton:hover:enabled {{ color: #f87171; border-color: #7f1d1d; background: #3b1010; }}\n"
+                f"QPushButton#CancelOperationButton:pressed:enabled {{ background: #2d0a0a; }}\n"
+                "/* 灰度提示 */\n"
+                f"*[muted=\"true\"] {{ color: {muted_color}; }}\n"
+            )
             else:
                 hover_c = base.darker(110).name()
                 pressed_c = base.darker(130).name()
@@ -1203,12 +1205,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                 scroll_handle_hover = "#8c959f" if theme_brightness >= 230 else base.darker(105).name()
                 progress_chunk = "#8c959f" if theme_brightness >= 230 else tc
                 accent_text = "#ffffff" if theme_brightness >= 230 else btn_text
-
                 _TPL = (
-                    "/* 全局字体与背景 */\n"
-                    "QMainWindow, QDialog { background-color: #ffffff; }\n"
-                    "QWidget { background-color: #ffffff; color: #24292f; font-family: %%font_family%%; }\n"
-                    "QLabel { background-color: transparent; }\n"
                 "\n"
                 "/* 分组框样式 */\n"
                 "QGroupBox { font-weight: 600; font-size: 13px; border: 1px solid #d0d7de; border-radius: 8px;"
@@ -1216,7 +1213,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                 "QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left;"
                 " padding: 2px 10px; color: #24292f; background-color: #ffffff; border-radius: 4px; }\n"
                 "\n"
-                "/* 按钮样式：主按钮、次要按钮统一从 settings.json 的 theme_color 取色；精灵图和色块按钮另行覆盖。 */\n"
+                "/* 按钮样式 */\n"
                 "QPushButton { background: %%tc%%;"
                 " color: %%btn_text%%; border: 1px solid %%btn_border%%; border-radius: 6px;"
                 " padding: 5px 14px; font-size: 13px; font-weight: 500; min-height: 28px; }\n"
@@ -1239,12 +1236,8 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                 "QComboBox:focus { border-color: %%visible_accent%%; }\n"
                 "QComboBox::drop-down { border: none; width: 24px; }\n"
                 "\n"
-                "/* 数值输入框保持 Qt/系统默认外观，仅保留外层布局尺寸，不用 QSS 重绘箭头。 */\n"
-                "\n"
-                "/* 复选框保持 Qt 默认勾选样式，避免主题色为白色时看不出勾选状态。 */\n"
+                "/* 复选框 */\n"
                 "QCheckBox { spacing: 8px; font-size: 13px; background-color: transparent; }\n"
-                "\n"
-                "/* 滑块保持 Qt/系统默认外观，避免自绘造成触屏拖动时的撕裂感。 */\n"
                 "\n"
                 "/* 选项卡 */\n"
                 "QTabWidget::pane { border: 1px solid #d0d7de; border-radius: 8px;"
@@ -1302,9 +1295,9 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                 " border-radius: 6px; padding: 4px 10px; min-height: 24px; }\n"
                 "QPushButton#CancelOperationButton:hover:enabled { color: #b42318; border-color: #f1aeb5; background: #fff5f5; }\n"
                 "QPushButton#CancelOperationButton:pressed:enabled { background: #ffe3e3; }\n"
-                "/* 灰度提示 */\n"
+                            "/* 灰度提示 */\n"
                 "*[muted=\"true\"] { color: #6b7280; }\n"
-            )
+)
             stylesheet = (
                 _TPL.replace("%%tc%%", tc_for_buttons if dark else tc)
                 .replace("%%hover_c%%", hover_c)
@@ -1335,9 +1328,8 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             # 精灵图按钮背景必须和当前页面背景一致，避免透明 PNG 边缘露出主题色。
             if hasattr(self, "about_sprite_btn"):
                 sprite_bg = "#252536" if dark else "#ffffff"
-                sprite_border = "#252536" if dark else "#ffffff"
                 self.about_sprite_btn.setStyleSheet(
-                    f"background-color: {sprite_bg}; border: 1px solid {sprite_border}; border-radius: 8px;")
+                    f"background-color: {sprite_bg}; border: 1px solid {sprite_bg}; border-radius: 8px;")
             self._refresh_styled_widgets()
             if hasattr(self, "_apply_button_sizes"):
                 self._apply_button_sizes()
@@ -1359,7 +1351,6 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                 pal.setColor(QPalette.ColorRole.Highlight, highlight)
                 pal.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
                 if dark:
-                    # 设置暗色模式基础调色板
                     pal.setColor(QPalette.ColorRole.Window, QColor("#252536"))
                     pal.setColor(QPalette.ColorRole.WindowText, QColor("#e0e0e0"))
                     pal.setColor(QPalette.ColorRole.Base, QColor("#2d2d3f"))
@@ -1450,7 +1441,6 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             if dark:
                 bg = "#1e1e2e"
                 border = "#3d3d55"
-                item_bg = "#252536"
                 item_fg = "#a0a0b0"
                 selected_bg = color
                 selected_text = "#ffffff"
@@ -2256,7 +2246,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
 
         # ---------- 暗色模式相关方法 ----------
         def _on_dark_mode_toggled(self, checked: bool) -> None:
-            """切换暗色模式并立即应用样式。"""
+            """切换暗色模式并立即应用样式，布局属性和按钮大小保持不变。"""
             core.config["dark_mode"] = bool(checked)
             self._rebuild_stylesheet()
             self._refresh_settings_nav_style()
@@ -2264,7 +2254,6 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                 self._refresh_color_buttons()
             if hasattr(self, "_refresh_styled_widgets"):
                 self._refresh_styled_widgets()
-            # 强制刷新 SVG 图标以适配暗色/亮色 currentColor
             self._refresh_svg_button_icons()
             self.set_status(t("暗色模式已开启") if checked else t("亮色模式已恢复"))
 
@@ -3190,42 +3179,129 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             dialog.raise_()
             dialog.activateWindow()
 
-        def _linux_autostart_command(self) -> str:
+        def get_pyqt_startup_folder_path(self):
+            try:
+                return core.get_startup_folder_path_windows()
+            except Exception:
+                return os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs\Startup")
+
+        def _startup_launch_command(self) -> str:
             if core.is_frozen():
-                return shlex.join([sys.executable, "--hide"])
-            return shlex.join([sys.executable, os.path.abspath(__file__), "--hide"])
+                return f'"{sys.executable}" --hide'
+            pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+            launcher = pythonw if os.path.exists(pythonw) else sys.executable
+            return f'"{launcher}" "{os.path.abspath(__file__)}" --hide'
 
         def set_auto_start(self, enable: bool):
-            """Linux 分支仅写入 XDG autostart，不保留 Windows/macOS 启动项兼容逻辑。"""
-            autostart_dir = os.path.expanduser("~/.config/autostart")
-            desktop_path = os.path.join(autostart_dir, "shangbackground.desktop")
-            if enable:
-                os.makedirs(autostart_dir, exist_ok=True)
-                desktop_content = (
-                    "[Desktop Entry]\n"
-                    "Type=Application\n"
-                    "Name=ShangBackground\n"
-                    f"Exec={self._linux_autostart_command()}\n"
-                    "Hidden=false\n"
-                    "NoDisplay=false\n"
-                    "X-GNOME-Autostart-enabled=true\n"
-                    "Comment=Desktop wallpaper manager\n"
-                )
-                try:
-                    with open(desktop_path, "w", encoding="utf-8") as f:
-                        f.write(desktop_content)
-                    core.log(t("Linux 开机自启动已启用"))
-                except Exception as exc:
-                    core.log(t("Linux 自启动 .desktop 文件创建失败") + f": {exc}")
-                    raise
-            else:
-                if os.path.exists(desktop_path):
+            if core.IS_MACOS:
+                agents_dir = os.path.expanduser("~/Library/LaunchAgents")
+                plist_path = os.path.join(agents_dir, "com.xxdz.shangbackground.plist")
+                label = "com.xxdz.shangbackground"
+                if enable:
+                    os.makedirs(agents_dir, exist_ok=True)
+                    log_dir = os.path.expanduser("~/Library/Logs/ShangBackground")
+                    os.makedirs(log_dir, exist_ok=True)
+                    plist = {
+                        "Label": label,
+                        "ProgramArguments": [sys.executable, "--hide"] if core.is_frozen() else [sys.executable, os.path.abspath(__file__), "--hide"],
+                        "RunAtLoad": True,
+                        "WorkingDirectory": core.BASE_DIR,
+                        "StandardOutPath": os.path.join(log_dir, "launch_stdout.log"),
+                        "StandardErrorPath": os.path.join(log_dir, "launch_stderr.log"),
+                    }
+                    with open(plist_path, "wb") as f:
+                        plistlib.dump(plist, f)
+                    os.chmod(plist_path, 0o600)
+                    # Use modern bootout/bootstrap instead of deprecated unload/load
+                    subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], capture_output=True, timeout=5)
+                    subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", plist_path], capture_output=True, timeout=5)
+                    core.log(f"macOS 开机自启动已启用: {plist_path}")
+                else:
+                    subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], capture_output=True, timeout=5)
+                    if os.path.exists(plist_path):
+                        os.remove(plist_path)
+                    core.log("macOS 开机自启动已禁用")
+                return
+
+            if not core.IS_WINDOWS and not core.IS_LINUX:
+                raise RuntimeError(t("当前系统暂不支持通过 GUI 设置开机自启动"))
+
+            # Linux: use XDG autostart .desktop file
+            if core.IS_LINUX:
+                autostart_dir = os.path.expanduser("~/.config/autostart")
+                desktop_path = os.path.join(autostart_dir, "shangbackground.desktop")
+                if enable:
+                    os.makedirs(autostart_dir, exist_ok=True)
+                    exec_cmd = shlex.join([sys.executable, os.path.abspath(__file__), "--hide"])
+                    desktop_content = (
+                        "[Desktop Entry]\n"
+                        "Type=Application\n"
+                        "Name=ShangBackground\n"
+                        f"Exec={exec_cmd}\n"
+                        "Hidden=false\n"
+                        "NoDisplay=false\n"
+                        "X-GNOME-Autostart-enabled=true\n"
+                        "Comment=Desktop wallpaper manager\n"
+                    )
                     try:
-                        os.remove(desktop_path)
-                        core.log(t("Linux 开机自启动已禁用"))
-                    except Exception as exc:
-                        core.log(t("Linux 自启动 .desktop 文件删除失败") + f": {exc}")
-                        raise
+                        with open(desktop_path, "w", encoding="utf-8") as f:
+                            f.write(desktop_content)
+                        core.log(t("Linux 开机自启动已启用"))
+                    except Exception as de:
+                        core.log(t("Linux 自启动 .desktop 文件创建失败") + f": {de}")
+                else:
+                    if os.path.exists(desktop_path):
+                        try:
+                            os.remove(desktop_path)
+                            core.log(t("Linux 开机自启动已禁用"))
+                        except Exception as de:
+                            core.log(t("Linux 自启动 .desktop 文件删除失败") + f": {de}")
+                return
+
+            startup_folder = self.get_pyqt_startup_folder_path()
+            vbs_path = os.path.join(startup_folder, core.STARTUP_VBS_NAME)
+            legacy_vbs_paths = [
+                os.path.join(startup_folder, name)
+                for name in getattr(core, "LEGACY_STARTUP_VBS_NAMES", ["PowerOn.vbs"])
+                if name != core.STARTUP_VBS_NAME
+            ]
+            if enable:
+                os.makedirs(startup_folder, exist_ok=True)
+                command = self._startup_launch_command().replace('"', '""')
+                vbs_lines = [
+                    "' 此文件仅用于开机自启动 ShangBackground。",
+                    "' ShangBackground.vbs - 开机自启动时创建标志文件，然后隐藏启动主程序。",
+                    "Dim flagFile",
+                    'flagFile = CreateObject("WScript.Shell").ExpandEnvironmentStrings("%TEMP%") & "\\WallpaperHideFlag.tmp"',
+                    "Dim objFSO",
+                    "Set objFSO = CreateObject(\"Scripting.FileSystemObject\")",
+                    "Dim objFile",
+                    "Set objFile = objFSO.CreateTextFile(flagFile, True)",
+                    "objFile.Write \"T\"",
+                    "objFile.Close",
+                    "Dim shell",
+                    "Set shell = CreateObject(\"WScript.Shell\")",
+                    f'shell.Run "{command}", 0, False',
+                    "Set shell = Nothing",
+                    "Set objFile = Nothing",
+                    "Set objFSO = Nothing",
+                ]
+                with open(vbs_path, "w", encoding="gb2312", errors="ignore") as f:
+                    f.write("\r\n".join(vbs_lines))
+                for legacy_path in legacy_vbs_paths:
+                    if os.path.exists(legacy_path):
+                        try:
+                            os.remove(legacy_path)
+                            core.log(f"已删除旧启动 VBS: {legacy_path}")
+                        except Exception as cleanup_error:
+                            core.log(f"删除旧启动 VBS 失败: {cleanup_error}")
+                core.log(f"开机自启动已启用：{vbs_path}")
+            else:
+                for path_to_remove in [vbs_path] + legacy_vbs_paths:
+                    if path_to_remove and os.path.exists(path_to_remove):
+                        os.remove(path_to_remove)
+                        core.log(f"已删除启动文件夹中的 VBS: {path_to_remove}")
+                core.log("开机自启动已禁用")
 
         def on_auto_start_changed(self, checked):
             try:
@@ -4028,11 +4104,10 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
 def main() -> int:
     args = _parse_early_args()
 
-    # ---------- 系统版本检查 ----------
-    # Linux 分支仅适用于 Linux；若不匹配则弹窗警告（使用 tkinter，避免与 PySide6 QApplication 冲突）。
-    if not sys.platform.startswith("linux"):
+    # ---------- 系统版本检查（使用 tkinter，避免与 PySide6 QApplication 冲突）----------
+    if sys.platform != "darwin":
         print("=" * 60, file=sys.stderr)
-        print("WARNING: This version of ShangBackground is for Linux only.", file=sys.stderr)
+        print("WARNING: This version of ShangBackground is for macOS only.", file=sys.stderr)
         print(f"Detected system: {sys.platform}", file=sys.stderr)
         print("Continuing may cause errors. Please use the correct platform version.", file=sys.stderr)
         print("=" * 60, file=sys.stderr)
@@ -4043,8 +4118,8 @@ def main() -> int:
             from tkinter import messagebox as _tkmb
             _result = _tkmb.askyesno(
                 "ShangBackground — " + str(t("系统不匹配")),
-                str(t("当前版本仅适用于 Linux 系统。")) + "\n\n" +
-                str(t("检测到当前系统非 Linux，继续运行可能导致异常。")) + "\n\n" +
+                str(t("当前版本仅适用于 macOS 系统。")) + "\n\n" +
+                str(t("检测到当前系统非 macOS，继续运行可能导致异常。")) + "\n\n" +
                 str(t("是否仍要继续运行？")),
             )
             _root.destroy()
@@ -4066,7 +4141,27 @@ def main() -> int:
     direct_action_launch = (args.previous or args.next or args.random or bool(args.set_wallpaper) or args.jump_to_wallpaper)
 
     # ---------- 单实例检测（普通权限文件锁 + 回环端口辅助） ----------
-    if not direct_action_launch:
+    if core.IS_WINDOWS:
+        if _is_already_running():
+            core.log("检测到已有实例，尝试激活现有窗口并退出")
+            # 如果是动作参数启动（--previous, --next 等），先转发命令再退出
+            if direct_action_launch:
+                _handle_action_args(args)
+            # 尝试激活已有窗口
+            activated = False
+            try:
+                activated = _activate_existing_window()
+            except Exception:
+                pass
+            if not activated:
+                try:
+                    core.activate_existing_instance(show_notice=not is_action_launch)
+                except Exception:
+                    pass
+            if not is_action_launch:
+                core.show_message(t("不要重复运行"), t("不要重复运行，已为您打开现有主界面。"))
+            return 0
+    elif not direct_action_launch:
         if _is_already_running():
             core.log("检测到已有实例，已阻止重复启动")
             if not is_action_launch:
@@ -4078,6 +4173,7 @@ def main() -> int:
         _release_singleton_mutex()
         return 0
 
+    _set_windows_app_identity()
     used_dpi = apply_dpi_environment(core.config)
     core.log(f"程序内 DPI 缩放: {dpi_percent(used_dpi)}%")
     app = QApplication(sys.argv)
@@ -4086,7 +4182,8 @@ def main() -> int:
     app.setApplicationDisplayName(APP_DISPLAY_NAME)
     app.setDesktopFileName(APP_PROCESS_NAME)
     _install_qt_chinese_translator(app)
-    icon_path = os.path.join(core.BASE_DIR, "img", "LOGO.png")
+    icon_name = "LOGO.ico" if core.IS_WINDOWS else "LOGO.png"
+    icon_path = os.path.join(core.BASE_DIR, "img", icon_name)
     if not os.path.exists(icon_path):
         icon_path = os.path.join(core.BASE_DIR, "img", "LOGO.ico")
     if os.path.exists(icon_path):
@@ -4112,6 +4209,8 @@ def main() -> int:
         core.capture_session_original_wallpaper()
         if getattr(args, "sync_context_on_start", False):
             QTimer.singleShot(250, lambda: window.sync_context_menu(show_message=True))
+        if core.IS_WINDOWS:
+            core.start_message_window()
         core.report_usage()
         if normalize_mode_key(core.config.get("mode")) == "幻灯片放映" and core.config.get("slide_folder"):
             core.start_slideshow()
