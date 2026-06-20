@@ -37,3 +37,7 @@ build_windows_onedir.bat
 ```bat
 build_windows_onedir_noupx.bat
 ```
+## 源码分类
+
+统一目录说明见项目根目录 `PROJECT_STRUCTURE.md`。所有 SVG、图片和语言资源由 `src/app/paths.py` 统一定位；新增模块请按 `app / core / services / platform_adapters / ui` 分类。
+

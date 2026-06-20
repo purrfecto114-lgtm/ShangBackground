@@ -14,17 +14,17 @@ python3 src/main.py
 ```bash
 # Ubuntu / Debian / Linux Mint 等 apt 系
 sudo apt update
-sudo apt install -y python3-pil python3-requests python3-numpy \
+sudo apt install -y python3-pil python3-requests \
   python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets \
   python3-pyside6.qtsvg python3-pyside6.qtsvgwidgets \
   python3-httpx python3-psutil libxcb-cursor0 libxkbcommon-x11-0 xrandr
 
 # Fedora / RHEL 系
-sudo dnf install -y python3-pillow python3-requests python3-numpy \
+sudo dnf install -y python3-pillow python3-requests \
   python3-pyside6 python3-httpx python3-psutil xrandr
 
 # Arch / Manjaro / EndeavourOS 系
-sudo pacman -Syu --needed python-pillow python-requests python-numpy \
+sudo pacman -Syu --needed python-pillow python-requests \
   pyside6 python-httpx python-psutil xorg-xrandr
 ```
 
@@ -97,7 +97,7 @@ tar -xzf ShangBackground-linux-x86_64.tar.gz
 - 壁纸设置按顺序尝试 `gsettings`、`plasma-apply-wallpaperimage`、`qdbus/qdbus6`、`xfconf-query`、`feh`、`nitrogen`。
 - 开机自启动只写入 `~/.config/autostart/shangbackground.desktop`，不再保留 Windows/macOS 启动项分支。
 - 依赖检查不再创建额外 tkinter 根窗口：PySide6 可用时使用当前 Qt 主窗口；PySide6 不可用时只在终端输出命令。
-- 更新检查使用 `src/update_services.py` 读取 GitHub Release；版本策略固定为 `1.3.0`，可解析 `1.3.0`、`v1.3.0`、`app_ver=1.3.0` 以及带前后缀的 Release 名称。
+- 更新检查使用 `src/services/updates.py` 读取 GitHub Release；版本策略固定为 `1.3.0`，可解析 `1.3.0`、`v1.3.0`、`app_ver=1.3.0` 以及带前后缀的 Release 名称。
 - PyInstaller 命令不再 `--collect-all PySide6`，只补充实际需要的 QtSvg/QtSvgWidgets，并显式排除 tkinter、其他 Qt 绑定和常见大体积无关科学/Notebook 库。
 
 ## Debian/KDE Live 运行提示
@@ -109,3 +109,7 @@ sudo apt install libxcb-cursor0 libxkbcommon-x11-0
 ```
 
 KDE Plasma 壁纸优先使用 `plasma-apply-wallpaperimage`，缺失时会退回 `qdbus6/qdbus`。
+
+### 视频壁纸依赖
+- X11 会话下需要安装 `xwinwrap` 和 `mpv`，用于把播放器窗口固定到桌面背景层。
+- Wayland 对第三方窗口嵌入限制较多，当前会给出提示并避免强行启动。

@@ -21,3 +21,7 @@ open dist/ShangBackground.app
 - 依赖使用 `PySide6-Essentials`。
 - 不再使用 `--collect-all PySide6`；只显式补充 SVG 图标需要的 `QtSvg/QtSvgWidgets`。
 - 当前版本固定为 `1.3.0`，更新检查可解析 `1.3.0`、`v1.3.0`、`app_ver=1.3.0` 以及带前后缀的 Release 名称。
+
+### 视频壁纸依赖
+- 需要 `pyobjc-framework-AVFoundation`、`pyobjc-framework-Cocoa`、`pyobjc-framework-Quartz`。
+- 播放器 helper 以独立子进程运行，避免阻塞 PySide6 GUI 主循环。
