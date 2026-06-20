@@ -15,3 +15,8 @@ build_windows_onedir.bat
 - 依赖使用 `PySide6-Essentials`。
 - 不再使用 `--collect-all PySide6`；只显式补充 SVG 图标需要的 `QtSvg/QtSvgWidgets`。
 - 当前版本固定为 `1.3.0`，更新检查可解析 `1.3.0`、`v1.3.0`、`app_ver=1.3.0` 以及带前后缀的 Release 名称。
+
+### 视频壁纸依赖
+- 推荐安装 `mpv` 并加入 PATH，优先使用硬件解码和桌面窗口嵌入。
+- 兼容回退顺序：VLC、PotPlayer、Windows Media Player；Windows Media Center 仅作为旧系统最后回退入口。
+- 使用 PotPlayer / Windows Media Player / Media Center 时会保留兼容性提示，建议长期使用 mpv 以降低资源占用。
