@@ -71,7 +71,6 @@ python3 main.py
 | 贡献者 / Contributor | 贡献内容 / Contribution |
 |---|---|
 | [小小电子xxdz](https://space.bilibili.com/) | 项目创始人、Windows 原版 / Founder & original Windows version |
-| [@zjhcx](https://github.com/zjhcx) | macOS 适配 / macOS adaptation |
 | [@purrfecto114-lgtm](https://github.com/purrfecto114-lgtm) | Fork 维护、PySide6 重构、Linux 支持 / Fork maintenance, PySide6 refactor, Linux support |
 
 ---
