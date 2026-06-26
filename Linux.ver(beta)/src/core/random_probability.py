@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.paths import RESOURCE_ROOT
+from app.paths import RESOURCE_ROOT, is_packaged_runtime, executable_dir
 
 import json
 import logging
@@ -38,8 +38,8 @@ def configure_storage(data_dir: str) -> str:
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / "random.json"
     legacy_candidates = [Path(LEGACY_RANDOM_CONFIG_PATH)]
-    if getattr(sys, "frozen", False):
-        legacy_candidates.append(Path(sys.executable).resolve().parent / "random.json")
+    if is_packaged_runtime():
+        legacy_candidates.append(executable_dir() / "random.json")
     if not target.exists():
         for legacy in legacy_candidates:
             if target == legacy or not legacy.is_file():

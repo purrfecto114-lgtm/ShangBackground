@@ -19,17 +19,19 @@ from pathlib import Path
 
 try:
     from app.config import APP_NAME, IS_LINUX
-    from app.paths import RESOURCE_ROOT
+    from app.paths import RESOURCE_ROOT, is_packaged_runtime
 except Exception:
     APP_NAME = "ShangBackground"
     IS_LINUX = True
     RESOURCE_ROOT = Path(__file__).resolve().parents[1]
+    def is_packaged_runtime():
+        return bool(getattr(sys, "frozen", False) or globals().get("__compiled__") is not None or getattr(sys.modules.get("__main__"), "__compiled__", None))
 try:
     from platform_adapters.integration import set_wallpaper_platform
 except Exception:
     set_wallpaper_platform = None
 
-IS_FROZEN = getattr(sys, 'frozen', False)
+IS_FROZEN = is_packaged_runtime()
 
 BASE_DIR = os.fspath(RESOURCE_ROOT)
 

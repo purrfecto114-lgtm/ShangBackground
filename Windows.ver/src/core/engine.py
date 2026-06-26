@@ -27,7 +27,7 @@ from app.config import (
     normalize_style_key,
 )
 from app.i18n import t
-from app.paths import RESOURCE_ROOT
+from app.paths import RESOURCE_ROOT, is_packaged_runtime
 from platform_adapters.integration import (
     configure_fit_mode,
     get_current_wallpaper_platform,
@@ -119,7 +119,7 @@ class COPYDATASTRUCT(ctypes.Structure):
 
 
 def is_frozen():
-    return getattr(sys, 'frozen', False)
+    return is_packaged_runtime()
 
 
 def _resource_base_dir() -> str:
@@ -626,60 +626,185 @@ def release_single_instance_mutex():
         log(f"释放单实例守卫失败: {e}")
 
 
+def _windows_format_error(code) -> str:
+    """Return a readable Win32 error string."""
+    try:
+        code = int(code or 0)
+    except Exception:
+        code = 0
+    if not code:
+        return "unknown error"
+    try:
+        return ctypes.FormatError(code).strip()
+    except Exception:
+        return f"Win32 error {code}"
+
+
+def _windows_executable_for_relaunch() -> tuple[str, list[str]]:
+    """Return (program, base_args) for relaunching this app.
+
+    In a Nuitka standalone build, sys.executable is the compiled EXE and must be
+    launched directly. In source mode, use pythonw.exe when available and pass the
+    entry script as the first argument.
+    """
+    if is_frozen():
+        candidates = [sys.executable, sys.argv[0] if sys.argv else ""]
+        for candidate in candidates:
+            candidate = os.path.abspath(os.path.expanduser(str(candidate or "")))
+            if candidate and os.path.isfile(candidate):
+                return candidate, []
+        return os.path.abspath(sys.executable), []
+
+    pythonw_exe = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    executable = pythonw_exe if os.path.exists(pythonw_exe) else sys.executable
+    entry = os.path.abspath(sys.argv[0]) if sys.argv else os.path.join(BASE_DIR, "main.pyw")
+    return os.path.abspath(executable), [entry]
+
+
+def _filtered_restart_args(extra_args=None) -> list[str]:
+    """Return safe arguments for an elevated relaunch."""
+    requested_extra_args = [str(arg) for arg in (extra_args or [])]
+    restart_skip_flags = {
+        "--previous",
+        "--next",
+        "--random",
+        "--show",
+        "--hide",
+        "--jump-to-wallpaper",
+        "--sync-context-on-start",
+        "--inherit-session-wallpaper",
+    }
+    restart_skip_value_flags = {"--set-wallpaper"}
+    current_args: list[str] = []
+    skip_next_arg = False
+    for arg in sys.argv[1:]:
+        arg = str(arg)
+        if skip_next_arg:
+            skip_next_arg = False
+            continue
+        if arg in restart_skip_flags:
+            continue
+        if arg in restart_skip_value_flags:
+            skip_next_arg = True
+            continue
+        if any(arg.startswith(flag + "=") for flag in restart_skip_value_flags):
+            continue
+        current_args.append(arg)
+    for arg in requested_extra_args:
+        if arg not in current_args:
+            current_args.append(arg)
+    if "--inherit-session-wallpaper" not in current_args:
+        current_args.append("--inherit-session-wallpaper")
+    return current_args
+
+
+def _shell_execute_runas(executable: str, args: list[str], workdir: str) -> tuple[bool, str]:
+    """Launch executable with the Windows "runas" verb.
+
+    ShellExecuteExW is preferred because it gives a real success/failure value
+    and a process handle. ShellExecuteW remains as a compatibility fallback.
+    """
+    params = subprocess.list2cmdline([str(a) for a in args])
+    executable = os.path.abspath(os.path.expanduser(str(executable)))
+    workdir = os.path.abspath(os.path.expanduser(str(workdir or os.path.dirname(executable))))
+    if not os.path.isfile(executable):
+        return False, f"executable not found: {executable}"
+
+    try:
+        shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+        class SHELLEXECUTEINFOW(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", DWORD),
+                ("fMask", DWORD),
+                ("hwnd", HWND),
+                ("lpVerb", LPCWSTR),
+                ("lpFile", LPCWSTR),
+                ("lpParameters", LPCWSTR),
+                ("lpDirectory", LPCWSTR),
+                ("nShow", ctypes.c_int),
+                ("hInstApp", HINSTANCE),
+                ("lpIDList", ctypes.c_void_p),
+                ("lpClass", LPCWSTR),
+                ("hkeyClass", ctypes.c_void_p),
+                ("dwHotKey", DWORD),
+                ("hIcon", HANDLE),
+                ("hProcess", HANDLE),
+            ]
+
+        SEE_MASK_NOCLOSEPROCESS = 0x00000040
+        SW_SHOWNORMAL = 1
+        info = SHELLEXECUTEINFOW()
+        info.cbSize = ctypes.sizeof(SHELLEXECUTEINFOW)
+        info.fMask = SEE_MASK_NOCLOSEPROCESS
+        info.hwnd = HWND(0)
+        info.lpVerb = "runas"
+        info.lpFile = executable
+        info.lpParameters = params
+        info.lpDirectory = workdir
+        info.nShow = SW_SHOWNORMAL
+        shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(SHELLEXECUTEINFOW)]
+        shell32.ShellExecuteExW.restype = BOOL
+        ok = bool(shell32.ShellExecuteExW(ctypes.byref(info)))
+        if ok:
+            if info.hProcess:
+                try:
+                    kernel32.CloseHandle(info.hProcess)
+                except Exception:
+                    pass
+            return True, "ShellExecuteExW succeeded"
+        err = ctypes.get_last_error()
+        return False, f"ShellExecuteExW failed: {err} {_windows_format_error(err)}"
+    except Exception as exc:
+        log(f"ShellExecuteExW unavailable, falling back to ShellExecuteW: {exc}", level="WARNING")
+
+    try:
+        ret = ctypes.windll.shell32.ShellExecuteW(
+            HWND(0), "runas", executable, params, workdir, 1
+        )
+        ret_value = int(ret or 0)
+        if ret_value > 32:
+            return True, f"ShellExecuteW succeeded: {ret_value}"
+        try:
+            err = ctypes.windll.kernel32.GetLastError()
+        except Exception:
+            err = 0
+        return False, f"ShellExecuteW failed: return={ret_value}; {err} {_windows_format_error(err)}"
+    except Exception as exc:
+        return False, f"ShellExecuteW exception: {exc}"
+
+
+def _recover_after_failed_elevation() -> None:
+    try:
+        acquire_single_instance_mutex()
+    except Exception as exc:
+        log(f"恢复单实例互斥体失败: {exc}", level="ERROR", exc_info=exc)
+    try:
+        start_message_window()
+    except Exception as ipc_error:
+        log(f"恢复消息窗口失败: {ipc_error}", level="ERROR", exc_info=ipc_error)
+
+
 def restart_as_admin(extra_args=None):
     """以管理员身份重启当前应用。
 
-    使用 ShellExecuteW 的 "runas" 动词触发 UAC 提权，
-    然后退出当前非管理员进程。
-    注意：提权前必须先释放互斥体和销毁托盘图标，
-    否则新实例无法获取互斥体，且旧托盘图标会残留。
+    Uses the Windows Shell "runas" verb to trigger UAC. The implementation is
+    intentionally explicit about the executable path, parameters and working
+    directory so Nuitka standalone builds relaunch the generated EXE instead of
+    a source-mode Python entry.
     """
     if not IS_WINDOWS:
         log(t("非 Windows 平台，无法自动提权重启"))
         return False
     guard_released = False
     try:
-        # 获取当前解释器路径和脚本路径。脚本运行时优先用 pythonw.exe，避免提权后出现控制台日志窗口。
-        if is_frozen():
-            executable = sys.executable
-            base_args = []
-        else:
-            pythonw_exe = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
-            executable = pythonw_exe if os.path.exists(pythonw_exe) else sys.executable
-            base_args = [os.path.abspath(sys.argv[0])]
+        executable, base_args = _windows_executable_for_relaunch()
+        current_args = _filtered_restart_args(extra_args)
+        relaunch_args = [*base_args, *current_args]
+        workdir = os.path.dirname(executable) or os.getcwd()
 
-        requested_extra_args = list(extra_args or [])
-        restart_skip_flags = {
-            "--previous",
-            "--next",
-            "--random",
-            "--show",
-            "--hide",
-            "--jump-to-wallpaper",
-            "--sync-context-on-start",
-            "--inherit-session-wallpaper",
-        }
-        restart_skip_value_flags = {"--set-wallpaper"}
-        current_args = []
-        skip_next_arg = False
-        for arg in sys.argv[1:]:
-            if skip_next_arg:
-                skip_next_arg = False
-                continue
-            if arg in restart_skip_flags:
-                continue
-            if arg in restart_skip_value_flags:
-                skip_next_arg = True
-                continue
-            if any(arg.startswith(flag + "=") for flag in restart_skip_value_flags):
-                continue
-            current_args.append(arg)
-        for arg in requested_extra_args:
-            if arg not in current_args:
-                current_args.append(arg)
-        if "--inherit-session-wallpaper" not in current_args:
-            current_args.append("--inherit-session-wallpaper")
-        params = subprocess.list2cmdline([str(a) for a in [*base_args, *current_args]])
+        log(f"准备管理员重启: exe={executable}; args={relaunch_args}; cwd={workdir}")
 
         # 先落盘启动前壁纸，再释放互斥体和托盘图标。管理员提权会产生新进程，内存状态不可依赖。
         # 这里必须优先继承本次会话最早记录的“启动前壁纸”，不能用当前桌面强制刷新；
@@ -692,19 +817,12 @@ def restart_as_admin(extra_args=None):
         guard_released = True
         _cleanup_tray_icon_on_exit()
 
-        # 使用 ShellExecuteW 以管理员身份运行
-        ret = ctypes.windll.shell32.ShellExecuteW(
-            0, "runas", executable, params, None, 1  # SW_SHOWNORMAL=1
-        )
-        if ret <= 32:
-            log(f"提权重启失败，ShellExecuteW 返回值: {ret}")
-            acquire_single_instance_mutex()
-            try:
-                start_message_window()
-            except Exception as ipc_error:
-                log(f"恢复消息窗口失败: {ipc_error}")
+        ok, detail = _shell_execute_runas(executable, relaunch_args, workdir)
+        if not ok:
+            log(f"提权重启失败: {detail}", level="ERROR")
+            _recover_after_failed_elevation()
             return False
-        log("已请求管理员权限重启")
+        log(f"已请求管理员权限重启: {detail}")
 
         # 销毁消息窗口
         global hwnd
@@ -718,12 +836,8 @@ def restart_as_admin(extra_args=None):
         return True
     except Exception as e:
         if guard_released:
-            try:
-                acquire_single_instance_mutex()
-                start_message_window()
-            except Exception as recover_error:
-                log(f"恢复单实例守卫失败: {recover_error}")
-        log(f"提权重启异常: {e}")
+            _recover_after_failed_elevation()
+        log(f"提权重启异常: {e}", level="ERROR", exc_info=e)
         return False
 
 

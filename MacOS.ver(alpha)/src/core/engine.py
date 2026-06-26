@@ -27,7 +27,7 @@ from app.config import (
     normalize_style_key,
 )
 from app.i18n import t
-from app.paths import RESOURCE_ROOT
+from app.paths import RESOURCE_ROOT, is_packaged_runtime
 from platform_adapters.integration import (
     configure_fit_mode,
     get_current_wallpaper_platform,
@@ -119,7 +119,7 @@ class COPYDATASTRUCT(ctypes.Structure):
 
 
 def is_frozen():
-    return getattr(sys, 'frozen', False)
+    return is_packaged_runtime()
 
 
 def _resource_base_dir() -> str:
