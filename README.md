@@ -165,9 +165,8 @@ ShangBackground-1.4.0/
 │   └── requirements-windows*.txt
 ├── Linux.ver(beta)/            # Linux 源码树
 ├── MacOS.ver(alpha)/           # macOS 源码树
-├── tests/                      # 19 个冒烟测试
+├── tests/                      # 18 个冒烟测试
 ├── tools/                      # 5 个工程化脚本
-├── scripts/                    # 构建脚本（v1.4.1 完善）
 ├── CHANGES-v1.4.0.md           # 完整变更日志
 ├── GETTING_MPV.md              # mpv 打包说明
 ├── README.md
