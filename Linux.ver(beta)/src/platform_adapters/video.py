@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import signal
+import secrets
 import socket
 import subprocess
 import sys
@@ -14,6 +15,12 @@ try:
     import psutil
 except ImportError:  # pragma: no cover - optional dependency
     psutil = None
+
+try:
+    from app.paths import mpv_bundled_exe
+except Exception:  # pragma: no cover - allow import without app package
+    def mpv_bundled_exe():
+        return None
 
 
 def _user_state_dir() -> str:
@@ -124,6 +131,10 @@ def _start_process(cmd: list[str], fail_name: str, ipc_path: str = "") -> tuple[
         try:
             with open(IPC_FILE, "w", encoding="utf-8") as fh:
                 fh.write(ipc_path or "")
+            try:
+                os.chmod(IPC_FILE, 0o600)
+            except OSError:
+                pass
         except Exception:
             pass
         time.sleep(0.25)
@@ -134,15 +145,104 @@ def _start_process(cmd: list[str], fail_name: str, ipc_path: str = "") -> tuple[
         return False, f"启动视频壁纸失败：{exc}"
 
 
+def _ensure_private_dir(path: str) -> str:
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+    return path
+
+
 def _mpv_ipc_path() -> str:
     """构建 mpv JSON IPC 的 Unix domain socket 路径。
 
-    嵌入当前进程 PID 以避免多实例冲突；放在 XDG_RUNTIME_DIR 或 /tmp 下
-    以确保用户态可访问。参见 https://mpv.io/manual/stable/#json-ipc。
+    mpv IPC is not a security boundary, so use a per-user private directory
+    and an unguessable socket name instead of a PID-derived path.
     """
-    runtime = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
-    stem = f"shangbg-mpv-{os.getpid()}.sock"
-    return os.path.join(runtime, stem)
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime:
+        base = _ensure_private_dir(os.path.join(runtime, "ShangBackground"))
+    else:
+        base = _ensure_private_dir(os.path.join(_DATA_DIR, "runtime"))
+    stem = f"shangbg-mpv-{secrets.token_hex(8)}.sock"
+    return os.path.join(base, stem)
+
+
+_LAST_MPV_PROBE_ERROR = ""
+
+
+def _probe_executable(path: str | None, *args: str) -> tuple[bool, str]:
+    """Return whether an external backend can actually be executed.
+
+    Merely finding a file is insufficient for Linux bundles: an ELF may target
+    the wrong architecture or depend on library SONAMEs absent on the user's
+    distribution.  Probe it before advertising the backend as available.
+    """
+    if not path or not os.path.isfile(path):
+        return False, "executable not found"
+    try:
+        result = subprocess.run(
+            [path, *(args or ("--version",))],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=4,
+            check=False,
+        )
+    except Exception as exc:
+        return False, str(exc)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or f"exit {result.returncode}").strip()
+        return False, detail[-800:]
+    return True, (result.stdout or result.stderr).strip().splitlines()[0] if (result.stdout or result.stderr).strip() else "ok"
+
+
+def _resolve_mpv() -> str | None:
+    """Return a runnable mpv, not merely an existing path."""
+    global _LAST_MPV_PROBE_ERROR
+    errors: list[str] = []
+    candidates: list[str] = []
+    try:
+        bundled = mpv_bundled_exe()
+        if bundled and os.path.isfile(bundled):
+            try:
+                # Bundled helper executables must be traversable/executable by the user.
+                os.chmod(bundled, 0o755)  # nosec B103
+            except OSError:
+                pass
+            candidates.append(bundled)
+    except Exception as exc:
+        errors.append(f"bundled mpv lookup: {exc}")
+    system = shutil.which("mpv")
+    if system and system not in candidates:
+        candidates.append(system)
+    for candidate in candidates:
+        ok, detail = _probe_executable(candidate, "--version")
+        if ok:
+            _LAST_MPV_PROBE_ERROR = ""
+            return candidate
+        errors.append(f"{candidate}: {detail}")
+    _LAST_MPV_PROBE_ERROR = " | ".join(errors) or "mpv not found"
+    return None
+
+
+def _wayland_layer_shell_session() -> bool:
+    """Whether mpvpaper's layer-shell model is plausible for this session."""
+    if os.environ.get("SHANGBACKGROUND_ALLOW_MPVPAPER", "").strip() == "1":
+        return True
+    tokens = " ".join(
+        filter(None, (
+            os.environ.get("XDG_CURRENT_DESKTOP", ""),
+            os.environ.get("XDG_SESSION_DESKTOP", ""),
+            os.environ.get("DESKTOP_SESSION", ""),
+        ))
+    ).lower()
+    if any(os.environ.get(name) for name in ("SWAYSOCK", "HYPRLAND_INSTANCE_SIGNATURE", "WAYFIRE_SOCKET")):
+        return True
+    return any(name in tokens for name in ("sway", "hyprland", "wayfire", "river", "wlroots"))
 
 
 def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100) -> tuple[bool, str]:
@@ -155,6 +255,13 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
     # IPC socket for live volume/mute control (mpv / mpvpaper both支持)。
     ipc_path = _mpv_ipc_path()
     if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
+        if not _wayland_layer_shell_session():
+            desktop = os.environ.get("XDG_CURRENT_DESKTOP") or os.environ.get("XDG_SESSION_DESKTOP") or "unknown"
+            return False, (
+                "当前 Wayland 桌面不提供本项目已实现的通用视频壁纸层。"
+                f"检测到桌面：{desktop}。mpvpaper 仅适用于兼容 layer-shell 的合成器；"
+                "GNOME/KDE Wayland 需要各自的桌面扩展/插件后端，不能用普通窗口冒充壁纸。"
+            )
         mpvpaper = shutil.which("mpvpaper")
         if mpvpaper:
             # mpvpaper accepts mpv options via -o as a space-separated string.
@@ -167,12 +274,18 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
                 mpv_options = f"loop-file=inf no-audio volume=0 input-ipc-server={ipc_path}"
             else:
                 mpv_options = f"loop-file=inf volume={clamped_volume} input-ipc-server={ipc_path}"
-            return _start_process([mpvpaper, "-o", mpv_options, "ALL", abs_video], "mpvpaper", ipc_path=ipc_path)
-        return False, "当前是 Wayland 会话；已支持 mpvpaper 作为替代后端，但未找到 mpvpaper。请安装 mpvpaper，或切换到 X11 后使用 xwinwrap + mpv。"
+            return _start_process([mpvpaper, "-o", mpv_options, "*", abs_video], "mpvpaper", ipc_path=ipc_path)
+        return False, "当前 Wayland 合成器可尝试 mpvpaper，但未找到可执行文件。请安装 mpvpaper，或切换到 X11 后使用 xwinwrap + mpv。"
     xwinwrap = shutil.which("xwinwrap")
-    mpv = shutil.which("mpv")
+    mpv = _resolve_mpv()
     if not xwinwrap or not mpv:
-        return False, "Linux X11 视频壁纸需要 xwinwrap + mpv；Wayland 需要 mpvpaper。请安装对应工具并加入 PATH。"
+        missing = []
+        if not xwinwrap:
+            missing.append("xwinwrap")
+        if not mpv:
+            detail = _LAST_MPV_PROBE_ERROR or "未找到"
+            missing.append(f"可运行的 mpv（{detail}）")
+        return False, "Linux X11 视频壁纸需要 xwinwrap + 可运行的 mpv。未满足：" + "、".join(missing) + "。请使用发行版包管理器安装依赖；不要复制缺少共享库的单个 mpv ELF。"
     mpv_args = [
         mpv,
         "--wid=WID",
@@ -233,6 +346,31 @@ def set_video_volume(muted: bool, volume: int) -> bool:
     except Exception:
         return False
 
+
+def set_video_paused(paused: bool) -> bool:
+    """通过 mpv JSON IPC 实时暂停/恢复视频壁纸。"""
+    try:
+        ipc_path = ""
+        try:
+            with open(IPC_FILE, "r", encoding="utf-8") as fh:
+                ipc_path = fh.read().strip()
+        except Exception:
+            return False
+        if not ipc_path or not os.path.exists(ipc_path):
+            return False
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(0.5)
+        sock.connect(ipc_path)
+        try:
+            sock.sendall((json.dumps({"command": ["set_property", "pause", bool(paused)]}) + "\n").encode("utf-8"))
+            return True
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+    except Exception:
+        return False
 
 def main() -> None:
     parser = argparse.ArgumentParser()

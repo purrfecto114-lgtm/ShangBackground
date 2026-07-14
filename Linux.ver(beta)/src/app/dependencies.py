@@ -13,6 +13,19 @@ from typing import Iterable
 from app.config import DEPENDENCIES
 from app.i18n import t
 
+def _module_available(module: str) -> bool:
+    """Return False for missing top-level packages and missing submodules.
+
+    importlib.util.find_spec("pkg.submodule") can raise ModuleNotFoundError
+    when the parent package itself is absent. Dependency probing should report
+    the package as missing, not crash the startup dependency dialog.
+    """
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ModuleNotFoundError, AttributeError, ValueError):
+        return False
+
+
 # 当前 Linux 分支只面向 Linux；这里按主流发行版家族做系统包安装建议。
 # 覆盖全球排名前 3 的 Linux 发行版：Ubuntu/Debian、Fedora、Arch Linux，同时保留 openSUSE/Alpine 回退。
 TOP_LINUX_FAMILIES = ("ubuntu", "debian", "fedora", "arch")
@@ -48,7 +61,6 @@ SYSTEM_PACKAGE_MAP = {
     "apt": {
         # Debian/Ubuntu use python3-pil for Pillow; python3-pillow is not reliable across releases.
         "pillow": ["python3-pil"],
-        "requests": ["python3-requests"],
         # PySide6 is split into Qt modules on Debian/Ubuntu family systems.
         "PySide6-Essentials": [
             "python3-pyside6.qtcore",
@@ -62,39 +74,35 @@ SYSTEM_PACKAGE_MAP = {
             "python3-pyside6.qtwidgets",
             "python3-pyside6.qtsvg",
         ],
-        "httpx": ["python3-httpx"],
+        "PySide6-Addons": ["python3-pyside6.qtwebenginewidgets"],
         "psutil": ["python3-psutil"],
     },
     "dnf": {
         "pillow": ["python3-pillow"],
-        "requests": ["python3-requests"],
         "PySide6-Essentials": ["python3-pyside6"],
         "PySide6": ["python3-pyside6"],
-        "httpx": ["python3-httpx"],
+        "PySide6-Addons": ["python3-pyside6"],
         "psutil": ["python3-psutil"],
     },
     "pacman": {
         "pillow": ["python-pillow"],
-        "requests": ["python-requests"],
         "PySide6-Essentials": ["pyside6"],
         "PySide6": ["pyside6"],
-        "httpx": ["python-httpx"],
+        "PySide6-Addons": ["pyside6"],
         "psutil": ["python-psutil"],
     },
     "zypper": {
         "pillow": ["python3-pillow"],
-        "requests": ["python3-requests"],
         "PySide6-Essentials": ["python3-pyside6"],
         "PySide6": ["python3-pyside6"],
-        "httpx": ["python3-httpx"],
+        "PySide6-Addons": ["python3-pyside6"],
         "psutil": ["python3-psutil"],
     },
     "apk": {
         "pillow": ["py3-pillow"],
-        "requests": ["py3-requests"],
         "PySide6-Essentials": ["py3-pyside6"],
         "PySide6": ["py3-pyside6"],
-        "httpx": ["py3-httpx"],
+        "PySide6-Addons": ["py3-pyside6"],
         "psutil": ["py3-psutil"],
     },
 }
@@ -152,7 +160,7 @@ def get_missing_dependencies(availability):
         module = dep["module"]
         installed = availability.get(module)
         if installed is None:
-            installed = importlib.util.find_spec(module) is not None
+            installed = _module_available(module)
         if not installed:
             missing.append(dep)
     return missing
@@ -277,6 +285,19 @@ def _install_with_pyside(parent, plan: InstallPlan) -> bool:
     if app is None:
         return False
 
+
+    if plan.command and os.path.basename(str(plan.command[0])) in {"pkexec", "sudo"}:
+        answer = QMessageBox.question(
+            parent,
+            t("确认提升权限"),
+            t("即将通过系统提权工具安装运行依赖。请确认你信任本软件和下列命令：")
+            + "\n\n" + plan.display_command,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return False
+
     output_queue: queue.Queue[tuple[str, str | int | None]] = queue.Queue()
     result = {"returncode": None}
 
@@ -373,7 +394,27 @@ def _prompt_with_pyside(parent, missing, plan: InstallPlan) -> bool | None:
             return False
         QMessageBox.warning(parent, t("安装失败"), t("依赖安装失败，请在终端手动执行：") + "\n\n" + plan.display_command)
         return False
-    QMessageBox.information(parent, t("手动安装依赖"), t("可以在终端执行：") + "\n\n" + plan.display_command)
+    # "No" 分支：显示手动安装命令，并提供"复制到剪贴板"按钮
+    manual_msg = QMessageBox(parent)
+    manual_msg.setIcon(QMessageBox.Icon.Information)
+    manual_msg.setWindowTitle(t("手动安装依赖"))
+    manual_msg.setText(t("可以在终端执行：") + "\n\n" + plan.display_command + (f"\n\n{plan.note}" if plan.note else ""))
+    copy_btn = manual_msg.addButton(t("复制命令"), QMessageBox.ButtonRole.AcceptRole)
+    manual_msg.addButton(t("关闭"), QMessageBox.ButtonRole.RejectRole)
+    manual_msg.setDefaultButton(copy_btn)
+    manual_msg.exec()
+    if manual_msg.clickedButton() is copy_btn:
+        try:
+            from PySide6.QtGui import QGuiApplication
+            QGuiApplication.clipboard().setText(plan.display_command)
+            # 简短确认
+            confirm = QMessageBox(parent)
+            confirm.setIcon(QMessageBox.Icon.Information)
+            confirm.setWindowTitle(t("已复制"))
+            confirm.setText(t("安装命令已复制到剪贴板，请粘贴到终端执行。"))
+            confirm.exec()
+        except Exception:
+            pass
     return None
 
 

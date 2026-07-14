@@ -59,7 +59,7 @@ def _windows_mutex_name() -> str:
                 kernel32.CloseHandle(token)
     except Exception:
         pass
-    digest = hashlib.sha1(str(sid).encode("utf-8", errors="ignore")).hexdigest()[:16]
+    digest = hashlib.sha256(str(sid).encode("utf-8", errors="ignore")).hexdigest()[:16]
     return f"Local\\{APP_LOCK_ID}_{digest}_SingleInstance"
 
 
@@ -163,7 +163,7 @@ def _write_identity(file_obj) -> None:
 
 def _lock_port() -> int:
     user = _user_lock_suffix()
-    digest = hashlib.sha1(f"{APP_LOCK_ID}:{user}".encode("utf-8", errors="ignore")).digest()
+    digest = hashlib.sha256(f"{APP_LOCK_ID}:{user}".encode("utf-8", errors="ignore")).digest()
     return 42000 + (int.from_bytes(digest[:2], "big") % 12000)
 
 

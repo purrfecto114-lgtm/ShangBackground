@@ -126,6 +126,7 @@ class RandomProbabilityDialog(QDialog):
         self._rows_layout.setContentsMargins(0, 0, 0, 0)
         self._rows_layout.setSpacing(6)
 
+        container.setUpdatesEnabled(False)
         for image_path in self._images:
             filename = os.path.basename(image_path)
             row_widget = QFrame()
@@ -169,6 +170,7 @@ class RandomProbabilityDialog(QDialog):
             spin.valueChanged.connect(lambda value, key=filename: self._set_units(key, round(value * PERCENT_SCALE), "spin"))
 
         self._rows_layout.addStretch(1)
+        container.setUpdatesEnabled(True)
         scroll.setWidget(container)
         root.addWidget(scroll, 1)
 
@@ -279,9 +281,10 @@ class RandomProbabilityDialog(QDialog):
         for row in self._rows.values():
             active = row.slider.value() > 0
             row.state.setText(self._t("参与随机") if active else self._t("不参与"))
-            row.state.setProperty("active", active)
-            row.state.style().unpolish(row.state)
-            row.state.style().polish(row.state)
+            if row.state.property("active") != active:
+                row.state.setProperty("active", active)
+                row.state.style().unpolish(row.state)
+                row.state.style().polish(row.state)
 
     def _apply_filter(self, text: str) -> None:
         needle = text.strip().casefold()

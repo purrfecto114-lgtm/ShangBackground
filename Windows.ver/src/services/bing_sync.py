@@ -7,6 +7,17 @@ from core import engine as core
 from app.i18n import t
 from PySide6.QtCore import QObject, Signal
 
+def _resolution_source_label(source: str) -> str:
+    source = str(source or "").lower()
+    if source in {"screen", "system", "detect", "native"}:
+        return t("主屏检测")
+    if source == "requested":
+        return t("用户指定")
+    if source == "fallback":
+        return t("回退")
+    return source or t("未知来源")
+
+
 class BingSyncWorker(QObject):
     finished = Signal(bool, str, str)
 
@@ -34,6 +45,7 @@ class BingSyncWorker(QObject):
                 self.finished.emit(False, t("下载必应壁纸失败") + reason_text, "")
                 return
             core.set_wallpaper(path, t("必应今日壁纸"))
-            self.finished.emit(True, f"已设置必应壁纸：{info.title} / {info.resolution}（{info.resolution_source}）", path)
+            success_msg = t("已设置必应壁纸")
+            self.finished.emit(True, f"{success_msg}：{info.title} / {info.resolution}（{_resolution_source_label(info.resolution_source)}）", path)
         except Exception as e:
             self.finished.emit(False, f"同步必应壁纸失败：{e}", "")

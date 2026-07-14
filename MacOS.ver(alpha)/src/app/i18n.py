@@ -2,6 +2,7 @@
 # Uses a simple dictionary-based approach. No Qt .ts/.qm overhead.
 from __future__ import annotations
 
+import gzip
 import json
 import os
 
@@ -28,13 +29,23 @@ def set_language(lang: str) -> None:
 
 
 def load_language(lang: str) -> None:
-    """Load a language file from lang/<lang>.json and activate it."""
+    """Load a language file from lang/<lang>.json and activate it.
+
+    Translation files are shipped as normal UTF-8 JSON.  Some packaging steps in
+    older builds accidentally gzip-compressed en.json while keeping the .json
+    suffix, which made runtime language switching silently fall back to Chinese.
+    The loader accepts both formats so source runs, VS Code runs and packaged
+    runs behave the same.
+    """
     global _CURRENT_LANG, _TRANSLATIONS
     path = os.path.join(LANG_DIR, f"{lang}.json")
     if os.path.exists(path):
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                _TRANSLATIONS[lang] = json.load(f)
+            with open(path, "rb") as f:
+                raw = f.read()
+            if raw.startswith(b"\x1f\x8b"):
+                raw = gzip.decompress(raw)
+            _TRANSLATIONS[lang] = json.loads(raw.decode("utf-8"))
         except Exception:
             _TRANSLATIONS[lang] = {}
     else:

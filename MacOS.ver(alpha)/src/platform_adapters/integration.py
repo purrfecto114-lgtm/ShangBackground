@@ -7,11 +7,19 @@ from pathlib import Path
 
 
 def _run_args(args: list[str], timeout: int = 10) -> tuple[int, str, str]:
-    """Run a command without a shell and return (returncode, stdout, stderr)."""
+    """Run a command without a shell and return (returncode, stdout, stderr).
+
+    Always decodes subprocess output as UTF-8.  ``text=True`` would otherwise
+    default to the system locale; on a non-UTF-8 locale this would mangle
+    wallpaper paths containing CJK characters when passed to osascript,
+    causing the slideshow to stutter on Chinese-named images.
+    """
     try:
         result = subprocess.run(
             args,
             text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
             capture_output=True,
             timeout=timeout,
             check=False,
@@ -113,6 +121,31 @@ def _nsurl_file_url(path: str):
     return NSURL.fileURLWithPath_(path)
 
 
+
+_MACOS_FIT_MODE = "填充"
+
+
+def _macos_desktop_image_options(workspace, screen) -> dict:
+    """Preserve existing options and apply the supported ShangBackground fit."""
+    try:
+        import AppKit
+        options = dict(workspace.desktopImageOptionsForScreen_(screen) or {})
+        mode = str(_MACOS_FIT_MODE or "填充")
+        mapping = {
+            "填充": (AppKit.NSImageScaleProportionallyUpOrDown, True),
+            "适应": (AppKit.NSImageScaleProportionallyUpOrDown, False),
+            "拉伸": (AppKit.NSImageScaleAxesIndependently, True),
+            "居中": (AppKit.NSImageScaleNone, True),
+        }
+        if mode in mapping:
+            scaling, clipping = mapping[mode]
+            options[AppKit.NSWorkspaceDesktopImageScalingKey] = scaling
+            options[AppKit.NSWorkspaceDesktopImageAllowClippingKey] = bool(clipping)
+        return options
+    except Exception:
+        return {}
+
+
 def _set_macos_wallpaper_appkit(path: str) -> tuple[bool, str]:
     """Use Apple's NSWorkspace API when PyObjC/AppKit is available."""
     try:
@@ -131,7 +164,7 @@ def _set_macos_wallpaper_appkit(path: str) -> tuple[bool, str]:
         errors: list[str] = []
         changed = 0
         for screen in screens:
-            result = workspace.setDesktopImageURL_forScreen_options_error_(url, screen, {}, None)
+            result = workspace.setDesktopImageURL_forScreen_options_error_(url, screen, _macos_desktop_image_options(workspace, screen), None)
             if isinstance(result, tuple):
                 ok = bool(result[0])
                 err = result[1] if len(result) > 1 else None
@@ -218,7 +251,59 @@ def get_current_wallpaper_platform() -> str:
 
 
 def configure_fit_mode(fit_mode, winreg_module=None, log=None):
-    """Keep the cross-platform API; macOS controls scaling in System Settings."""
-    del fit_mode, winreg_module
+    """Store the fit mode applied through NSWorkspace on the next image set."""
+    del winreg_module
+    global _MACOS_FIT_MODE
+    mode = str(fit_mode or "填充")
+    if mode == "平铺":
+        # NSWorkspace exposes scaling/clipping but no stable tile option.
+        _MACOS_FIT_MODE = "适应"
+        if log:
+            log("macOS NSWorkspace 不提供稳定的平铺选项，已降级为适应。")
+        return
+    _MACOS_FIT_MODE = mode if mode in {"填充", "适应", "拉伸", "居中"} else "填充"
     if log:
-        log("macOS picture scaling is controlled by System Settings; continuing with image change only.")
+        log(f"macOS 壁纸缩放模式已设置为：{_MACOS_FIT_MODE}")
+
+
+# ── Bug 5 fix: desktop foreground detection ──────────────────────────────
+# Used by MainWindow._is_desktop_foreground() to implement the
+# "桌面失焦时暂停" video policy and the HTML wallpaper auto-pause feature.
+# Previously this returned True unconditionally on macOS, silently disabling
+# both features.
+
+# Cache for 0.8s to avoid spawning osascript on every video-focus policy tick.
+_LAST_FOREGROUND_CACHE: tuple[bool, float] = (True, 0.0)
+_FOREGROUND_CACHE_TTL = 0.8  # seconds
+
+
+def is_desktop_foreground() -> bool:
+    """Return True when the Finder desktop (or Dock) is the frontmost process.
+
+    Bug 5 fix: uses ``osascript`` to query System Events for the frontmost
+    process name.  Returns True if the frontmost is Finder (the macOS
+    desktop surface is rendered by Finder) or Dock.  Returns False for any
+    other application.  Conservative True on any error (don't pause video
+    if we can't tell).
+    """
+    import time as _time
+    global _LAST_FOREGROUND_CACHE
+    now = _time.monotonic()
+    cached_val, cached_at = _LAST_FOREGROUND_CACHE
+    if now - cached_at < _FOREGROUND_CACHE_TTL:
+        return cached_val
+
+    result = _detect_desktop_foreground_uncached()
+    _LAST_FOREGROUND_CACHE = (result, now)
+    return result
+
+
+def _detect_desktop_foreground_uncached() -> bool:
+    """Use NSWorkspace without triggering System Events Automation prompts."""
+    try:
+        from AppKit import NSWorkspace
+        app = NSWorkspace.sharedWorkspace().frontmostApplication()
+        bundle = str(app.bundleIdentifier() or "").strip().lower() if app is not None else ""
+        return not bundle or bundle in {"com.apple.finder", "com.apple.dock"} or "shangbackground" in bundle
+    except Exception:
+        return True

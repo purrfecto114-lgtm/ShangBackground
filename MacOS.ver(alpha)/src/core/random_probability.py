@@ -7,7 +7,6 @@ import logging
 import math
 import os
 import random
-import sys
 import threading
 import time
 from pathlib import Path
@@ -23,6 +22,9 @@ IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".gif")
 DEFAULT_WEIGHT = 100.0
 MAX_WEIGHT = 1_000_000.0
 _CONFIG_LOCK = threading.RLock()
+_CACHE_LOCK = threading.RLock()
+_IMAGE_CACHE: dict[str, tuple[float, list[str]]] = {}
+_WEIGHT_CACHE: tuple[float, dict] | None = None
 
 
 def log(message: str) -> None:
@@ -58,19 +60,31 @@ def configure_storage(data_dir: str) -> str:
 
 
 def _load_config() -> dict:
+    global _WEIGHT_CACHE
     with _CONFIG_LOCK:
         path = Path(RANDOM_CONFIG_PATH)
         if not path.is_file():
             return {"__version__": 3, "folders": {}}
         try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            mtime = -1.0
+        with _CACHE_LOCK:
+            if _WEIGHT_CACHE is not None and _WEIGHT_CACHE[0] == mtime:
+                return json.loads(json.dumps(_WEIGHT_CACHE[1], ensure_ascii=False))
+        try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {"__version__": 3, "folders": {}}
+            data = data if isinstance(data, dict) else {"__version__": 3, "folders": {}}
+            with _CACHE_LOCK:
+                _WEIGHT_CACHE = (mtime, data)
+            return json.loads(json.dumps(data, ensure_ascii=False))
         except Exception as exc:
             log(f"读取随机配置失败: {exc}")
             return {"__version__": 3, "folders": {}}
 
 
 def _save_config(data: dict) -> None:
+    global _WEIGHT_CACHE
     with _CONFIG_LOCK:
         path = Path(RANDOM_CONFIG_PATH)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,6 +96,12 @@ def _save_config(data: dict) -> None:
             except OSError:
                 pass
             os.replace(temp, path)
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                mtime = time.time()
+            with _CACHE_LOCK:
+                _WEIGHT_CACHE = (mtime, json.loads(json.dumps(data, ensure_ascii=False)))
         except Exception:
             try:
                 temp.unlink(missing_ok=True)
@@ -112,10 +132,34 @@ def _safe_weight(value, default: float = 0.0) -> float:
     return min(MAX_WEIGHT, max(0.0, number))
 
 
+def invalidate_folder_cache(folder_path: str | None = None) -> None:
+    """Clear cached slideshow image enumeration.
+
+    Directory scanning is one of the visible sources of stutter when the user
+    clicks 下一张/随机 repeatedly in a large wallpaper folder.  The cache is
+    invalidated explicitly after probability saves/legacy-copy cleanup and is
+    also guarded by the directory mtime.
+    """
+    with _CACHE_LOCK:
+        if folder_path:
+            _IMAGE_CACHE.pop(_folder_key(folder_path), None)
+        else:
+            _IMAGE_CACHE.clear()
+
+
 def get_original_image_paths(folder_path: str) -> list[str]:
     folder_abs = os.path.abspath(folder_path)
     if not os.path.isdir(folder_abs):
         return []
+    folder_key = _folder_key(folder_abs)
+    try:
+        folder_mtime = os.path.getmtime(folder_abs)
+    except OSError:
+        folder_mtime = -1.0
+    with _CACHE_LOCK:
+        cached = _IMAGE_CACHE.get(folder_key)
+        if cached and cached[0] == folder_mtime:
+            return list(cached[1])
     paths: list[str] = []
     try:
         entries = os.scandir(folder_abs)
@@ -132,7 +176,10 @@ def get_original_image_paths(folder_path: str) -> list[str]:
                 continue
             if is_file and name.lower().endswith(IMAGE_EXTENSIONS):
                 paths.append(entry.path)
-    return sorted(paths, key=lambda value: os.path.basename(value).casefold())
+    paths = sorted(paths, key=lambda value: os.path.basename(value).casefold())
+    with _CACHE_LOCK:
+        _IMAGE_CACHE[folder_key] = (folder_mtime, list(paths))
+    return list(paths)
 
 
 def get_probability_weights(folder_path: str) -> dict[str, float]:
@@ -185,6 +232,7 @@ def save_probability_weights(folder_path: str, weights_dict: dict) -> None:
     folders[folder_abs] = cleaned
     _save_config(config)
     cleanup_physical_only(folder_abs)
+    invalidate_folder_cache(folder_abs)
 
 
 def weighted_choice(folder_path: str, current_path: str = "") -> str | None:
@@ -241,6 +289,7 @@ def cleanup_physical_only(folder_path: str) -> int:
     folder_abs = os.path.abspath(folder_path)
     deleted = _delete_copies(folder_abs)
     if deleted:
+        invalidate_folder_cache(folder_abs)
         log(f"已清理 {deleted} 个旧版概率副本文件")
     return deleted
 

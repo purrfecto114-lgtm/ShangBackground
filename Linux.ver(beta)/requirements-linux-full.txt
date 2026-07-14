@@ -1,0 +1,3 @@
+-r requirements-linux.txt
+# Stable cross-platform HTML wallpaper backend.
+PySide6-Addons==6.11.1

@@ -58,7 +58,8 @@ def detect_with_macos() -> Optional[Tuple[int, int]]:
     try:
         result = subprocess.run(
             ["system_profiler", "SPDisplaysDataType"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True,
+            encoding="utf-8", errors="surrogateescape", timeout=10,
         )
         import re
         match = re.search(r"Resolution:\s*(\d+)\s*x\s*(\d+)", result.stdout)

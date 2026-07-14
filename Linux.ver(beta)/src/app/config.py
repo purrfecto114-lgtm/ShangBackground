@@ -1,8 +1,12 @@
+from app.version import APP_VERSION, APP_VERSION_FILE, APP_VERSION_TUPLE
+
 # Linux.ver(beta) is now a separated platform project; keep platform flags fixed.
 IS_WINDOWS = False
 IS_MACOS = False
 IS_LINUX = True
 APP_NAME = "ShangBackground"
+
+__all__ = ["APP_VERSION", "APP_VERSION_FILE", "APP_VERSION_TUPLE"]
 PLATFORM_ID = "linux"
 PLATFORM_LABEL = "Linux"
 UPDATE_CHECK_ON_STARTUP = True
@@ -21,6 +25,8 @@ UI_MUTED = "#6b7280"
 UI_BORDER = "#d8dee9"
 FONT_FAMILY = "Noto Sans CJK SC"
 FONT_EXTENSIONS = (".ttf", ".ttc", ".otf")
+
+VIDEO_EXTENSIONS = ('.mp4', '.mov', '.m4v', '.avi', '.mkv', '.webm',)
 
 VIDEO_FILETYPES = [
     ("视频文件", "*.mp4 *.mov *.m4v *.avi *.mkv *.webm"),
@@ -42,12 +48,24 @@ def get_video_filetypes(lang_func=None):
     return [(lang_func(desc, desc), ext) for desc, ext in VIDEO_FILETYPES]
 
 
+def is_supported_video_path(path) -> bool:
+    """Return whether *path* exists and uses a video extension supported by this platform."""
+    try:
+        import os
+
+        value = os.path.abspath(os.path.expanduser(str(path or "")))
+        return bool(value and os.path.isfile(value) and os.path.splitext(value)[1].lower() in VIDEO_EXTENSIONS)
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 DEPENDENCIES = [
     {"module": "PIL", "package": "pillow", "required": True, "desc": "图片读取、缩略图和壁纸生成"},
-    {"module": "requests", "package": "requests", "required": False, "desc": "网络请求（版本检查等）"},
     {"module": "PySide6", "package": "PySide6-Essentials", "required": True, "desc": "新版 PySide6 图形界面与系统托盘"},
-    {"module": "httpx", "package": "httpx", "required": False, "desc": "Bing 壁纸 API 下载"},
     {"module": "psutil", "package": "psutil", "required": False, "desc": "进程清理与辅助控制"},
+
+    # HTML 交互式壁纸依赖 Qt WebEngine 模块；非必须，但缺失时无法加载 HTML 壁纸。
+    {"module": "PySide6.QtWebEngineWidgets", "package": "PySide6-Addons", "required": False, "desc": "HTML 交互式壁纸渲染"},
 ]
 
 # Style map: Chinese key -> Windows WallpaperStyle value
@@ -57,7 +75,8 @@ STYLE_MAP = {"填充": 10, "适应": 6, "拉伸": 2, "平铺": 1, "居中": 0}
 STYLE_KEYS = ["填充", "适应", "拉伸", "居中", "平铺"]
 
 # Mode keys
-MODE_KEYS = ["幻灯片放映", "图片", "视频", "纯色", "渐变"]
+# 在模式列表中新增 HTML 交互式壁纸。此模式将使用 Qt WebEngine 渲染本地或远程网页。
+MODE_KEYS = ["幻灯片放映", "图片", "视频", "纯色", "渐变", "HTML"]
 
 # Canonical internal keys.  The UI may display translated text, but config/core
 # logic must keep these Chinese keys for backwards compatibility.
@@ -80,6 +99,13 @@ MODE_ALIASES = {
     "solid color": "纯色",
     "渐变": "渐变",
     "gradient": "渐变",
+
+    # HTML 模式。允许通过英文关键字或“网页”等中文关键字切换到 HTML 模式。
+    "html": "HTML",
+    "HTML": "HTML",
+    "网页": "HTML",
+    "web": "HTML",
+    "webpage": "HTML",
 }
 STYLE_ALIASES = {
     "填充": "填充",

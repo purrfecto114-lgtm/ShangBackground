@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import os
 from pathlib import Path
 
 from core import engine as core
 from core import single_instance
 from app.i18n import t, init_i18n, get_language
+from app.config import APP_VERSION as CONFIG_APP_VERSION
 from app.paths import TRANSLATIONS_DIR, font_directories, image_path
 # Load configured UI language before any translated constants/widgets are created.
 init_i18n(core.config)
 
 # ---------- 版本号 ----------
-APP_VERSION = "1.3.6"
+APP_VERSION = CONFIG_APP_VERSION
 APP_ID = "xxdz.ShangBackground"
 APP_PROCESS_NAME = "ShangBackground"
 APP_DISPLAY_NAME = t("上一个桌面背景")
@@ -32,6 +32,7 @@ def _is_action_launch(args: argparse.Namespace) -> bool:
         getattr(args, "show", False),
         bool(getattr(args, "set_wallpaper", None)),
         getattr(args, "jump_to_wallpaper", False),
+        getattr(args, "from_context_menu", False),
     ])
 
 
@@ -44,6 +45,7 @@ def _parse_early_args() -> argparse.Namespace:
     parser.add_argument("--hide", action="store_true")
     parser.add_argument("--jump-to-wallpaper", action="store_true")
     parser.add_argument("--set-wallpaper", dest="set_wallpaper")
+    parser.add_argument("--from-context-menu", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--sync-context-on-start", action="store_true")
     parser.add_argument("--inherit-session-wallpaper", action="store_true", help=argparse.SUPPRESS)
     return parser.parse_known_args()[0]
@@ -101,32 +103,92 @@ def _open_sidebar_standalone() -> None:
         core.log(traceback.format_exc())
 
 
+def _context_command_from_args(args: argparse.Namespace) -> str | None:
+    """Return the IPC command represented by CLI/context-menu action args."""
+    if getattr(args, "previous", False):
+        return "previous"
+    if getattr(args, "next", False):
+        return "next"
+    if getattr(args, "random", False):
+        return "random"
+    target = getattr(args, "set_wallpaper", None)
+    if target:
+        return "set_wallpaper|" + str(target)
+    if getattr(args, "jump_to_wallpaper", False):
+        return "jump"
+    if getattr(args, "show", False):
+        return "show"
+    return None
+
+
+def _dispatch_action_to_existing_instance(args: argparse.Namespace) -> bool:
+    """Forward a CLI/context-menu action to the already-running GUI instance.
+
+    Windows desktop right-click verbs launch the EXE every time.  When the main
+    process is already alive, forwarding through the existing WM_COPYDATA IPC
+    window keeps the visible GUI/tray state synchronized and avoids bringing the
+    full window to the foreground for simple previous/next/random actions.
+    """
+    command = _context_command_from_args(args)
+    if not command or not core.IS_WINDOWS:
+        return False
+    try:
+        existing = core.find_existing_main_window(timeout=0.8)
+        if not existing:
+            return False
+        ok = core.send_command_to_hwnd(existing, command)
+        if ok:
+            origin = "桌面右键菜单" if getattr(args, "from_context_menu", False) else "命令行"
+            core.log(f"{origin}动作已转发到现有实例: {command}")
+        return bool(ok)
+    except Exception as exc:
+        core.log(f"转发现有实例动作失败: {exc}")
+        return False
+
+
 def _handle_action_args(args: argparse.Namespace) -> bool:
-    """在 PySide6 GUI 创建前处理右键菜单/命令行动作。"""
+    """在 PySide6 GUI 创建前处理右键菜单/命令行动作。
+
+    Windows 桌面右键菜单在程序关闭时应启动主程序，而不是执行一次
+    previous/next/random 后立即退出。因此 from-context-menu 的动作在
+    未发现现有实例时交给 GUI 启动后的延迟队列处理。
+    """
     if args.hide:
         core.hide_window = True
-    if args.previous:
-        core.previous_wallpaper()
-        return True
-    if args.next:
-        core.next_wallpaper()
-        return True
-    if args.random:
-        core.random_wallpaper()
-        return True
-    if args.set_wallpaper:
-        target = args.set_wallpaper
-        if os.path.isfile(target):
-            core.set_wallpaper(target, t("命令行设置"))
-        else:
-            core.log(f"壁纸文件不存在: {target}")
-        return True
-    if args.jump_to_wallpaper:
-        _open_sidebar_standalone()
-        return True
-    if args.show and core.IS_WINDOWS:
-        if core.activate_existing_instance(show_notice=False):
+    origin = "桌面右键菜单" if getattr(args, "from_context_menu", False) else "命令行"
+    command = _context_command_from_args(args)
+    if getattr(args, "from_context_menu", False) and command and command != "show":
+        core.pending_startup_context_command = command
+        core.log(f"{origin}启动主程序并暂存动作: {command}")
+        return False
+    if command and command != "show":
+        core.log(f"{origin}唤起程序动作: {command}")
+    try:
+        if args.previous:
+            core.previous_wallpaper()
             return True
+        if args.next:
+            core.next_wallpaper()
+            return True
+        if args.random:
+            core.random_wallpaper()
+            return True
+        if args.set_wallpaper:
+            target = args.set_wallpaper
+            if os.path.isfile(target):
+                core.set_wallpaper(target, t("命令行设置"))
+            else:
+                core.log(f"壁纸文件不存在: {target}")
+            return True
+        if args.jump_to_wallpaper:
+            _open_sidebar_standalone()
+            return True
+        if args.show and core.IS_WINDOWS:
+            if core.activate_existing_instance(show_notice=False):
+                return True
+    except Exception as exc:
+        core.log_error(f"{origin}动作执行失败({command or 'unknown'})", exc)
+        return True
     return False
 
 
@@ -154,7 +216,7 @@ PYSIDE_IMPORT_ERROR = None
 
 try:
     from PySide6.QtCore import QTranslator, QLibraryInfo, QLocale
-    from PySide6.QtGui import QFont, QFontDatabase
+    from PySide6.QtGui import QFontDatabase
     from PySide6.QtWidgets import (
         QApplication,
     )
@@ -204,10 +266,8 @@ def _dependency_availability_for_pyside() -> dict:
     """供 PySide6 主入口使用的依赖可用性表。未列出的依赖由 app.dependencies 自行探测。"""
     return {
         "PIL": getattr(core, "Image", None) is not None,
-        "requests": getattr(core, "requests", None) is not None,
         "PySide6": PYSIDE_AVAILABLE,
         "psutil": getattr(core, "psutil", None) is not None,
-        "httpx": importlib.util.find_spec("httpx") is not None,
     }
 
 
@@ -236,6 +296,20 @@ if PYSIDE_AVAILABLE:
         """应用自定义字体文件/目录；显示大小由程序内 DPI 统一控制。"""
         if app is None:
             return ""
+        # v1.4.7: 读取字体粗细和大小配置
+        font_weight_str = str(core.config.get("font_weight", "normal")).lower()
+        from PySide6.QtGui import QFont
+        weight_map = {
+            "normal": QFont.Weight.Normal,
+            "medium": QFont.Weight.Medium,
+            "bold": QFont.Weight.Bold,
+        }
+        target_weight = weight_map.get(font_weight_str, QFont.Weight.Normal)
+        target_size = 0
+        try:
+            target_size = int(core.config.get("font_size", 0))
+        except Exception:
+            target_size = 0
         candidates = []
         custom_path = core.config.get("font_path", "")
         candidates.extend(_iter_font_files(custom_path))
@@ -251,7 +325,10 @@ if PYSIDE_AVAILABLE:
                 families = QFontDatabase.applicationFontFamilies(font_id)
                 if families:
                     font = QFont(families[0])
-                    if current_size > 0:
+                    font.setWeight(target_weight)  # v1.4.7
+                    if target_size > 0:
+                        font.setPixelSize(target_size)  # v1.4.7
+                    elif current_size > 0:
                         font.setPointSize(current_size)
                     app.setFont(font)
                     return families[0]
@@ -273,7 +350,10 @@ if PYSIDE_AVAILABLE:
         for family in fallback:
             if family and family in available:
                 font = QFont(family)
-                if current_size > 0:
+                font.setWeight(target_weight)  # v1.4.7
+                if target_size > 0:
+                    font.setPixelSize(target_size)  # v1.4.7
+                elif current_size > 0:
                     font.setPointSize(current_size)
                 app.setFont(font)
                 return family

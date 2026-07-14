@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.paths import PROJECT_ROOT, RESOURCE_ROOT
+from app.paths import PROJECT_ROOT, RESOURCE_ROOT, mpv_bundled_exe
 
 import argparse
 import ctypes
@@ -8,6 +8,7 @@ import ctypes.wintypes
 import json
 import re
 import os
+import secrets
 import shutil
 import shlex
 import subprocess
@@ -26,6 +27,14 @@ from app.config import IS_WINDOWS
 _DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir(), "ShangBackground")
 os.makedirs(_DATA_DIR, exist_ok=True)
 PID_FILE = os.path.join(_DATA_DIR, "video_wallpaper.pid")
+
+
+def _secure_pid_file_permissions() -> None:
+    """Best-effort: keep runtime PID/state file readable only by current user where supported."""
+    try:
+        os.chmod(PID_FILE, 0o600)
+    except (AttributeError, OSError):
+        pass
 VIDEO_EXTENSIONS = (".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".wmv")
 
 
@@ -63,8 +72,10 @@ def _write_state(pid: int, player: str, hwnd: int | None = None, ipc_path: str =
             ),
             encoding="utf-8",
         )
+        _secure_pid_file_permissions()
     except Exception:
         Path(PID_FILE).write_text(str(pid), encoding="utf-8")
+        _secure_pid_file_permissions()
 
 
 def _read_pid() -> int | None:
@@ -109,7 +120,7 @@ def _terminate_pid(pid: int | None) -> None:
                 except Exception:
                     pass
             proc.terminate()
-            _gone, alive = psutil.wait_procs([proc, *children], timeout=2)
+            _gone, alive = psutil.wait_procs([*children, proc], timeout=3)
             for item in alive:
                 try:
                     item.kill()
@@ -266,6 +277,27 @@ def _registry_executable_candidates(exe_name: str) -> list[str]:
 
 def _candidate_paths(*names: str) -> list[str]:
     result: list[str] = []
+    # v1.4.6: 统一用 app.paths.resolve_mpv_path() 解析 mpv, 优先级:
+    #   1. 用户安装目录 (自动下载) %LOCALAPPDATA%\ShangBackground\bin\mpv\
+    #   2. 打包内置 <resource_root>/bin/
+    #   3. 系统 PATH (shutil.which)
+    # 清理过期查找路径: mpv.net (已停更), scoop 路径 (用户特定), Software\Clients\Media (罕见).
+    _names_lower = [n.lower() for n in names]
+    if "mpv.exe" in _names_lower or "mpv" in _names_lower:
+        try:
+            from app.paths import resolve_mpv_path
+            resolved = resolve_mpv_path()
+            if resolved:
+                result.append(resolved)
+        except Exception:
+            pass
+        # 保留打包内置兜底 (resolve_mpv_path 已含, 但显式再查一次以防导入失败)
+        try:
+            bundled = mpv_bundled_exe()
+            if bundled and bundled not in result:
+                result.append(bundled)
+        except Exception:
+            pass
     for name in names:
         found = shutil.which(name)
         if found:
@@ -282,12 +314,10 @@ def _candidate_paths(*names: str) -> list[str]:
         os.environ.get("ProgramW6432"),
         os.environ.get("LOCALAPPDATA"),
         os.environ.get("APPDATA"),
-        os.path.expanduser(r"~\scoop\apps\mpv\current"),
-        os.path.expanduser(r"~\scoop\shims"),
     ]
+    # v1.4.6: 移除 mpv.net (已停更) 和 scoop 路径 (用户特定, 非通用)
     common_parts = [
         ("mpv", "mpv.exe"),
-        ("mpv.net", "mpv.exe"),
         ("mpv", "current", "mpv.exe"),
         ("VideoLAN", "VLC", "vlc.exe"),
         ("Programs", "mpv", "mpv.exe"),
@@ -349,17 +379,12 @@ def _find_workerw() -> int:
 def _mpv_ipc_path(pid: int | None = None) -> str:
     """Build the Windows named-pipe path used for mpv JSON IPC.
 
-    On Windows, mpv's ``--input-ipc-server`` accepts a ``\\\\.\\pipe\\<name>``
-    path. We embed the launcher PID so concurrent ShangBackground sessions do
-    not collide, and so the GUI can read the PID file and re-derive the same
-    pipe name without having to persist it separately.
+    mpv IPC is not a security boundary, so avoid predictable PID-derived
+    pipe names.  The generated pipe path is persisted in the private state
+    file for the live-control helper.
     """
-    # Use a fixed stem + the current process id (the GUI's PID, not mpv's)
-    # so the launcher and the live-control helper resolve to the same pipe.
-    # If pid is None, fall back to the launcher's PID.
-    stamp = int(pid) if pid else os.getpid()
-    return f"\\\\.\\pipe\\shangbg-mpv-{stamp}"
-
+    suffix = secrets.token_hex(8)
+    return rf"\\.\pipe\shangbg-mpv-{suffix}"
 
 def _mpv_command(video_path: str, muted: bool, volume: int = 100) -> tuple[str, list[str], str] | None:
     candidates = _candidate_paths("mpv", "mpv.exe")
@@ -478,40 +503,22 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
     )
 
 
-def set_video_volume(muted: bool, volume: int) -> bool:
-    """Live-adjust volume/mute on the running player without restart.
-
-    Returns True when the live update succeeded, False when the GUI should
-    fall back to stop+restart. Currently only the mpv backend supports live
-    control via its JSON IPC named pipe; VLC returns False so the GUI
-    restarts VLC with the new --volume/--no-audio flags.
-    """
+def _send_mpv_ipc_commands(commands: list[dict]) -> bool:
     state = _read_state()
     ipc_path = str(state.get("ipc_path") or "")
     if not ipc_path:
         return False
-    clamped_volume = max(0, min(100, int(volume)))
     try:
-        # On Windows, mpv's IPC pipe is a named pipe (\\.\pipe\...).
-        # We open it in raw mode and write one JSON command per line.
-        # See https://mpv.io/manual/stable/#json-ipc for the protocol.
-        # Use CreateFileA via ctypes for synchronous write-only access.
         GENERIC_WRITE = 0x40000000
         OPEN_EXISTING = 3
         INVALID_HANDLE_VALUE = -1
-        pipe_name = ipc_path
-        # ctypes.windll.kernel32.CreateFileW returns a HANDLE
         handle = ctypes.windll.kernel32.CreateFileW(
-            pipe_name, GENERIC_WRITE, 0, None, OPEN_EXISTING, 0, None
+            ipc_path, GENERIC_WRITE, 0, None, OPEN_EXISTING, 0, None
         )
         if handle == INVALID_HANDLE_VALUE or handle == 0:
             return False
         try:
-            cmds = [
-                {"command": ["set_property", "mute", bool(muted)]},
-                {"command": ["set_property", "volume", 0 if muted else clamped_volume]},
-            ]
-            for obj in cmds:
+            for obj in commands:
                 payload = (json.dumps(obj) + "\n").encode("utf-8")
                 written = ctypes.wintypes.DWORD(0)
                 ok = ctypes.windll.kernel32.WriteFile(
@@ -524,6 +531,22 @@ def set_video_volume(muted: bool, volume: int) -> bool:
             ctypes.windll.kernel32.CloseHandle(handle)
     except Exception:
         return False
+
+
+def set_video_volume(muted: bool, volume: int) -> bool:
+    """Live-adjust volume/mute on the running player without restart."""
+    clamped_volume = max(0, min(100, int(volume)))
+    return _send_mpv_ipc_commands([
+        {"command": ["set_property", "mute", bool(muted)]},
+        {"command": ["set_property", "volume", 0 if muted else clamped_volume]},
+    ])
+
+
+def set_video_paused(paused: bool) -> bool:
+    """Live-pause/resume the running mpv wallpaper via JSON IPC."""
+    return _send_mpv_ipc_commands([
+        {"command": ["set_property", "pause", bool(paused)]},
+    ])
 
 
 def main() -> None:

@@ -57,7 +57,8 @@ def detect_with_linux() -> Optional[Tuple[int, int]]:
     import subprocess
     try:
         result = subprocess.run(
-            ["xrandr", "--current"], capture_output=True, text=True, timeout=10,
+            ["xrandr", "--current"], capture_output=True, text=True,
+            encoding="utf-8", errors="surrogateescape", timeout=10,
         )
         import re
         for line in result.stdout.splitlines():

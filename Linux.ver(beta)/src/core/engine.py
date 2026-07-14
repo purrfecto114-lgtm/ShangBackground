@@ -17,17 +17,19 @@ from core import random_probability as random_copy
 from core import single_instance
 from app.config import (
     APP_NAME,
+    APP_VERSION,
     DEFAULT_GRADIENT_COLOR2,
     DEFAULT_SOLID_COLOR,
     DEFAULT_THEME_COLOR,
     IS_LINUX,
     IS_MACOS,
     IS_WINDOWS,
+    MODE_KEYS,
     normalize_mode_key,
     normalize_style_key,
 )
 from app.i18n import t
-from app.paths import RESOURCE_ROOT, is_packaged_runtime
+from app.paths import RESOURCE_ROOT, user_data_dir, is_packaged_runtime, app_executable_path
 from platform_adapters.integration import (
     configure_fit_mode,
     get_current_wallpaper_platform,
@@ -57,14 +59,23 @@ except ImportError:
     psutil = None
 
 try:
-    import requests
-except ImportError:
-    requests = None
-
-try:
     from platform_adapters import video as video_wallpaper
 except Exception:
     video_wallpaper = None
+
+# HTML 动态壁纸适配器，可能不存在；缺失时相关功能不可用。
+try:
+    from platform_adapters import html_wallpaper as html_wallpaper
+except Exception:
+    html_wallpaper = None
+
+# Global hotkey support for non-Windows platforms.
+try:
+    from pynput import keyboard as _pynput_keyboard  # type: ignore
+except Exception:
+    _pynput_keyboard = None  # optional dependency; may be missing
+
+_pynput_hotkey_listener = None  # type: ignore
 
 # UI sidebar is intentionally not imported by the core.
 # UI code imports ui.sidebar when it needs the widget.
@@ -127,20 +138,8 @@ def _resource_base_dir() -> str:
     return os.fspath(RESOURCE_ROOT)
 
 
-def _user_data_dir() -> str:
-    """Return a per-user writable config/runtime directory on Linux."""
-    root = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
-    path = os.path.join(root, APP_NAME.lower())
-    try:
-        os.makedirs(path, exist_ok=True)
-    except Exception:
-        path = os.path.join(tempfile.gettempdir(), APP_NAME)
-        os.makedirs(path, exist_ok=True)
-    return path
-
-
 BASE_DIR = _resource_base_dir()
-DATA_DIR = _user_data_dir()
+DATA_DIR = user_data_dir(APP_NAME)
 try:
     random_copy.configure_storage(DATA_DIR)
 except Exception as exc:
@@ -148,15 +147,12 @@ except Exception as exc:
     print(log_message)
 
 # 全局常量
-VERSION = "1.3.0"
+VERSION = APP_VERSION
 CONFIG_PATH = os.path.join(DATA_DIR, "settings.json")
 BUNDLED_CONFIG_PATH = os.path.join(BASE_DIR, "settings.json")
 LEGACY_CONFIG_PATH = os.path.join(DATA_DIR, "shezhi.json")
 LEGACY_BUNDLED_CONFIG_PATH = os.path.join(BASE_DIR, "shezhi.json")
-TRIGGER_FILE_PREV = os.path.join(DATA_DIR, "prev.txt")
-TRIGGER_FILE_NEXT = os.path.join(DATA_DIR, "next.txt")
-TRIGGER_FILE_RANDOM = os.path.join(DATA_DIR, "random.txt")
-ERROR_LOG_PATH = os.path.join(DATA_DIR, "ShangBackground_error.log")
+# v1.4.6: 移除 TRIGGER_FILE_PREV/NEXT/RANDOM 和 ERROR_LOG_PATH —— 早期文件触发机制残留, 现已改用 IPC.
 _MAX_LOG_FILE_BYTES = 1024 * 1024
 
 
@@ -217,10 +213,15 @@ def _should_emit_log(message: str, level: str) -> bool:
 
 
 def log(msg, level: str = "INFO", exc_info=False):
-    """带时间戳的日志输出函数，格式 [HH:MM:SS]。
+    """带时间戳的日志输出函数。
 
-    开发模式始终输出控制台；打包后普通日志仅在 log_enabled=True 时写入文件。
-    WARNING/ERROR 级别不会被节流，并支持记录异常堆栈，避免真正错误被吞掉。
+    历史实现用 print + 文件追加，本版本改为桥接到 `app.log_setup` 标准
+    logging 模块，获得按天滚动、级别过滤、子日志分离等能力。对外 API
+    保持不变以兼容所有现存调用点。
+
+    同时保留“程序内日志”页的用户可选日志文件：当用户在设置中开启
+    ``log_enabled`` 并选择 ``log_file_path`` 后，所有 core.log 调用都会
+    追加到该文件，避免日志页读取的路径与标准 logging 实际写入路径不一致。
     """
     level = _normalize_log_level(level)
     message = str(msg)
@@ -228,28 +229,45 @@ def log(msg, level: str = "INFO", exc_info=False):
     display_message = f"[{level}] {message}" if level != "INFO" else message
     if exc_text:
         display_message = display_message + "\n" + exc_text
-    if not _should_emit_log(display_message, level):
-        return display_message
-    timestamp = time.strftime("[%H:%M:%S]")
-    line = f"{timestamp} {display_message}"
+
+    legacy_failed = False
+    try:
+        from app.log_setup import legacy as _legacy_logger
+        _legacy_logger.log(msg, level=level, exc_info=exc_info)
+    except Exception:
+        legacy_failed = True
+
     try:
         cfg = globals().get("config", {})
-        log_enabled = bool(cfg.get("log_enabled", False))
-        if not is_frozen() or log_enabled or level in {"WARNING", "ERROR"}:
-            print(line)
-        log_path = cfg.get("log_file_path")
-        with _LOG_FILE_LOCK:
-            if log_enabled and log_path:
-                _append_log_file(log_path, line)
-            if level in {"WARNING", "ERROR"}:
-                _append_log_file(ERROR_LOG_PATH, line)
+        if isinstance(cfg, dict) and bool(cfg.get("log_enabled", False)):
+            user_log_path = str(cfg.get("log_file_path", "") or "").strip()
+            if user_log_path and _should_emit_log(display_message, level):
+                timestamp = time.strftime("[%Y-%m-%d %H:%M:%S]")
+                _append_log_file(user_log_path, f"{timestamp} {display_message}")
     except Exception:
         pass
+
+    if legacy_failed:
+        try:
+            if _should_emit_log(display_message, level):
+                timestamp = time.strftime("[%H:%M:%S]")
+                print(f"{timestamp} {display_message}")
+        except Exception:
+            pass
     return display_message
+
+
+
 
 
 def log_error(context: str, exc: BaseException | None = None) -> None:
     """记录错误并保留堆栈；供三端统一使用。"""
+    try:
+        from app.log_setup import legacy as _legacy_logger
+        _legacy_logger.log_error(context, exc)
+        return
+    except Exception:
+        pass
     if exc is None:
         log(context, level="ERROR", exc_info=True)
     else:
@@ -262,53 +280,7 @@ def log_error(context: str, exc: BaseException | None = None) -> None:
 last_operation_error: str = ""
 
 
-def apply_image_fit_mode(img, mode, target_size):
-    """根据适应模式处理图片，统一5种适应模式的处理逻辑。
-
-    参数:
-        img: PIL.Image 对象
-        mode: 适应模式字符串，支持 "填充"/"适应"/"拉伸"/"居中"/"平铺"
-        target_size: 目标尺寸元组 (width, height)
-
-    返回:
-        处理后的 PIL.Image 对象
-    """
-    mode = normalize_style_key(mode)
-    target_w, target_h = target_size
-    orig_w, orig_h = img.size
-
-    if mode == "填充":
-        ratio = max(target_w / orig_w, target_h / orig_h)
-        new_w = int(orig_w * ratio)
-        new_h = int(orig_h * ratio)
-        img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-        left = (new_w - target_w) // 2
-        top = (new_h - target_h) // 2
-        result = img_resized.crop((left, top, left + target_w, top + target_h))
-    elif mode == "适应":
-        ratio = min(target_w / orig_w, target_h / orig_h)
-        new_w = int(orig_w * ratio)
-        new_h = int(orig_h * ratio)
-        img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-        result = Image.new("RGB", target_size, (0, 0, 0))
-        x_offset = (target_w - new_w) // 2
-        y_offset = (target_h - new_h) // 2
-        result.paste(img_resized, (x_offset, y_offset))
-    elif mode == "拉伸":
-        result = img.resize(target_size, Image.Resampling.LANCZOS)
-    elif mode == "居中":
-        result = Image.new("RGB", target_size, (0, 0, 0))
-        x_offset = (target_w - orig_w) // 2
-        y_offset = (target_h - orig_h) // 2
-        result.paste(img, (x_offset, y_offset))
-    elif mode == "平铺":
-        result = Image.new("RGB", target_size)
-        for x in range(0, target_w, orig_w):
-            for y in range(0, target_h, orig_h):
-                result.paste(img, (x, y))
-    else:
-        result = img.resize(target_size, Image.Resampling.LANCZOS)
-    return result
+# v1.4.6: 移除 apply_image_fit_mode —— 定义但零调用, 壁纸适应由系统层处理.
 
 
 def show_message(title, msg):
@@ -351,8 +323,6 @@ fit_var = None
 ctx_prev_var = None
 ctx_next_var = None
 ctx_random_var = None
-ctx_personalize_var = None
-ctx_file_wallpaper_var = None
 wallpaper_monitor_running = False
 wallpaper_monitor_last = None
 hotkey_running = False
@@ -361,7 +331,6 @@ preview_images_frame = None
 wallpaper_preview_labels = None
 folder_entry = None
 tray_icon_obj = None
-ctx_global_settings_var = None
 
 _message_loop_thread = None
 _session_wallpaper_lock = threading.RLock()
@@ -373,6 +342,168 @@ session_original_wallpaper_captured = False
 # 容易被旧会话、提权进程或其它实例污染；新版放入用户数据目录，并保留旧文件读取兼容。
 SESSION_WALLPAPER_FILE = os.path.join(DATA_DIR, "session_original_wallpaper.json")
 LEGACY_SESSION_WALLPAPER_FILE = os.path.join(tempfile.gettempdir(), "ShangBackground_session_wallpaper.json")
+
+def _pynput_hotkey_string(hotkey_str: str) -> str | None:
+    """Convert a 'Ctrl+Alt+N' style string into a pynput hotkey format.
+
+    Returns None if the string is invalid or lacks a modifier+key combination.
+    """
+    if not hotkey_str:
+        return None
+    parts: list[str] = [p.strip() for p in hotkey_str.replace("-", "+").split("+") if p.strip()]
+    if not parts:
+        return None
+    keys: list[str] = []
+    has_modifier = False
+    has_key = False
+    for p in parts:
+        low = p.lower()
+        if low in ("ctrl", "control"):
+            keys.append("<ctrl>")
+            has_modifier = True
+        elif low == "alt":
+            keys.append("<alt>")
+            has_modifier = True
+        elif low == "shift":
+            keys.append("<shift>")
+            has_modifier = True
+        elif low in ("win", "meta", "super", "cmd", "command"):
+            # On macOS use <cmd>, on Linux use <super>.
+            keys.append("<cmd>" if IS_MACOS else "<super>")
+            has_modifier = True
+        elif len(p) == 1 and p.isalpha():
+            keys.append(p.lower())
+            has_key = True
+        elif len(p) == 1 and p.isdigit():
+            keys.append(p)
+            has_key = True
+        elif p.upper().startswith("F") and p[1:].isdigit():
+            keys.append(p.lower())
+            has_key = True
+        else:
+            return None
+    if not has_modifier or not has_key:
+        return None
+    return "+".join(keys)
+
+def _on_pynput_global_hotkey(action: str):
+    """Execute a registered hotkey action without blocking pynput's listener."""
+    def _runner():
+        try:
+            log(f"全局热键触发: {action}")
+            action_map = {
+                "previous": previous_wallpaper,
+                "next": next_wallpaper,
+                "random": random_wallpaper,
+                "mode": lambda: switch_wallpaper_mode("next"),
+            }
+            fn = action_map.get(action)
+            if fn is not None:
+                fn()
+                try:
+                    save_config()
+                except Exception as exc:
+                    log(f"全局热键动作后保存配置失败({action}): {exc}")
+            elif action == "jump":
+                if root is not None and hasattr(root, "after"):
+                    root.after(0, lambda: _gui_open_wallpaper_sidebar())
+                else:
+                    log("无法触发跳转到壁纸：GUI 未就绪")
+            else:
+                log(f"未知的全局热键动作: {action}")
+        except Exception as exc:
+            log_error(f"全局热键动作执行失败({action})", exc)
+    threading.Thread(target=_runner, daemon=True, name=f"ShangBackgroundHotkeyAction-{action}").start()
+
+
+def refresh_global_hotkeys():
+    """Register global hotkeys only after the user explicitly opts in.
+
+    Linux/macOS use pynput instead of Win32 RegisterHotKey.  Keeping the same
+    default-off switch as Windows avoids silently installing keyboard hooks on
+    first launch and makes settings behavior consistent across all platforms.
+    """
+    global _pynput_hotkey_listener
+    if IS_WINDOWS:
+        return False
+
+    if _pynput_hotkey_listener is not None:
+        try:
+            _pynput_hotkey_listener.stop()
+        except Exception:
+            pass
+        _pynput_hotkey_listener = None
+
+    if not bool(config.get("global_hotkeys_enabled", False)):
+        log("全局热键未启用，已跳过系统级注册")
+        return False
+    if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
+        log("Wayland 全局热键需要 XDG GlobalShortcuts portal；当前 pynput 后端仅保证 X11 可行，已拒绝注册。")
+        return False
+    if _pynput_keyboard is None:
+        log("pynput 未安装，无法注册全局热键")
+        return False
+
+    combos: dict[str, callable] = {}
+    for action in ("previous", "next", "random", "jump", "mode"):
+        hotkey_str = str(config.get(f"hotkey_{action}", "") or "")
+        parsed = _pynput_hotkey_string(hotkey_str)
+        if parsed:
+            if parsed in combos:
+                log(f"全局热键重复，已忽略后续动作: {parsed} -> {action}")
+                continue
+            combos[parsed] = lambda act=action: _on_pynput_global_hotkey(act)
+    if not combos:
+        log("无有效的全局热键可注册（需要包含修饰键和非修饰键）")
+        return False
+    try:
+        listener = _pynput_keyboard.GlobalHotKeys(combos)
+        listener.daemon = True
+        listener.start()
+        _pynput_hotkey_listener = listener
+        log(f"已注册 {len(combos)} 个全局热键")
+        return True
+    except Exception as exc:
+        log(f"注册全局热键失败: {exc}")
+        return False
+
+
+
+def stop_global_hotkeys():
+    """Unregister global hotkeys and stop any listener."""
+    global _pynput_hotkey_listener
+    if not IS_WINDOWS:
+        if _pynput_hotkey_listener is not None:
+            try:
+                _pynput_hotkey_listener.stop()
+            except Exception:
+                pass
+            _pynput_hotkey_listener = None
+        return
+    pass
+
+def _gui_open_wallpaper_sidebar():
+    """在 GUI 线程打开壁纸跳转侧栏（由全局热键线程通过 root.after 调用）。"""
+    try:
+        if root is not None and hasattr(root, "window") and hasattr(root.window, "open_wallpaper_sidebar"):
+            root.window.open_wallpaper_sidebar()
+    except Exception as exc:
+        log(f"打开壁纸侧栏失败: {exc}")
+
+def _gui_switch_wallpaper_mode(target: str | None = "next") -> bool:
+    """在 GUI 线程切换壁纸模式；用于托盘、IPC 和全局热键。"""
+    try:
+        if root is not None and hasattr(root, "window"):
+            window = root.window
+            if target and str(target).lower() not in {"next", "cycle"} and hasattr(window, "switch_to_mode"):
+                window.switch_to_mode(str(target))
+                return True
+            if hasattr(window, "switch_to_next_mode"):
+                window.switch_to_next_mode()
+                return True
+    except Exception as exc:
+        log_error("gui switch wallpaper mode failed", exc)
+    return switch_wallpaper_mode(target or "next")
 
 
 def _platform_name() -> str:
@@ -626,6 +757,39 @@ def release_single_instance_mutex():
         log(f"释放单实例守卫失败: {e}")
 
 
+def _relaunch_command_parts(extra_args=None):
+    """Return (program, base_args) for relaunching this app.
+
+    v1.4.8: Nuitka 打包后 sys.executable 是编译后的二进制，sys.argv[0] 也是
+    同一个路径。直接用 [sys.executable, sys.argv[0]] 重启会把二进制自身路径
+    作为参数传给 argparse，导致重启失败。打包模式下应返回 (exe, [])。
+    """
+    if is_frozen():
+        candidates = [app_executable_path(), sys.executable, sys.argv[0] if sys.argv else ""]
+        for c in candidates:
+            c = os.path.abspath(os.path.expanduser(str(c or "")))
+            if c and os.path.isfile(c):
+                return c, []
+        return os.path.abspath(app_executable_path()), []
+    # source mode
+    return sys.executable, [os.path.abspath(sys.argv[0]) if sys.argv else os.path.join(BASE_DIR, "main.py")]
+
+
+def restart_application(extra_args=None):
+    """Restart the current app without requesting elevation."""
+    try:
+        executable, base_args = _relaunch_command_parts()
+        relaunch_args = [*base_args, *(str(arg) for arg in (extra_args or []))]
+        release_single_instance_mutex()
+        _cleanup_tray_icon_on_exit()
+        subprocess.Popen([executable, *relaunch_args], cwd=os.getcwd(), close_fds=True)
+        log(f"已请求普通重启: exe={executable}; args={relaunch_args}")
+        return True
+    except Exception as exc:
+        log(f"普通重启失败: {exc}", level="ERROR", exc_info=exc)
+        return False
+
+
 def restart_as_admin(extra_args=None):
     """以管理员身份重启当前应用。
 
@@ -635,8 +799,8 @@ def restart_as_admin(extra_args=None):
     否则新实例无法获取互斥体，且旧托盘图标会残留。
     """
     if not IS_WINDOWS:
-        log(t("非 Windows 平台，无法自动提权重启"))
-        return False
+        log(t("非 Windows 平台，改为普通重启"))
+        return restart_application(extra_args=extra_args)
     guard_released = False
     try:
         # 获取当前解释器路径和脚本路径。脚本运行时优先用 pythonw.exe，避免提权后出现控制台日志窗口。
@@ -836,7 +1000,13 @@ def activate_existing_instance(show_notice=True):
     1. 通过 WM_COPYDATA 发送 "show" 命令
     2. 使用 ShowWindow + SetForegroundWindow 强制前台显示
     3. 使用 AttachThreadInput 解决前台窗口锁定问题
+
+    Note: 该函数仅 Windows 可用（依赖 ``ctypes.windll``）。Linux/MacOS 上
+    单实例检测由 ``core.single_instance`` 模块负责，不会走到这里；此处
+    显式 return 0 防止任何意外调用路径触发 ``AttributeError``。
     """
+    if not IS_WINDOWS:
+        return False
     existing = find_existing_main_window(timeout=5.0)
     activated = False
     if existing:
@@ -905,10 +1075,17 @@ def _history_key(path: str) -> str:
 def _normalize_wallpaper_path(path: str) -> str:
     if not path:
         return ""
+    # 如果是 HTTP/HTTPS URL，直接返回原始字符串
     try:
-        return os.path.abspath(os.path.expanduser(str(path)))
+        s = str(path)
     except Exception:
-        return str(path)
+        s = path
+    if isinstance(s, str) and s.lower().startswith(("http://", "https://")):
+        return s
+    try:
+        return os.path.abspath(os.path.expanduser(s))
+    except Exception:
+        return s
 
 
 def dedupe_wallpaper_history(history, *, keep_missing: bool = True, limit: int = 50):
@@ -951,6 +1128,12 @@ def get_default_config() -> dict:
         "video_file": "",
         "video_muted": True,
         "video_volume": 100,  # 0-100, only effective when video_muted is False
+        "video_focus_behavior": "none",  # none / pause / duck when foreground is not desktop
+        "video_focus_duck_volume": 20,
+        "html_file": "",
+        "html_auto_pause": True,
+        "html_gpu_enabled": True,
+        "html_mouse_through": True,
         "shuffle": False,
         "fit_mode": "填充",
         "single_image": "",
@@ -961,25 +1144,43 @@ def get_default_config() -> dict:
         "current_wallpaper": "",
         "slideshow_last_wallpaper": "",
         "history": [],
+        "favorites": [],  # v1.4.7: 收藏的壁纸路径列表 (用户主动收藏, 不随历史滚动消失)
         "auto_start": False,
         "ctx_last_wallpaper": False,
         "ctx_next_wallpaper": False,
         "ctx_random_wallpaper": False,
-        "ctx_personalize": False,
         "ctx_jump_to_wallpaper": False,
-        "ctx_global_settings": False,
-        "ctx_set_wallpaper": False,
-        "hotkey_previous": "U",
-        "hotkey_next": "N",
-        "hotkey_random": "3",
-        "hotkey_jump": "V",
+        "hotkey_previous": "Ctrl+Alt+U",
+        "hotkey_next": "Ctrl+Alt+N",
+        "hotkey_random": "Ctrl+Alt+R",
+        "hotkey_jump": "Ctrl+Alt+J",
+        # Keep the same opt-in contract as Windows.  Focus guarding is a
+        # Windows-only implementation detail, but the key is retained so a
+        # shared settings file remains forward/backward compatible.
+        "hotkey_focus_guard": False,
+        "global_hotkeys_enabled": False,
+        "app_shortcuts_enabled": True,
+        "app_shortcuts": {
+            # 应用内热键（QShortcut，仅在主窗口获得焦点时生效）。
+            # 与 hotkey_* 全局热键（Ctrl+Alt+...）互补：前者用于"主窗口
+            # 激活时"的快速操作，后者用于"任何应用前台时"的全局触发。
+            # 留空字符串禁用对应快捷键。
+            "previous":     "PgUp",
+            "next":         "PgDown",
+            "random":       "R",
+            "bing":         "F5",
+            "settings":     "Ctrl+,",
+            "exit":         "Ctrl+Q",
+            "hide_to_tray": "Esc",
+        },
         "recent_folders": [],
         "run_in_background": True,  # 默认后台运行
         "tray_icon": True,  # 默认托盘图标
         "tray_click_action": "next",
         "tray_menu_items": ["show", "previous", "next", "random", "bing", "jump", "about", "exit"],
         "dark_mode": False,
-        "performance_mode": False,
+        "performance_mode": False,  # 向后兼容: 旧版布尔开关. v1.4.6 起用 performance_level 三档.
+        "performance_level": "balanced",  # v1.4.6: 三档性能模式 "power_saver" / "balanced" / "performance"
         "silent_update_check_on_startup": True,
         "bing_cache_dir": "",
         "bing_sync_count": 1,
@@ -994,6 +1195,8 @@ def get_default_config() -> dict:
         "ignored_version": "",  # 用户选择忽略的版本号
         "app_theme": "default",  # 默认使用 Qt/系统原生样式
         "font_path": "",
+        "font_weight": "normal",  # v1.4.7: 字体粗细 "normal" / "medium" / "bold"
+        "font_size": 0,  # v1.4.7: 字体大小 (0 = 跟随系统默认, 否则 px)
         "dpi_scale": 1.0,
         "language": "zh",
     }
@@ -1033,14 +1236,79 @@ def load_config():
                     new_items = [item["action"] for item in data["tray_menu_items"]]
                     data["tray_menu_items"] = new_items
                     converted = True
-            # 迁移右键菜单配置。
+            if isinstance(data.get("tray_menu_items"), list) and "mode" not in data["tray_menu_items"]:
+                try:
+                    _insert_at = data["tray_menu_items"].index("random") + 1
+                except ValueError:
+                    _insert_at = len(data["tray_menu_items"])
+                data["tray_menu_items"].insert(_insert_at, "mode")
+                converted = True
+            # 迁移右键菜单配置：旧版“全局设置/个性化/设置为壁纸”入口已移除。
             if "ctx_jump_to_wallpaper" not in data:
                 data["ctx_jump_to_wallpaper"] = bool(data.get("ctx_global_settings", False))
                 converted = True
-            data["ctx_personalize"] = False
-            data["ctx_global_settings"] = False
-            data["ctx_set_wallpaper"] = False
-            for _key, _default in {"hotkey_previous": "U", "hotkey_next": "N", "hotkey_random": "3", "hotkey_jump": "V"}.items():
+            for _stale_ctx_key in ("ctx_personalize", "ctx_global_settings", "ctx_set_wallpaper"):
+                if _stale_ctx_key in data:
+                    data.pop(_stale_ctx_key, None)
+                    converted = True
+            for _key, _default in {"hotkey_previous": "Ctrl+Alt+U", "hotkey_next": "Ctrl+Alt+N", "hotkey_random": "Ctrl+Alt+R", "hotkey_jump": "Ctrl+Alt+J"}.items():
+                if _key not in data:
+                    data[_key] = _default
+                    converted = True
+            if "hotkey_focus_guard" not in data:
+                data["hotkey_focus_guard"] = False
+                converted = True
+            if "global_hotkeys_enabled" not in data:
+                data["global_hotkeys_enabled"] = False
+                converted = True
+            # v1.4.7: 应用内热键功能已彻底移除. app_shortcuts_enabled 配置键
+            # 保留向后兼容 (旧 settings.json 不报错), 但不再有任何功能.
+            # 清理 v1.4.6 遗留的 _app_sc_user_disabled_v146 标记键 (writer 已删).
+            if "app_shortcuts_enabled" not in data:
+                data["app_shortcuts_enabled"] = True
+                converted = True
+            if "_app_sc_user_disabled_v146" in data:
+                data.pop("_app_sc_user_disabled_v146", None)
+                converted = True
+            # v1.4.6: 迁移 performance_mode 布尔到 performance_level 三档.
+            if "performance_level" not in data:
+                if data.get("performance_mode"):
+                    data["performance_level"] = "performance"
+                else:
+                    data["performance_level"] = "balanced"
+                converted = True
+            else:
+                _pl = str(data.get("performance_level", "balanced")).lower()
+                if _pl not in ("power_saver", "balanced", "performance"):
+                    data["performance_level"] = "balanced"
+                    converted = True
+
+            # 应用内热键（QShortcut）—— 三端同步
+            _app_sc_default = {
+                "previous":     "PgUp",
+                "next":         "PgDown",
+                "random":       "R",
+                "bing":         "F5",
+                "settings":     "Ctrl+,",
+                "exit":         "Ctrl+Q",
+                "hide_to_tray": "Esc",
+            }
+            if not isinstance(data.get("app_shortcuts"), dict):
+                data["app_shortcuts"] = dict(_app_sc_default)
+                converted = True
+            else:
+                for _sc_key, _sc_default in _app_sc_default.items():
+                    if _sc_key not in data["app_shortcuts"]:
+                        data["app_shortcuts"][_sc_key] = _sc_default
+                        converted = True
+            for _key, _default in {
+                "video_focus_behavior": "none",
+                "video_focus_duck_volume": 20,
+                "html_file": "",
+                "html_auto_pause": True,
+                "html_gpu_enabled": True,
+                "html_mouse_through": True,
+            }.items():
                 if _key not in data:
                     data[_key] = _default
                     converted = True
@@ -1059,15 +1327,36 @@ def load_config():
             if "font_path" not in data:
                 data["font_path"] = ""
                 converted = True
+            # v1.4.7: 字体粗细和大小
+            if "font_weight" not in data:
+                data["font_weight"] = "normal"
+                converted = True
+            else:
+                _fw = str(data.get("font_weight", "normal")).lower()
+                if _fw not in ("normal", "medium", "bold"):
+                    data["font_weight"] = "normal"
+                    converted = True
+            if "font_size" not in data or not isinstance(data.get("font_size"), (int, float)):
+                data["font_size"] = 0
+                converted = True
+            else:
+                try:
+                    _fs = int(data.get("font_size", 0))
+                    if _fs < 0 or _fs > 48:
+                        data["font_size"] = 0
+                        converted = True
+                    else:
+                        data["font_size"] = _fs
+                except Exception:
+                    data["font_size"] = 0
+                    converted = True
             if "dpi_scale" not in data:
                 data["dpi_scale"] = 1.0
                 converted = True
             if "language" not in data:
                 data["language"] = "zh"
                 converted = True
-            if "font_size" in data:
-                data.pop("font_size", None)
-                converted = True
+            # v1.4.7: font_size 现在是新功能的合法 key (0=系统默认, 否则 px). 不再 pop.
             if str(data.get("solid_color", "")).lower() in {"#4facfe", "#2d2d2d"}:
                 data["solid_color"] = "#ffffff"
                 converted = True
@@ -1097,6 +1386,22 @@ def load_config():
             if cleaned_history != data.get("history", []):
                 data["history"] = cleaned_history
                 converted = True
+            # v1.4.7: 收藏夹初始化 + 去重
+            if "favorites" not in data or not isinstance(data.get("favorites"), list):
+                data["favorites"] = []
+                converted = True
+            else:
+                _fav = data.get("favorites", [])
+                _fav_clean = []
+                _seen_fav = set()
+                for _f in _fav:
+                    _fpath = str(_f or "").strip()
+                    if _fpath and _fpath not in _seen_fav:
+                        _seen_fav.add(_fpath)
+                        _fav_clean.append(_fpath)
+                if len(_fav_clean) != len(_fav):
+                    data["favorites"] = _fav_clean
+                    converted = True
             if data.get("current_wallpaper"):
                 normalized_current = _normalize_wallpaper_path(data.get("current_wallpaper", ""))
                 if normalized_current != data.get("current_wallpaper"):
@@ -1162,6 +1467,12 @@ def save_config():
                 config["tray_click_action"] = "next"
             if "tray_menu_items" not in config:
                 config["tray_menu_items"] = ["show", "previous", "next", "random", "bing", "jump", "about", "exit"]
+            if isinstance(config.get("tray_menu_items"), list) and "mode" not in config["tray_menu_items"]:
+                try:
+                    _insert_at = config["tray_menu_items"].index("random") + 1
+                except ValueError:
+                    _insert_at = len(config["tray_menu_items"])
+                config["tray_menu_items"].insert(_insert_at, "mode")
             if "log_enabled" not in config:
                 config["log_enabled"] = False
             if "log_file_path" not in config:
@@ -1178,18 +1489,63 @@ def save_config():
                 config["theme_color"] = DEFAULT_THEME_COLOR
             if "font_path" not in config:
                 config["font_path"] = ""
+            # v1.4.7: 字体粗细和大小规范化 (see below)
             if "dpi_scale" not in config:
                 config["dpi_scale"] = 1.0
             try:
                 config["dpi_scale"] = max(0.75, min(2.0, float(config.get("dpi_scale", 1.0))))
             except Exception:
                 config["dpi_scale"] = 1.0
-            config.pop("font_size", None)
+            # v1.4.7: 字体粗细和大小规范化
+            _fw_save = str(config.get("font_weight", "normal")).lower()
+            if _fw_save not in ("normal", "medium", "bold"):
+                _fw_save = "normal"
+            config["font_weight"] = _fw_save
+            try:
+                _fs_save = int(config.get("font_size", 0))
+                config["font_size"] = max(0, min(48, _fs_save))
+            except Exception:
+                config["font_size"] = 0
+            # v1.4.7: 不再 pop font_size (现在是新功能的合法 key, 0=跟随系统).
             config["ctx_jump_to_wallpaper"] = bool(config.get("ctx_jump_to_wallpaper", config.get("ctx_global_settings", False)))
-            config["ctx_global_settings"] = False
-            config["ctx_personalize"] = False
-            config["ctx_set_wallpaper"] = False
-            for _key, _default in {"hotkey_previous": "U", "hotkey_next": "N", "hotkey_random": "3", "hotkey_jump": "V"}.items():
+            for _stale_ctx_key in ("ctx_personalize", "ctx_global_settings", "ctx_set_wallpaper"):
+                config.pop(_stale_ctx_key, None)
+            for _key, _default in {"hotkey_previous": "Ctrl+Alt+U", "hotkey_next": "Ctrl+Alt+N", "hotkey_random": "Ctrl+Alt+R", "hotkey_jump": "Ctrl+Alt+J"}.items():
+                config.setdefault(_key, _default)
+            config["hotkey_focus_guard"] = bool(config.get("hotkey_focus_guard", False))
+            config["global_hotkeys_enabled"] = bool(config.get("global_hotkeys_enabled", False))
+            config["app_shortcuts_enabled"] = bool(config.get("app_shortcuts_enabled", True))
+            # v1.4.6: 规范化 performance_level, 同步旧 performance_mode 布尔
+            _pl = str(config.get("performance_level", "balanced")).lower()
+            if _pl not in ("power_saver", "balanced", "performance"):
+                _pl = "balanced"
+            config["performance_level"] = _pl
+            config["performance_mode"] = (_pl == "performance")
+
+            # 应用内热键（QShortcut）—— 三端同步
+            _app_sc_default = {
+                "previous":     "PgUp",
+                "next":         "PgDown",
+                "random":       "R",
+                "bing":         "F5",
+                "settings":     "Ctrl+,",
+                "exit":         "Ctrl+Q",
+                "hide_to_tray": "Esc",
+            }
+            if not isinstance(config.get("app_shortcuts"), dict):
+                config["app_shortcuts"] = dict(_app_sc_default)
+            else:
+                for _sc_key, _sc_default in _app_sc_default.items():
+                    if _sc_key not in config["app_shortcuts"]:
+                        config["app_shortcuts"][_sc_key] = _sc_default
+            for _key, _default in {
+                "video_focus_behavior": "none",
+                "video_focus_duck_volume": 20,
+                "html_file": "",
+                "html_auto_pause": True,
+                "html_gpu_enabled": True,
+                "html_mouse_through": True,
+            }.items():
                 config.setdefault(_key, _default)
             if config.get("bing_cache_dir") is None:
                 config["bing_cache_dir"] = ""
@@ -1209,6 +1565,18 @@ def save_config():
             except Exception:
                 config["bing_next_index"] = 0
             config["history"] = dedupe_wallpaper_history(config.get("history", []), keep_missing=True)
+            # v1.4.7: 收藏夹规范化 (去重, 保留顺序, 限 200 条)
+            _fav_save = config.get("favorites", [])
+            if not isinstance(_fav_save, list):
+                _fav_save = []
+            _fav_seen = set()
+            _fav_out = []
+            for _f in _fav_save:
+                _fp = str(_f or "").strip()
+                if _fp and _fp not in _fav_seen:
+                    _fav_seen.add(_fp)
+                    _fav_out.append(_fp)
+            config["favorites"] = _fav_out[:200]
             if config.get("current_wallpaper"):
                 config["current_wallpaper"] = _normalize_wallpaper_path(config.get("current_wallpaper", ""))
             if config.get("slideshow_last_wallpaper"):
@@ -1230,49 +1598,14 @@ def save_config():
 
 
 # 配置文件写入线程锁，避免多线程并发写入导致数据损坏
-_config_lock = threading.Lock()
+_config_lock = threading.RLock()
 
 
 _IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".gif")
 _VIDEO_EXTENSIONS = (".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm")
 _TRANSITION_TEMP_DIR = os.path.join(DATA_DIR, "transition_frames")
 
-
-def _normalize_transition_effect(value: str | None) -> str:
-    text = str(value or "fade").strip().lower().replace("-", "_").replace(" ", "_")
-    aliases = {
-        "": "fade", "none": "none", "off": "none", "frame": "fade", "frames": "fade", "qt": "fade",
-        "fade": "fade", "淡入淡出": "fade", "slide": "slide", "滑动": "slide",
-        "zoom": "zoom", "缩放": "zoom", "fade_slide": "fade_slide", "淡入滑动": "fade_slide",
-        "fade_zoom": "fade_zoom", "淡入缩放": "fade_zoom",
-    }
-    return aliases.get(text, "fade")
-
-
-def _normalize_transition_direction(value: str | None) -> str:
-    text = str(value or "right").strip().lower()
-    aliases = {
-        "left": "left", "从左": "left", "right": "right", "从右": "right",
-        "up": "up", "top": "up", "从上": "up", "down": "down", "bottom": "down", "从下": "down",
-        "center": "center", "centre": "center", "中央": "center",
-    }
-    return aliases.get(text, "right")
-
-
-def _transition_offset(size: tuple[int, int], direction: str, progress: float) -> tuple[int, int]:
-    w, h = size
-    remain = max(0.0, min(1.0, 1.0 - progress))
-    direction = _normalize_transition_direction(direction)
-    if direction == "left":
-        return (-int(w * remain), 0)
-    if direction == "right":
-        return (int(w * remain), 0)
-    if direction == "up":
-        return (0, -int(h * remain))
-    if direction == "down":
-        return (0, int(h * remain))
-    return (0, 0)
-
+# v1.4.6: 移除 _normalize_transition_effect/direction/_transition_offset —— 过渡动画功能被强制禁用后的残留死代码.
 
 config = load_config()
 
@@ -1288,6 +1621,8 @@ slide_timer = None
 slide_timer_lock = threading.Lock()
 slide_enabled = False
 slide_images = []
+_slide_images_index_cache: dict[str, tuple[int, str]] = {}
+_slide_images_index_signature: tuple[int, str, str] | None = None
 
 last_wallpaper_change_time = None
 operation_cancel_event = threading.Event()
@@ -1332,6 +1667,15 @@ def _execute_ipc_wallpaper_command(command: str) -> bool:
         if os.path.isfile(target):
             log(f"侧边栏请求切换壁纸: {target}")
             set_wallpaper(target, "侧边栏切换")
+        return True
+    if command == "jump":
+        if root is not None and hasattr(root, "after"):
+            try:
+                root.after(0, _gui_open_wallpaper_sidebar)
+                return True
+            except Exception as exc:
+                log_error("ipc: jump command schedule failed", exc)
+        _gui_open_wallpaper_sidebar()
         return True
     return False
 
@@ -1385,19 +1729,56 @@ overlay_image = None
 _wallpaper_query_last_error = ""
 _wallpaper_query_last_log_time = 0.0
 _WALLPAPER_QUERY_ERROR_LOG_INTERVAL = 20.0
+# Bug 7 fix: 30-second cache for get_current_wallpaper() so the GUI preview
+# polling timer (every 1200ms on balanced) doesn't spawn a `qdbus6` subprocess
+# on every tick.  Linux/KDE qdbus6 calls take ~100-300ms each; without this
+# cache, the GUI thread can be blocked for ~10-25% of the time just querying
+# the current wallpaper.  The cache is invalidated by set_wallpaper_direct on
+# success, so a freshly-applied wallpaper shows up immediately.
+_CACHED_CURRENT_WALLPAPER: str = ""
+_CACHED_CURRENT_WALLPAPER_AT: float = 0.0
+_CURRENT_WALLPAPER_CACHE_TTL = 30.0  # seconds
 
 
+def _invalidate_current_wallpaper_cache() -> None:
+    """Clear the 30s get_current_wallpaper cache.
 
-def get_current_wallpaper():
+    Called by set_wallpaper_direct() on success so the next preview poll picks
+    up the new wallpaper immediately instead of returning the stale cached
+    value.
+    """
+    global _CACHED_CURRENT_WALLPAPER, _CACHED_CURRENT_WALLPAPER_AT
+    _CACHED_CURRENT_WALLPAPER = ""
+    _CACHED_CURRENT_WALLPAPER_AT = 0.0
+
+
+def get_current_wallpaper(*, use_cache: bool = True):
     """获取当前系统壁纸路径。
 
     Some desktop environments expose dynamic wallpaper providers or empty paths.
     Throttle repeated failures so preview polling does not flood the GUI log.
+
+    Bug 7 fix: 当 ``use_cache=True``（默认）时，如果距上次成功查询不到 30s，
+    直接返回缓存值，避免在 GUI 线程的预览轮询定时器里反复 spawn qdbus6。
+    ``set_wallpaper_direct`` 成功后会调用 ``_invalidate_current_wallpaper_cache``
+    立即清缓存，所以新设置的壁纸不会被缓存掩盖。
     """
     global _wallpaper_query_last_error, _wallpaper_query_last_log_time
+    global _CACHED_CURRENT_WALLPAPER, _CACHED_CURRENT_WALLPAPER_AT
+    # Bug 7 fix: serve from cache when fresh.
+    if use_cache and _CACHED_CURRENT_WALLPAPER:
+        now = time.monotonic()
+        if now - _CACHED_CURRENT_WALLPAPER_AT < _CURRENT_WALLPAPER_CACHE_TTL:
+            return _CACHED_CURRENT_WALLPAPER
     try:
         path = get_current_wallpaper_platform()
         _wallpaper_query_last_error = ""
+        # Bug 7 fix: only cache non-empty successful reads.  Empty reads
+        # (KDE slideshow plugin returns empty Image) shouldn't be cached
+        # because they may resolve to a real path moments later.
+        if path and use_cache:
+            _CACHED_CURRENT_WALLPAPER = path
+            _CACHED_CURRENT_WALLPAPER_AT = time.monotonic()
         return path
     except Exception as e:
         message = str(e)
@@ -1418,17 +1799,68 @@ def push_wallpaper(path, *, update_current: bool = True, refresh_preview: bool =
     path = _normalize_wallpaper_path(path)
     if not path or not os.path.isfile(path):
         return
-    hist = dedupe_wallpaper_history(config.get("history", []), keep_missing=True)
-    path_key = _history_key(path)
-    hist = [p for p in hist if _history_key(p) != path_key]
-    hist.insert(0, path)
-    config["history"] = hist[:50]
-    if update_current:
-        config["current_wallpaper"] = path
-    save_config()
-    log("已记录壁纸: " + os.path.basename(path) + " | 历史总数: " + str(len(config.get("history", []))))
-    if refresh_preview and root and canvas:
-        root.after(0, lambda: update_preview(path))
+    with _config_lock:
+        hist = dedupe_wallpaper_history(config.get("history", []), keep_missing=True)
+        path_key = _history_key(path)
+        hist = [p for p in hist if _history_key(p) != path_key]
+        hist.insert(0, path)
+        config["history"] = hist[:50]
+        if update_current:
+            config["current_wallpaper"] = path
+        history_len = len(config.get("history", []))
+        save_config()
+    log("已记录壁纸: " + os.path.basename(path) + " | 历史总数: " + str(history_len))
+    if refresh_preview:
+        _queue_ui_preview_update(path)
+
+
+
+def _queue_ui_preview_update(path: str | None = None) -> None:
+    """Queue a main-window preview refresh without relying on the legacy Tk canvas."""
+    try:
+        if root is None or not hasattr(root, "after"):
+            return
+        def _refresh():
+            try:
+                window = getattr(root, "window", None)
+                if window is not None and hasattr(window, "update_preview"):
+                    window.update_preview()
+                else:
+                    update_preview(path or config.get("current_wallpaper", ""))
+            except Exception as exc:
+                log(f"刷新预览失败: {exc}")
+        root.after(0, _refresh)
+    except Exception as exc:
+        log(f"无法排队刷新预览: {exc}")
+
+
+def _slideshow_index_map(images=None) -> dict[str, tuple[int, str]]:
+    """Return a cached path-key -> (index, path) map for the current slideshow list."""
+    global _slide_images_index_cache, _slide_images_index_signature
+    candidates = images if images is not None else slide_images
+    if not candidates:
+        return {}
+    try:
+        signature = (len(candidates), _history_key(candidates[0]), _history_key(candidates[-1]))
+    except Exception:
+        signature = (len(candidates), "", "")
+    if images is None and signature == _slide_images_index_signature and _slide_images_index_cache:
+        return _slide_images_index_cache
+    mapping: dict[str, tuple[int, str]] = {}
+    for idx, img in enumerate(candidates):
+        key = _history_key(img)
+        if key and key not in mapping:
+            mapping[key] = (idx, _normalize_wallpaper_path(img))
+    if images is None:
+        _slide_images_index_signature = signature
+        _slide_images_index_cache = mapping
+    return mapping
+
+
+def _invalidate_slideshow_index_cache() -> None:
+    global _slide_images_index_cache, _slide_images_index_signature
+    _slide_images_index_cache = {}
+    _slide_images_index_signature = None
 
 
 def _find_wallpaper_in_slideshow_images(path: str, images=None) -> str:
@@ -1436,12 +1868,8 @@ def _find_wallpaper_in_slideshow_images(path: str, images=None) -> str:
     path = _normalize_wallpaper_path(path or "")
     if not path:
         return ""
-    candidates = images if images is not None else slide_images
-    target_key = _history_key(path)
-    for img in candidates or []:
-        if _history_key(img) == target_key:
-            return _normalize_wallpaper_path(img)
-    return ""
+    item = _slideshow_index_map(images).get(_history_key(path))
+    return item[1] if item else ""
 
 
 def _remember_slideshow_wallpaper(path: str, *, persist: bool = False) -> bool:
@@ -1468,8 +1896,96 @@ def _remember_slideshow_wallpaper(path: str, *, persist: bool = False) -> bool:
     return True
 
 
-def set_wallpaper_direct(path, operation_name="系统", skip_history=False, previous_path: str | None = None):
-    """直接设置壁纸到系统，区分 OSError 和通用异常。"""
+def switch_wallpaper_mode(target: str | None = "next") -> bool:
+    """Cycle to the next wallpaper mode or switch to a specific mode.
+
+    The public UI shows HTML as “网页”, while config stores the canonical
+    internal key "HTML". This helper normalizes aliases so tray, global hotkey,
+    Windows desktop context menu and command-line entry points behave the same
+    on all platforms.
+    """
+    try:
+        order: list[str] = []
+        for item in MODE_KEYS:
+            key = normalize_mode_key(item)
+            if key and key not in order:
+                order.append(key)
+        if "HTML" not in order:
+            order.append("HTML")
+        raw_target = str(target or "next").strip()
+        if raw_target.lower() in {"next", "cycle"}:
+            current = normalize_mode_key(config.get("mode"))
+            try:
+                index = order.index(current)
+            except ValueError:
+                index = -1
+            mode_key = order[(index + 1) % len(order)]
+        else:
+            mode_key = normalize_mode_key(raw_target)
+        if mode_key not in order:
+            mode_key = normalize_mode_key(mode_key)
+        config["mode"] = mode_key
+        save_config()
+
+        if mode_key == "幻灯片放映":
+            stop_video_wallpaper()
+            folder = config.get("slide_folder")
+            if folder and os.path.isdir(folder):
+                return bool(restart_slideshow())
+            return True
+        if mode_key == "图片":
+            stop_slideshow()
+            stop_video_wallpaper()
+            image = config.get("single_image")
+            if image and os.path.exists(image):
+                return bool(set_wallpaper(image, t("切换单张图片模式")))
+            return True
+        if mode_key == "视频":
+            stop_slideshow()
+            video = config.get("video_file")
+            if video and os.path.exists(video):
+                return bool(start_video_wallpaper(video))
+            stop_video_wallpaper()
+            return True
+        if mode_key == "HTML":
+            stop_slideshow()
+            stop_video_wallpaper()
+            path = config.get("html_file") or config.get("html_url") or ""
+            if path:
+                return bool(start_html_wallpaper(path))
+            try:
+                stop_html_wallpaper()
+            except Exception:
+                pass
+            return True
+        if mode_key == "纯色":
+            stop_slideshow()
+            stop_video_wallpaper()
+            return bool(apply_solid())
+        if mode_key == "渐变":
+            stop_slideshow()
+            stop_video_wallpaper()
+            return bool(apply_gradient())
+        return True
+    except Exception as exc:
+        log_error("switch wallpaper mode failed", exc)
+        return False
+
+
+def set_wallpaper_direct(path, operation_name="系统", skip_history=False, previous_path: str | None = None, progress_cb=None):
+    """直接设置壁纸到系统，区分 OSError 和通用异常。
+
+    Bug 7 fix: 新增 ``progress_cb`` 参数 — 一个可选的
+    ``Callable[[str, float], None]``，用于在壁纸应用的不同阶段回调
+    状态文本和进度百分比。这让 Bing 同步等长时间操作能在应用阶段
+    （不只是下载阶段）更新进度条，避免"同步一张后卡进度条"的视觉假死。
+
+    回调签名: ``progress_cb(status_text: str, percent: float)``
+    - ``"正在应用适应方式…"``, 0.2
+    - ``"正在设置壁纸…"``, 0.5
+    - ``"正在刷新桌面…"``, 0.85
+    - ``"完成"``, 1.0
+    """
     global last_operation_error
     if is_operation_cancelled():
         log("壁纸操作已在开始前终止")
@@ -1480,16 +1996,28 @@ def set_wallpaper_direct(path, operation_name="系统", skip_history=False, prev
         log("壁纸文件不存在: " + path)
         last_operation_error = "壁纸文件不存在: " + path
         return False
+
+    def _emit(status: str, percent: float) -> None:
+        if progress_cb is not None:
+            try:
+                progress_cb(status, percent)
+            except Exception:
+                pass
+
     try:
         if normalize_mode_key(config.get("mode")) != "视频" and is_video_wallpaper_running():
+            _emit("正在停止视频壁纸…", 0.1)
             stop_video_wallpaper()
         fit_mode = config.get("fit_mode", "填充")
+        _emit("正在应用适应方式…", 0.2)
         configure_fit_mode(fit_mode, winreg, log)
         if is_operation_cancelled():
             log("壁纸操作已终止，跳过系统壁纸设置")
             last_operation_error = "壁纸操作已终止，跳过系统壁纸设置"
             return False
+        _emit("正在设置壁纸…", 0.5)
         set_wallpaper_platform(path)
+        _emit("正在刷新桌面…", 0.85)
         try:
             refresh_shell_ui()
         except Exception:
@@ -1500,10 +2028,14 @@ def set_wallpaper_direct(path, operation_name="系统", skip_history=False, prev
             save_config()
         log("设置壁纸成功: " + os.path.basename(path))
         log_time_diff(operation_name, path)
-        if root and canvas:
-            root.after(0, lambda: update_preview(path))
+        _queue_ui_preview_update(path)
         # 成功路径：清空最近一次操作错误，避免下次失败时显示陈旧原因
         last_operation_error = ""
+        _emit("完成", 1.0)
+        # Bug 7 fix: invalidate the get_current_wallpaper cache so the next
+        # preview poll picks up the new wallpaper immediately instead of
+        # returning the stale cached value for up to 30s.
+        _invalidate_current_wallpaper_cache()
         return True
     except OSError as e:
         log("设置壁纸失败（系统错误）: " + str(e))
@@ -1631,7 +2163,7 @@ def restore_session_original_wallpaper(stop_video: bool = True):
         return False
 
 
-def set_wallpaper(path, operation_name="用户"):
+def set_wallpaper(path, operation_name="用户", progress_cb=None):
     if is_operation_cancelled():
         log("壁纸操作已终止")
         return False
@@ -1639,7 +2171,7 @@ def set_wallpaper(path, operation_name="用户"):
     if not os.path.isfile(path):
         return False
     previous_path = config.get("current_wallpaper") or get_current_wallpaper()
-    success = set_wallpaper_direct(path, operation_name, skip_history=True, previous_path=previous_path)
+    success = set_wallpaper_direct(path, operation_name, skip_history=True, previous_path=previous_path, progress_cb=progress_cb)
     if success:
         _remember_slideshow_wallpaper(path, persist=False)
         push_wallpaper(path, update_current=True, refresh_preview=False)
@@ -1648,14 +2180,16 @@ def set_wallpaper(path, operation_name="用户"):
 
 def previous_wallpaper():
     """切换到上一张壁纸，支持历史记录回退。"""
-    hist = dedupe_wallpaper_history(config.get("history", []), keep_missing=False)
-    config["history"] = hist[:50]
+    global last_operation_error
+    with _config_lock:
+        hist = dedupe_wallpaper_history(config.get("history", []), keep_missing=False)
+        config["history"] = hist[:50]
     log("当前历史: " + str([os.path.basename(p) for p in hist[:5]]) + ("..." if len(hist) > 5 else ""))
     if len(hist) < 2:
         log("没有上一张壁纸")
-        show_message(t("提示喵"), t("没有上一张壁纸"))
-        log("=" * 50)
-        return
+        # 不能在 worker 线程弹 QMessageBox（会导致 GUI 未响应）。
+        last_operation_error = t("没有上一张壁纸")
+        raise RuntimeError(last_operation_error)
     found = None
     for p in hist[1:]:
         if os.path.exists(p):
@@ -1665,13 +2199,14 @@ def previous_wallpaper():
             log("历史壁纸文件丢失: " + p)
     if found is None:
         log("历史壁纸文件都已丢失")
-        show_message(t("错误"), t("历史壁纸文件已丢失"))
-        log("=" * 50)
-        return
+        last_operation_error = t("历史壁纸文件已丢失")
+        raise RuntimeError(last_operation_error)
     found_key = _history_key(found)
-    new_hist = [found] + [p for p in hist if _history_key(p) != found_key]
-    config["history"] = dedupe_wallpaper_history(new_hist, keep_missing=True)[:50]
-    save_config()
+    with _config_lock:
+        latest_hist = dedupe_wallpaper_history(config.get("history", hist), keep_missing=False)
+        new_hist = [found] + [p for p in latest_hist if _history_key(p) != found_key]
+        config["history"] = dedupe_wallpaper_history(new_hist, keep_missing=True)[:50]
+        save_config()
     log("回退到: " + os.path.basename(found))
     success = set_wallpaper(found, "右键菜单(上一张)")
     if success and normalize_mode_key(config.get("mode")) == "幻灯片放映":
@@ -1683,39 +2218,61 @@ def previous_wallpaper():
 
 
 def next_wallpaper():
-    """切换到下一张壁纸，根据当前模式选择顺序或随机切换。"""
-    if normalize_mode_key(config.get("mode")) != "幻灯片放映":
+    """切换到下一张壁纸，根据当前模式选择顺序或随机切换。
+
+    HTML 模式下"下一张"重新加载当前 HTML 壁纸（相当于刷新页面）；
+    其他非幻灯片模式（图片/视频/纯色/渐变）下抛 RuntimeError 提示
+    用户切到幻灯片放映模式。
+    """
+    global last_operation_error
+    current_mode = normalize_mode_key(config.get("mode"))
+    # HTML 模式：刷新当前 HTML 壁纸（重启子进程 = 重新加载页面）
+    if current_mode == "HTML":
+        html_path = config.get("html_file", "")
+        if not html_path:
+            last_operation_error = t("当前没有 HTML 壁纸可刷新")
+            raise RuntimeError(last_operation_error)
+        log("HTML 模式：刷新 HTML 壁纸")
+        try:
+            if is_html_wallpaper_running():
+                return restart_html_wallpaper(html_path)
+            return start_html_wallpaper(html_path)
+        except Exception as exc:
+            last_operation_error = str(exc) or t("刷新 HTML 壁纸失败")
+            raise RuntimeError(last_operation_error) from exc
+    if current_mode != "幻灯片放映":
         log("当前模式不是幻灯片放映，无法使用下一张功能")
-        show_message(t("提示喵"), t("请在幻灯片放映模式下使用此功能"))
-        log("=" * 50)
-        return
+        # 不能在 worker 线程弹 QMessageBox（会导致 GUI 未响应）。
+        # 改为抛 RuntimeError，由 GUI 线程的 _on_core_finished 统一显示。
+        last_operation_error = t("请在幻灯片放映模式下使用此功能")
+        raise RuntimeError(last_operation_error)
     global slide_images
     if not slide_images:
         folder = config["slide_folder"]
         if folder and os.path.isdir(folder):
-            images = [os.path.join(folder, f) for f in os.listdir(folder)
-                      if f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp"))]
+            try:
+                images = random_copy.get_original_image_paths(folder)
+            except Exception:
+                images = []
             if images:
-                if config["shuffle"]:
-                    random.shuffle(images)
-                slide_images = images
-                log(f"重新加载 {len(images)} 张图片")
+                slide_images = [p for p in images]
+                _invalidate_slideshow_index_cache()
+                if config.get("shuffle"):
+                    random.shuffle(slide_images)
+                log(f"重新加载 {len(slide_images)} 张图片")
             else:
                 log("幻灯片列表为空，无法切换到下一张")
-                show_message(t("提示喵"), t("请先设置幻灯片文件夹"))
-                log("=" * 50)
-                return
+                last_operation_error = t("请先设置幻灯片文件夹")
+                raise RuntimeError(last_operation_error)
         else:
             log("幻灯片列表为空，无法切换到下一张")
-            show_message(t("提示喵"), t("请先设置幻灯片文件夹"))
-            log("=" * 50)
-            return
+            last_operation_error = t("请先设置幻灯片文件夹")
+            raise RuntimeError(last_operation_error)
     next_img = get_next_wallpaper()
     if next_img is None:
         log("无法获取下一张壁纸")
-        show_message(t("提示喵"), t("无法获取下一张壁纸"))
-        log("=" * 50)
-        return
+        last_operation_error = t("无法获取下一张壁纸")
+        raise RuntimeError(last_operation_error)
     log("切换到: " + os.path.basename(next_img))
     success = set_wallpaper(next_img, "右键菜单(下一张)")
     if success:
@@ -1727,27 +2284,43 @@ def next_wallpaper():
 
 
 def random_wallpaper():
-    """随机切换到一张壁纸，从幻灯片文件夹中随机选择。"""
-    if normalize_mode_key(config.get("mode")) != "幻灯片放映":
+    """随机切换到一张壁纸，从幻灯片文件夹中随机选择。
+
+    HTML 模式下"随机"等同于刷新 HTML 壁纸（与"下一张"行为一致）。
+    """
+    global last_operation_error
+    current_mode = normalize_mode_key(config.get("mode"))
+    if current_mode == "HTML":
+        html_path = config.get("html_file", "")
+        if not html_path:
+            last_operation_error = t("当前没有 HTML 壁纸可刷新")
+            raise RuntimeError(last_operation_error)
+        log("HTML 模式：刷新 HTML 壁纸")
+        try:
+            if is_html_wallpaper_running():
+                return restart_html_wallpaper(html_path)
+            return start_html_wallpaper(html_path)
+        except Exception as exc:
+            last_operation_error = str(exc) or t("刷新 HTML 壁纸失败")
+            raise RuntimeError(last_operation_error) from exc
+    if current_mode != "幻灯片放映":
         log("当前模式不是幻灯片放映，无法使用随机功能")
-        show_message(t("提示喵"), t("请在幻灯片放映模式下使用此功能"))
-        log("=" * 50)
-        return
+        last_operation_error = t("请在幻灯片放映模式下使用此功能")
+        raise RuntimeError(last_operation_error)
     global slide_images
     folder = config["slide_folder"]
     if not folder or not os.path.isdir(folder):
         log("幻灯片文件夹无效")
-        show_message(t("提示喵"), t("请先设置幻灯片文件夹"))
-        log("=" * 50)
-        return
+        last_operation_error = t("请先设置幻灯片文件夹")
+        raise RuntimeError(last_operation_error)
 
     # 新版随机概率使用 random.json 中的权重，不再依赖物理副本文件。
     slide_images = random_copy.get_original_image_paths(folder)
+    _invalidate_slideshow_index_cache()
     if not slide_images:
         log("文件夹中没有图片")
-        show_message(t("提示喵"), t("文件夹中没有图片"))
-        log("=" * 50)
-        return
+        last_operation_error = t("文件夹中没有图片")
+        raise RuntimeError(last_operation_error)
 
     current = config.get("current_wallpaper", "")
     random_img = random_copy.weighted_choice(folder, current)
@@ -1769,9 +2342,30 @@ def set_fit_mode(mode):
         config["fit_mode"] = mode
         configure_fit_mode(mode, winreg, log)
         current = config.get("current_wallpaper")
+        applied_path = None
         if current and os.path.exists(current):
             set_wallpaper_direct(current, "适应模式")
-        log("适应模式: " + mode)
+            applied_path = current
+        else:
+            # 当前壁纸已不存在时，回退到 history 中最近一张仍存在的壁纸，
+            # 避免切换适应方式后用户看不到任何反馈。
+            history = config.get("history", []) or []
+            if isinstance(history, list):
+                for entry in reversed(history):
+                    if isinstance(entry, dict):
+                        candidate = entry.get("path", "")
+                    else:
+                        candidate = str(entry)
+                    if candidate and os.path.exists(candidate):
+                        set_wallpaper_direct(candidate, "适应模式")
+                        applied_path = candidate
+                        break
+            if applied_path is None:
+                log("适应模式: 当前壁纸已不存在且历史记录中无可回退项，未重新应用")
+        if applied_path is not None:
+            log("适应模式: " + mode + " (reapplied: " + str(applied_path) + ")")
+        else:
+            log("适应模式: " + mode)
     except Exception as e:
         log("设置适应模式失败: " + str(e))
 
@@ -1780,13 +2374,12 @@ def get_next_wallpaper():
     global slide_images
     if not slide_images:
         return None
-    current = (
-        _find_wallpaper_in_slideshow_images(config.get("current_wallpaper", ""), slide_images)
-        or _find_wallpaper_in_slideshow_images(config.get("slideshow_last_wallpaper", ""), slide_images)
-    )
-    if current in slide_images:
-        idx = slide_images.index(current)
-        next_idx = (idx + 1) % len(slide_images)
+    index_map = _slideshow_index_map()
+    current_key = _history_key(config.get("current_wallpaper", ""))
+    last_key = _history_key(config.get("slideshow_last_wallpaper", ""))
+    item = index_map.get(current_key) or index_map.get(last_key)
+    if item:
+        next_idx = (item[0] + 1) % len(slide_images)
         return slide_images[next_idx]
     return slide_images[0] if slide_images else None
 
@@ -1867,6 +2460,11 @@ def start_slideshow(is_startup: bool = False):
     if is_operation_cancelled():
         log("幻灯片启动已终止")
         return False
+    # 启动幻灯片前停止所有动态壁纸（视频/HTML），避免模式冲突
+    try:
+        stop_video_wallpaper()
+    except Exception:
+        pass
     global slide_images, slide_enabled, slide_timer
     target_to_apply = None
     restore_current = None
@@ -1882,6 +2480,7 @@ def start_slideshow(is_startup: bool = False):
         if config["shuffle"]:
             random.shuffle(images)
         slide_images = [_normalize_wallpaper_path(p) for p in images]
+        _invalidate_slideshow_index_cache()
         log(f"加载 {len(slide_images)} 张图片")
 
         last_slide = _find_wallpaper_in_slideshow_images(config.get("slideshow_last_wallpaper", ""), slide_images)
@@ -1926,6 +2525,11 @@ def start_slideshow(is_startup: bool = False):
 def stop_slideshow():
     """停止幻灯片计时器；可安全重复调用，不把“未运行”误报为错误。"""
     global slide_enabled, slide_timer
+    # 停止幻灯片时同步停止动态壁纸（视频/HTML）
+    try:
+        stop_video_wallpaper()
+    except Exception:
+        pass
     with slide_timer_lock:
         was_running = bool(slide_enabled) or bool(slide_timer)
         slide_enabled = False
@@ -1992,6 +2596,14 @@ def start_video_wallpaper(path: str | None = None):
 def stop_video_wallpaper():
     """停止视频壁纸；可安全重复调用，未运行时不误报“已停止”。"""
     try:
+        # 先停止 HTML 壁纸以防止动态模式冲突
+        try:
+            if html_wallpaper is not None and html_wallpaper.is_html_wallpaper_running():
+                html_wallpaper.stop_html_wallpaper()
+                log("HTML 壁纸已停止")
+        except Exception as exc:
+            log_error("停止 HTML 壁纸失败", exc)
+        # 再停止视频壁纸
         if video_wallpaper is None:
             return False
         was_running = False
@@ -2015,6 +2627,18 @@ def is_video_wallpaper_running():
         return False
 
 
+def set_video_paused(paused: bool) -> bool:
+    """实时暂停/恢复视频壁纸。当前主要由 mpv JSON IPC 支持。"""
+    try:
+        if video_wallpaper is None:
+            return False
+        if not hasattr(video_wallpaper, "set_video_paused"):
+            return False
+        return bool(video_wallpaper.set_video_paused(bool(paused)))
+    except Exception as exc:
+        log_error("实时暂停/恢复视频失败", exc)
+        return False
+
 def set_video_volume(muted: bool, volume: int) -> bool:
     """实时调整视频壁纸音量/静音，不中断播放。
 
@@ -2030,6 +2654,129 @@ def set_video_volume(muted: bool, volume: int) -> bool:
         return bool(video_wallpaper.set_video_volume(bool(muted), int(volume)))
     except Exception as exc:
         log_error("实时调整视频音量失败", exc)
+        return False
+
+
+# ====================== HTML 壁纸控制 ===========================
+
+def _sync_html_wallpaper_runtime_options_from_config() -> None:
+    """Publish config-backed HTML runtime options before launch/restart."""
+    try:
+        html_wallpaper_runtime_set_option("auto_pause", bool(config.get("html_auto_pause", True)))
+        html_wallpaper_runtime_set_option("gpu_enabled", bool(config.get("html_gpu_enabled", True)))
+        html_wallpaper_runtime_set_option("mouse_through", bool(config.get("html_mouse_through", True)))
+    except Exception as exc:
+        log_error("同步 HTML 壁纸运行选项失败", exc)
+
+
+def start_html_wallpaper(path: str | None = None):
+    """启动 HTML 交互式壁纸。
+
+    如果适配器不可用或依赖缺失，将抛出 RuntimeError。调用方需捕获异常。
+    """
+    target = _normalize_wallpaper_path(path or config.get("html_file", ""))
+    if path is None:
+        target = config.get("html_file", "") or config.get("html_url", "") or target
+    if not target:
+        message = t("请先选择 HTML 文件或输入 URL")
+        log(message)
+        raise RuntimeError(message)
+    if html_wallpaper is None:
+        message = t("HTML 壁纸模块不可用")
+        log(message)
+        raise RuntimeError(message)
+    if not html_wallpaper.validate_html_path(target):
+        message = t("所选文件不是有效的 HTML 文件或 URL")
+        log(message)
+        raise RuntimeError(message)
+    if not session_original_wallpaper_captured:
+        capture_session_original_wallpaper(inherit_existing=False, force_refresh=False)
+    _sync_html_wallpaper_runtime_options_from_config()
+    try:
+        ok, message = html_wallpaper.start_html_wallpaper(target)
+    except Exception as exc:
+        log(f"HTML 壁纸启动失败: {exc}")
+        raise RuntimeError(str(exc))
+    if ok:
+        config["mode"] = "HTML"
+        config["html_file"] = target
+        config["current_wallpaper"] = target
+        save_config()
+        if message:
+            log("HTML 壁纸提示: " + str(message))
+        log("HTML 壁纸已启动: " + os.path.basename(target))
+        return True
+    log("HTML 壁纸启动失败: " + str(message))
+    raise RuntimeError(str(message))
+
+
+def stop_html_wallpaper() -> bool:
+    try:
+        if html_wallpaper is None:
+            return False
+        was_running = False
+        try:
+            was_running = bool(html_wallpaper.is_html_wallpaper_running())
+        except Exception as exc:
+            log_error("检查 HTML 壁纸运行状态失败", exc)
+        html_wallpaper.stop_html_wallpaper()
+        if was_running:
+            log("HTML 壁纸已停止")
+        return True
+    except Exception as e:
+        log_error("停止 HTML 壁纸失败", e)
+        return False
+
+
+def is_html_wallpaper_running() -> bool:
+    try:
+        return bool(html_wallpaper is not None and html_wallpaper.is_html_wallpaper_running())
+    except Exception:
+        return False
+
+
+def html_wallpaper_runtime_set_option(key: str, value) -> bool:
+    """热更新 HTML 壁纸子进程的运行时选项（目前支持 auto_pause）。"""
+    try:
+        if html_wallpaper is None or not hasattr(html_wallpaper, "runtime_set_option"):
+            return False
+        return bool(html_wallpaper.runtime_set_option(str(key), value))
+    except Exception as exc:
+        log_error(f"热更新 HTML 壁纸选项失败({key}={value})", exc)
+        return False
+
+
+def html_wallpaper_get_last_path() -> str:
+    """返回上次启动 HTML 壁纸时使用的路径，用于在切换 GPU 等不可热更新选项后重启。"""
+    try:
+        if html_wallpaper is None or not hasattr(html_wallpaper, "get_last_path"):
+            return ""
+        return str(html_wallpaper.get_last_path() or "")
+    except Exception:
+        return ""
+
+
+def restart_html_wallpaper(path: str | None = None) -> bool:
+    """停止并以同一路径（或指定路径）重新启动 HTML 壁纸。
+
+    用于在切换不可热更新的选项（如 GPU 加速）后让新设置生效。
+    """
+    try:
+        if html_wallpaper is None or not hasattr(html_wallpaper, "restart_html_wallpaper"):
+            return False
+        target = path or html_wallpaper_get_last_path() or config.get("html_file", "")
+        if not target:
+            log("重启 HTML 壁纸失败：未找到上次使用的路径")
+            return False
+        _sync_html_wallpaper_runtime_options_from_config()
+        ok, message = html_wallpaper.restart_html_wallpaper(target)
+        if ok:
+            log("HTML 壁纸已重启")
+            return True
+        log("HTML 壁纸重启失败: " + str(message))
+        return False
+    except Exception as exc:
+        log_error("重启 HTML 壁纸失败", exc)
         return False
 
 
@@ -2161,8 +2908,7 @@ def window_proc(hwnd, msg, wparam, lparam):
         if current and current != config.get("current_wallpaper", ""):
             log(f"系统壁纸已改变: {os.path.basename(current)}")
             push_wallpaper(current)
-            if root and canvas:
-                root.after(0, lambda: update_preview(current))
+            _queue_ui_preview_update(current)
         return 0
     elif msg_i == WM_COPYDATA:
         try:
@@ -2175,6 +2921,14 @@ def window_proc(hwnd, msg, wparam, lparam):
                 log(f"收到消息: {command}")
                 if command in {"previous", "next", "random"} or command.startswith("set_wallpaper|"):
                     queue_ipc_wallpaper_command(command)
+                    return 1
+                elif command == "jump":
+                    request_show_main_window()
+                    try:
+                        if root is not None and hasattr(root, "after"):
+                            root.after(0, lambda: _gui_open_wallpaper_sidebar())
+                    except Exception as exc:
+                        log(f"右键菜单跳转壁纸转发失败: {exc}")
                     return 1
                 elif command == "show":
                     request_show_main_window()
@@ -2258,283 +3012,15 @@ def start_message_window():
     return msg_hwnd
 
 
-def _build_context_action_command(*args):
-    """Build the exact command stored in the Windows desktop context-menu registry."""
-    if is_frozen():
-        parts = [sys.executable, *args]
-    else:
-        parts = [sys.executable, os.path.join(BASE_DIR, "main.py"), *args]
-    return subprocess.list2cmdline([str(part) for part in parts])
-
-
-def _context_hotkey_suffix(key_name):
-    """Return the display/accelerator suffix used by Windows context-menu labels."""
-    hotkey = config.get(f"hotkey_{key_name}", "")
-    if hotkey:
-        parts = hotkey.split('+')
-        formatted = []
-        for p in parts:
-            low = p.lower()
-            if low == "ctrl":
-                formatted.append("Ctrl")
-            elif low == "alt":
-                formatted.append("Alt")
-            elif low == "shift":
-                formatted.append("Shift")
-            elif low == "win":
-                formatted.append("Win")
-            else:
-                formatted.append(p.upper() if len(p) == 1 else p)
-        display = "+".join(formatted)
-        if len(parts) == 1 and len(parts[0]) == 1:
-            return f"\t&{parts[0].upper()}"
-        return f"\t{display}"
-    defaults = {
-        "previous": "\t&U",
-        "next": "\t&N",
-        "random": "\t&3",
-        "jump": "\t&V",
-    }
-    return defaults.get(key_name, "")
-
-
-def _desired_context_menu_entries():
-    """Return desired Windows context-menu registry entries from current config."""
-    return (
-        {
-            "path": r"DesktopBackground\Shell\LastWallpaper",
-            "enabled": bool(config.get("ctx_last_wallpaper", False)),
-            "label": f"上一个桌面背景{_context_hotkey_suffix('previous')}",
-            "command": _build_context_action_command("--previous"),
-        },
-        {
-            "path": r"DesktopBackground\Shell\NextWallpaper",
-            "enabled": bool(config.get("ctx_next_wallpaper", False)),
-            "label": f"下一个桌面背景{_context_hotkey_suffix('next')}",
-            "command": _build_context_action_command("--next"),
-        },
-        {
-            "path": r"DesktopBackground\Shell\RandomWallpaper",
-            "enabled": bool(config.get("ctx_random_wallpaper", False)),
-            "label": f"随机一个桌面背景{_context_hotkey_suffix('random')}",
-            "command": _build_context_action_command("--random"),
-        },
-        {
-            "path": r"DesktopBackground\Shell\ZJumpToWallpaper",
-            "enabled": bool(config.get("ctx_jump_to_wallpaper", False)),
-            "label": f"跳转到壁纸{_context_hotkey_suffix('jump')}",
-            "command": _build_context_action_command("--jump-to-wallpaper"),
-        },
-    )
-
-
-def _registry_key_exists(path: str) -> bool:
-    if winreg is None:
-        return False
-    try:
-        key = winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, path, 0, winreg.KEY_READ)
-        winreg.CloseKey(key)
-        return True
-    except FileNotFoundError:
-        return False
-    except OSError:
-        return False
-
-
-def _registry_default_value(path: str):
-    if winreg is None:
-        return None
-    try:
-        key = winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, path, 0, winreg.KEY_READ)
-        try:
-            value, _value_type = winreg.QueryValueEx(key, "")
-            return value
-        finally:
-            winreg.CloseKey(key)
-    except FileNotFoundError:
-        return None
-    except OSError:
-        return None
-
-
 def is_context_menu_synced() -> bool:
-    """Return True if the Windows desktop context menu already matches config.
+    """Linux does not provide Windows desktop context-menu registry sync."""
+    return False
 
-    This prevents a one-shot elevated restart from repeatedly rewriting HKCR on
-    every later admin restart when no context-menu change is pending.
-    """
-    if not IS_WINDOWS or winreg is None:
-        return False
-    try:
-        for entry in _desired_context_menu_entries():
-            path = entry["path"]
-            command_path = path + r"\command"
-            if entry["enabled"]:
-                if _registry_default_value(path) != entry["label"]:
-                    return False
-                if _registry_default_value(command_path) != entry["command"]:
-                    return False
-            else:
-                if _registry_key_exists(command_path) or _registry_key_exists(path):
-                    return False
-        # Deprecated entries should stay removed after a successful sync.
-        stale_paths = (
-            r"DesktopBackground\Shell\JumpToWallpaper",
-            r"DesktopBackground\Shell\~~PersonalizeBackground",
-            r"SystemFileAssociations\image\shell\ShangBackgroundSetWallpaper",
-        )
-        for path in stale_paths:
-            if _registry_key_exists(path) or _registry_key_exists(path + r"\command"):
-                return False
-        return True
-    except Exception as e:
-        log(f"检查右键菜单同步状态失败: {e}")
-        return False
 
 def register_context(show_admin_prompt=False):
-    """注册或同步 Windows 桌面右键菜单。
-
-    参数:
-        show_admin_prompt: 是否在权限不足时弹窗提示用户以管理员身份重启
-
-    返回:
-        True 注册成功，False 注册失败或权限不足
-    """
+    """No-op on Linux; desktop shell context-menu registration is Windows-only."""
     global last_operation_error
-    if not IS_WINDOWS or winreg is None:
-        log("当前平台不支持 Windows 桌面右键菜单注册，已跳过")
-        last_operation_error = "当前平台不支持 Windows 桌面右键菜单注册，已跳过"
-        return False
-    if not is_windows_admin():
-        msg = (
-            t("桌面右键菜单需要写入注册表 HKEY_CLASSES_ROOT，必须以管理员身份运行才能添加或移除。\n\n")
-            + t("点击「确定」将以管理员身份重启应用并自动完成注册，\n")
-            + t("点击「取消」则跳过注册，不影响主程序、托盘和壁纸切换功能。")
-        )
-        log("未以管理员权限启动，已跳过右键菜单注册/同步")
-        last_operation_error = "未以管理员权限启动，已跳过右键菜单注册/同步"
-        if show_admin_prompt:
-            show_message(t("需要管理员权限"), msg)
-        return False
-    try:
-        def build_action_command(*args):
-            return _build_context_action_command(*args)
-
-        def get_hotkey_suffix(key_name):
-            return _context_hotkey_suffix(key_name)
-
-        # 上一个壁纸菜单
-        prev_reg_path = r"DesktopBackground\Shell\LastWallpaper"
-        if config.get("ctx_last_wallpaper", False):
-            key = winreg.CreateKey(winreg.HKEY_CLASSES_ROOT, prev_reg_path)
-            suffix = get_hotkey_suffix("previous")
-            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, f"上一个桌面背景{suffix}")
-            winreg.CloseKey(key)
-            cmd_key = winreg.CreateKey(winreg.HKEY_CLASSES_ROOT, prev_reg_path + r"\command")
-            cmd = build_action_command("--previous")
-            winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, cmd)
-            winreg.CloseKey(cmd_key)
-            log("上一个右键菜单安装成功")
-        else:
-            try:
-                winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, prev_reg_path + r"\command")
-                winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, prev_reg_path)
-                log("上一个右键菜单已关闭")
-            except Exception:
-                pass
-
-        # 下一个壁纸菜单
-        next_reg_path = r"DesktopBackground\Shell\NextWallpaper"
-        if config.get("ctx_next_wallpaper", False):
-            key = winreg.CreateKey(winreg.HKEY_CLASSES_ROOT, next_reg_path)
-            suffix = get_hotkey_suffix("next")
-            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, f"下一个桌面背景{suffix}")
-            winreg.CloseKey(key)
-            cmd_key = winreg.CreateKey(winreg.HKEY_CLASSES_ROOT, next_reg_path + r"\command")
-            cmd = build_action_command("--next")
-            winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, cmd)
-            winreg.CloseKey(cmd_key)
-            log("下一个右键菜单安装成功")
-        else:
-            try:
-                winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, next_reg_path + r"\command")
-                winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, next_reg_path)
-                log("下一个右键菜单已关闭")
-            except Exception:
-                pass
-
-        # 随机壁纸菜单
-        random_reg_path = r"DesktopBackground\Shell\RandomWallpaper"
-        if config.get("ctx_random_wallpaper", False):
-            key = winreg.CreateKey(winreg.HKEY_CLASSES_ROOT, random_reg_path)
-            suffix = get_hotkey_suffix("random")
-            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, f"随机一个桌面背景{suffix}")
-            winreg.CloseKey(key)
-            cmd_key = winreg.CreateKey(winreg.HKEY_CLASSES_ROOT, random_reg_path + r"\command")
-            cmd = build_action_command("--random")
-            winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, cmd)
-            winreg.CloseKey(cmd_key)
-            log("随机右键菜单安装成功")
-        else:
-            try:
-                winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, random_reg_path + r"\command")
-                winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, random_reg_path)
-                log("随机右键菜单已关闭")
-            except Exception:
-                pass
-
-        # 个性化设置菜单（放在最后）
-        # 跳转到壁纸菜单（位于随机壁纸之后，个性化设置之前）
-        # 先删除旧版本可能存在的路径（兼容性）
-        old_jump_path = r"DesktopBackground\Shell\JumpToWallpaper"
-        try:
-            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, old_jump_path + r"\command")
-            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, old_jump_path)
-        except Exception:
-            pass
-        jump_reg_path = r"DesktopBackground\Shell\ZJumpToWallpaper"
-        if config.get("ctx_jump_to_wallpaper", False):
-            key = winreg.CreateKey(winreg.HKEY_CLASSES_ROOT, jump_reg_path)
-            # 获取快捷键后缀
-            suffix = get_hotkey_suffix("jump")
-            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, f"跳转到壁纸{suffix}")
-            winreg.CloseKey(key)
-            cmd_key = winreg.CreateKey(winreg.HKEY_CLASSES_ROOT, jump_reg_path + r"\command")
-            cmd = build_action_command("--jump-to-wallpaper")
-            winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, cmd)
-            winreg.CloseKey(cmd_key)
-            log("跳转到壁纸右键菜单安装成功")
-        else:
-            try:
-                winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, jump_reg_path + r"\command")
-                winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, jump_reg_path)
-                log("跳转到壁纸右键菜单已关闭")
-            except Exception:
-                pass
-
-        personalize_reg_path = r"DesktopBackground\Shell\~~PersonalizeBackground"
-        try:
-            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, personalize_reg_path + r"\command")
-            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, personalize_reg_path)
-        except Exception:
-            pass
-
-        config["ctx_set_wallpaper"] = False
-        file_wallpaper_path = r"SystemFileAssociations\image\shell\ShangBackgroundSetWallpaper"
-        try:
-            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, file_wallpaper_path + r"\command")
-            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, file_wallpaper_path)
-        except Exception:
-            pass
-
-        return True
-
-    except Exception as e:
-        log("右键注册失败: " + str(e))
-        last_operation_error = "右键注册失败: " + str(e)
-        if show_admin_prompt:
-            # 把底层异常原因带给用户，避免用户只看到"右键菜单注册失败"
-            # 却不知道是注册表项被占用、权限被拒还是路径不合法
-            show_message(t("错误"), t("右键菜单注册失败，请以管理员身份运行一次本程序。") + f"\n\n{t('原因')}：{e}")
-        return False
-
+    msg = "当前平台不支持 Windows 桌面右键菜单注册；Linux 版仅提供全局热键与托盘菜单。"
+    log(msg)
+    last_operation_error = msg
+    return False

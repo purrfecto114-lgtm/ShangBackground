@@ -6,6 +6,7 @@ import argparse
 import importlib.util
 import json
 import os
+import secrets
 import signal
 import socket
 import subprocess
@@ -34,12 +35,21 @@ IPC_FILE = os.path.join(_DATA_DIR, "video_wallpaper.ipc")
 VIDEO_EXTENSIONS = (".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm")
 
 
+def _ensure_private_dir(path: str) -> str:
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+    return path
+
+
 def _mpv_ipc_path() -> str:
     """构建 macOS 上 AVPlayer 子进程监听的 Unix socket 路径。"""
-    runtime = os.environ.get("TMPDIR") or "/tmp"
-    stem = f"shangbg-avplayer-{os.getpid()}.sock"
-    return os.path.join(runtime.rstrip("/"), stem)
-
+    runtime = os.environ.get("TMPDIR") or os.path.join(_DATA_DIR, "runtime")
+    base = _ensure_private_dir(os.path.join(runtime.rstrip("/"), "ShangBackground"))
+    stem = f"shangbg-avplayer-{secrets.token_hex(8)}.sock"
+    return os.path.join(base, stem)
 
 def validate_video_path(path: str | None) -> bool:
     return bool(path and os.path.isfile(path) and path.lower().endswith(VIDEO_EXTENSIONS))
@@ -147,12 +157,19 @@ def is_video_wallpaper_running() -> bool:
 
 
 def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100) -> tuple[bool, str]:
-    missing = [name for name in ("AVFoundation", "AppKit", "Quartz") if importlib.util.find_spec(name) is None]
-    if missing:
-        return False, "缺少 macOS 视频播放依赖：" + ", ".join(missing) + "。请安装 pyobjc-framework-AVFoundation/Cocoa/Quartz。"
     if not validate_video_path(video_path):
         return False, "请选择有效的视频文件：mp4/mov/m4v/avi/mkv/webm"
     stop_video_wallpaper()
+    missing = [name for name in ("AVFoundation", "AppKit", "Quartz") if importlib.util.find_spec(name) is None]
+    if missing:
+        # A standalone mpv window is not a macOS desktop wallpaper: without an
+        # in-process NSWindow it cannot be placed below Finder's icon layer.
+        # Fail explicitly instead of reporting a normal borderless window as
+        # success.
+        return False, (
+            "缺少 macOS 原生视频壁纸依赖：" + ", ".join(missing) +
+            "。请安装 requirements-macos.txt 中的 PyObjC/Cocoa/Quartz/AVFoundation 依赖。"
+        )
     cmd = [sys.executable]
     if not getattr(sys, "frozen", False):
         cmd.append(entry_script_path())
@@ -175,6 +192,10 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
         try:
             with open(IPC_FILE, "w", encoding="utf-8") as fh:
                 fh.write(ipc_path)
+            try:
+                os.chmod(IPC_FILE, 0o600)
+            except OSError:
+                pass
         except Exception:
             pass
         time.sleep(0.2)
@@ -244,7 +265,7 @@ def run_player(video_path: str, muted: bool = True, volume: int = 100, volume_ip
         NSWindowCollectionBehaviorIgnoresCycle,
         NSWindowCollectionBehaviorStationary,
     )
-    from Foundation import NSObject, NSNotificationCenter, NSURL, NSThread
+    from Foundation import NSObject, NSNotificationCenter, NSURL
     try:
         import CoreMedia
     except Exception:
@@ -285,6 +306,7 @@ def run_player(video_path: str, muted: bool = True, volume: int = 100, volume_ip
     # 共享状态：socket 线程写入最新音量/静音指令，主线程通过 NSTimer 轮询应用
     # （AVPlayer API 必须在主线程调用，不能直接在 socket 线程里 setVolume_）。
     pending_volume = {"muted": bool(muted), "volume": 0.0 if muted else av_volume, "dirty": False}
+    pending_pause = {"paused": False, "dirty": False}
     volume_lock = threading.Lock()
 
     # 用一个 NSObject 子类承载 NSTimer 回调，因为 NSTimer 必须用 ObjC selector。
@@ -292,17 +314,29 @@ def run_player(video_path: str, muted: bool = True, volume: int = 100, volume_ip
         def apply_(self, _sender):
             try:
                 with volume_lock:
-                    if not pending_volume["dirty"]:
-                        return
+                    volume_dirty = bool(pending_volume.get("dirty", False))
                     new_muted = bool(pending_volume["muted"])
                     new_vol = float(pending_volume["volume"])
                     pending_volume["dirty"] = False
-                for player in players:
-                    try:
-                        player.setMuted_(new_muted)
-                        player.setVolume_(0.0 if new_muted else new_vol)
-                    except Exception:
-                        pass
+                    pause_dirty = bool(pending_pause.get("dirty", False))
+                    paused = bool(pending_pause.get("paused", False))
+                    pending_pause["dirty"] = False
+                if volume_dirty:
+                    for player in players:
+                        try:
+                            player.setMuted_(new_muted)
+                            player.setVolume_(0.0 if new_muted else new_vol)
+                        except Exception:
+                            pass
+                if pause_dirty:
+                    for player in players:
+                        try:
+                            if paused:
+                                player.pause()
+                            else:
+                                player.play()
+                        except Exception:
+                            pass
             except Exception:
                 pass
 
@@ -340,6 +374,10 @@ def run_player(video_path: str, muted: bool = True, volume: int = 100, volume_ip
                     pass
             server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             server.bind(ipc_path)
+            try:
+                os.chmod(ipc_path, 0o600)
+            except OSError:
+                pass
             server.listen(1)
             server.settimeout(0.5)
             while True:
@@ -360,13 +398,17 @@ def run_player(video_path: str, muted: bool = True, volume: int = 100, volume_ip
                     line = data.decode("utf-8", errors="replace").split("\n", 1)[0].strip()
                     if line:
                         obj = json.loads(line)
-                        new_muted = bool(obj.get("muted", False))
-                        new_vol_raw = int(obj.get("volume", 100))
-                        new_vol = max(0.0, min(1.0, new_vol_raw / 100.0))
                         with volume_lock:
-                            pending_volume["muted"] = new_muted
-                            pending_volume["volume"] = 0.0 if new_muted else new_vol
-                            pending_volume["dirty"] = True
+                            if "paused" in obj:
+                                pending_pause["paused"] = bool(obj.get("paused", False))
+                                pending_pause["dirty"] = True
+                            if "muted" in obj or "volume" in obj:
+                                new_muted = bool(obj.get("muted", pending_volume["muted"]))
+                                new_vol_raw = int(obj.get("volume", 100))
+                                new_vol = max(0.0, min(1.0, new_vol_raw / 100.0))
+                                pending_volume["muted"] = new_muted
+                                pending_volume["volume"] = 0.0 if new_muted else new_vol
+                                pending_volume["dirty"] = True
                 except Exception:
                     pass
                 finally:
@@ -439,6 +481,32 @@ def run_player(video_path: str, muted: bool = True, volume: int = 100, volume_ip
     )
     app.run()
 
+
+def set_video_paused(paused: bool) -> bool:
+    """通过 AVPlayer 子进程 Unix socket 实时暂停/恢复视频壁纸。"""
+    try:
+        ipc_path = ""
+        try:
+            with open(IPC_FILE, "r", encoding="utf-8") as fh:
+                ipc_path = fh.read().strip()
+        except Exception:
+            return False
+        if not ipc_path or not os.path.exists(ipc_path):
+            return False
+        payload = json.dumps({"paused": bool(paused)}) + "\n"
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(0.5)
+        sock.connect(ipc_path)
+        try:
+            sock.sendall(payload.encode("utf-8"))
+            return True
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+    except Exception:
+        return False
 
 def main() -> None:
     parser = argparse.ArgumentParser()

@@ -19,13 +19,34 @@ from pathlib import Path
 
 try:
     from app.config import APP_NAME, IS_MACOS
-    from app.paths import RESOURCE_ROOT, is_packaged_runtime
+    from app.paths import RESOURCE_ROOT, user_data_dir, is_packaged_runtime, app_executable_path
 except Exception:
     APP_NAME = "ShangBackground"
     IS_MACOS = True
     RESOURCE_ROOT = Path(__file__).resolve().parents[1]
+
     def is_packaged_runtime():
         return bool(getattr(sys, "frozen", False) or globals().get("__compiled__") is not None or getattr(sys.modules.get("__main__"), "__compiled__", None))
+
+    def app_executable_path():
+        return os.path.abspath(sys.argv[0] if sys.argv else sys.executable)
+
+    def user_data_dir(app_name=APP_NAME):
+        name = str(app_name or APP_NAME).strip() or APP_NAME
+        if sys.platform.startswith("win"):
+            base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+            path = os.path.join(base, name)
+        elif sys.platform == "darwin":
+            path = os.path.join(os.path.expanduser("~/Library/Application Support"), name)
+        else:
+            base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+            path = os.path.join(base, name.lower())
+        try:
+            os.makedirs(path, exist_ok=True)
+        except Exception:
+            path = os.path.join(tempfile.gettempdir(), name)
+            os.makedirs(path, exist_ok=True)
+        return path
 try:
     from platform_adapters.integration import set_wallpaper_platform
 except Exception:
@@ -35,17 +56,7 @@ IS_FROZEN = is_packaged_runtime()
 
 BASE_DIR = os.fspath(RESOURCE_ROOT)
 
-def _user_data_dir():
-    root = os.path.expanduser("~/Library/Application Support")
-    path = os.path.join(root, APP_NAME)
-    try:
-        os.makedirs(path, exist_ok=True)
-    except Exception:
-        path = os.path.join(tempfile.gettempdir(), APP_NAME)
-        os.makedirs(path, exist_ok=True)
-    return path
-
-DATA_DIR = _user_data_dir()
+DATA_DIR = user_data_dir(APP_NAME)
 CONFIG_PATH = os.path.join(DATA_DIR, "settings.json")
 LEGACY_CONFIG_PATH = os.path.join(DATA_DIR, "shezhi.json")
 BUNDLED_CONFIG_PATH = os.path.join(BASE_DIR, "settings.json")
@@ -76,8 +87,14 @@ def load_config():
 
 def save_config(config):
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+    tmp_path = CONFIG_PATH + ".tmp"
+    with open(tmp_path, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
+    try:
+        os.chmod(tmp_path, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp_path, CONFIG_PATH)
 
 def load_diy():
     if not os.path.exists(DIY_DIR):

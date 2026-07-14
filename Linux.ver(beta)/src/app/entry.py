@@ -6,7 +6,7 @@ import signal
 import sys
 
 from core import engine as core
-from app.config import UPDATE_CHECK_ON_STARTUP, UPDATE_CHECK_STARTUP_DELAY_MS, normalize_mode_key
+from app.config import UPDATE_CHECK_ON_STARTUP, UPDATE_CHECK_STARTUP_DELAY_MS, is_supported_video_path, normalize_mode_key
 from app.i18n import t
 from app.support import (
     APP_DISPLAY_NAME,
@@ -24,6 +24,7 @@ from app.support import (
 )
 from app.startup import schedule_startup_tasks
 from app.scaling import apply_dpi_environment, dpi_percent
+from app.log_setup import configure_logging, install_qt_message_handler
 
 if PYSIDE_AVAILABLE:
     from app.support import apply_application_font
@@ -33,8 +34,44 @@ if PYSIDE_AVAILABLE:
 else:  # pragma: no cover - names are guarded by PYSIDE_AVAILABLE in main()
     QApplication = QIcon = QMessageBox = QTimer = None
 
+def _read_log_enabled_from_config() -> bool:
+    """Read the ``log_enabled`` flag from settings.json BEFORE the rest of
+    ``core.engine`` is initialized, so we can pass it to ``configure_logging``
+    and avoid writing any log files when the user has not opted in.
+
+    Returns False on any error (default-off is the safe behavior).
+    """
+    try:
+        import json
+        config_path = getattr(core, "CONFIG_PATH", None)
+        if not config_path or not os.path.exists(config_path):
+            return False
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return bool(data.get("log_enabled", False))
+    except Exception:
+        return False
+
+
 def main() -> int:
     args = _parse_early_args()
+    # Initialize structured logging as early as possible.
+    try:
+        _log_level = "DEBUG" if (getattr(args, "verbose", False) or getattr(args, "debug", False)) else "INFO"
+    except Exception:
+        _log_level = "INFO"
+    # Bug 6 fix: only attach file handlers when the user has explicitly opted
+    # in via the "记录日志到文件" setting.  Default is False → no log files on
+    # disk, only the in-memory ring buffer (for the in-app log page) and the
+    # optional console handler.
+    _files_enabled = _read_log_enabled_from_config()
+    try:
+        # Bug 6 fix: force=True required because engine.py import triggers
+        # load_config() → log() → configure_logging() with defaults before
+        # main() runs.  Without force=True this call is a NO-OP.
+        configure_logging(level=_log_level, files_enabled=_files_enabled, force=True)
+    except Exception as _log_exc:
+        sys.stderr.write(f"[entry] logging init failed: {_log_exc}\n")
 
     # ---------- 系统版本检查（统一使用 PySide6 QMessageBox） ----------
     if not sys.platform.startswith("linux"):
@@ -89,11 +126,24 @@ def main() -> int:
 
     used_dpi = apply_dpi_environment(core.config)
     core.log(f"程序内 DPI 缩放: {dpi_percent(used_dpi)}%")
+    # Bug 6 fix: sync file-logging runtime state with the loaded config.
+    try:
+        from app.log_setup import set_file_logging_enabled
+        set_file_logging_enabled(bool(core.config.get("log_enabled", False)))
+    except Exception:
+        pass
     app = QApplication.instance() or QApplication(sys.argv)
     app.setOrganizationName(APP_ORGANIZATION)
     app.setApplicationName(APP_PROCESS_NAME)
     app.setApplicationDisplayName(APP_DISPLAY_NAME)
     app.setDesktopFileName(APP_PROCESS_NAME)
+    # Install Qt message handler so Qt's own debug/warning/critical messages
+    # (e.g. `qt.svg: Cannot open file ...`) are routed into our logging system
+    # and show up in the in-app log page instead of being lost to stderr.
+    try:
+        install_qt_message_handler()
+    except Exception as _qt_handler_exc:
+        sys.stderr.write(f"[entry] Qt message handler install failed: {_qt_handler_exc}\n")
     _install_qt_chinese_translator(app)
     icon_path = os.path.join(core.BASE_DIR, "img", "LOGO.png")
     if not os.path.exists(icon_path):
@@ -116,7 +166,7 @@ def main() -> int:
     window = ShangBackgroundWindow()
     window._startup_inherit_wallpaper = startup_inherit_wallpaper
     core.root = QtRootShim(window)
-    core.canvas = None
+    core.canvas = getattr(window, "preview_canvas", None)
 
     def _emergency_exit_cleanup(*_args):
         try:
@@ -170,7 +220,26 @@ def main() -> int:
             QTimer.singleShot(250, lambda: window.sync_context_menu(show_message=True, only_if_needed=True))
         if core.IS_WINDOWS:
             QTimer.singleShot(100, core.start_message_window)
+        pending_context_command = getattr(core, "pending_startup_context_command", None)
+        if pending_context_command:
+            def _run_pending_context_command():
+                try:
+                    core.pending_startup_context_command = None
+                    if pending_context_command == "jump":
+                        window.open_wallpaper_sidebar()
+                    elif pending_context_command == "show":
+                        window.showNormal()
+                        window.raise_()
+                        window.activateWindow()
+                    else:
+                        core.queue_ipc_wallpaper_command(pending_context_command)
+                    window.set_status(t("已响应桌面右键菜单动作"))
+                except Exception as exc:
+                    core.log_error("启动后执行桌面右键菜单动作失败", exc)
+            QTimer.singleShot(900, _run_pending_context_command)
         QTimer.singleShot(180, core.report_usage)
+        # After the initial startup tasks, register global hotkeys on all platforms.
+        QTimer.singleShot(500, lambda: core.refresh_global_hotkeys())
         _startup_mode = normalize_mode_key(core.config.get("mode"))
         if _startup_mode == "幻灯片放映" and core.config.get("slide_folder"):
             def _startup_slideshow():
@@ -179,27 +248,53 @@ def main() -> int:
             QTimer.singleShot(600, lambda: window._run_mode_transition(t("正在启动幻灯片放映…"), _startup_slideshow))
         elif _startup_mode == "视频" and core.config.get("video_file"):
             # 上次退出时是视频模式 → 重启后自动恢复视频壁纸。
-            # 若上次播放进程意外残留（is_video_wallpaper_running 为 True），先停掉再重启，
-            # 避免 PID 文件指向已死进程或 IPC socket 失效导致音量热更新失效。
-            def _startup_video():
-                if core.is_video_wallpaper_running():
-                    core.stop_video_wallpaper()
-                return core.start_video_wallpaper(core.config.get("video_file"))
-            QTimer.singleShot(600, lambda: window._run_mode_transition(t("正在启动视频壁纸…"), _startup_video))
+            # 启动前先做轻量校验，避免无效路径/扩展名在首屏阶段弹错并打断 GUI。
+            _video_path = str(core.config.get("video_file") or "")
+            if is_supported_video_path(_video_path):
+                def _startup_video():
+                    if core.is_video_wallpaper_running():
+                        core.stop_video_wallpaper()
+                    return core.start_video_wallpaper(core.config.get("video_file"))
+                QTimer.singleShot(600, lambda: window._run_mode_transition(t("正在启动视频壁纸…"), _startup_video))
+            else:
+                core.log("跳过启动恢复视频壁纸：视频文件无效或格式不支持")
+        elif _startup_mode == "HTML" and core.config.get("html_file"):
+            # 上次退出时是 HTML 模式 → 重启后自动恢复 HTML 壁纸。
+            def _startup_html():
+                try:
+                    if core.is_html_wallpaper_running():
+                        core.stop_html_wallpaper()
+                except Exception as exc:
+                    core.log(f"清理残留 HTML 壁纸进程失败: {exc}")
+                return core.start_html_wallpaper(core.config.get("html_file"))
+            QTimer.singleShot(600, lambda: window._run_mode_transition(t("正在启动 HTML 壁纸…"), _startup_html))
 
-    performance_startup = bool(core.config.get("performance_mode", False))
+    # Keep startup scheduling consistent across platforms while retaining the legacy boolean fallback.
+    _perf_level = str(core.config.get("performance_level", "")).lower()
+    if _perf_level not in ("power_saver", "balanced", "performance"):
+        _perf_level = "performance" if bool(core.config.get("performance_mode", False)) else "balanced"
+    if _perf_level == "power_saver":
+        _runtime_delay, _update_delay = 1400, 3400
+    elif _perf_level == "performance":
+        _runtime_delay, _update_delay = 950, 2600
+    else:
+        _runtime_delay, _update_delay = 700, 1800
     silent_update_on_start = bool(core.config.get("silent_update_check_on_startup", True))
     schedule_startup_tasks(
         _post_show_runtime_startup,
         getattr(window, "start_startup_update_check", None),
-        runtime_delay_ms=950 if performance_startup else 700,
-        update_delay_ms=max(2600 if performance_startup else 1800, UPDATE_CHECK_STARTUP_DELAY_MS),
+        runtime_delay_ms=_runtime_delay,
+        update_delay_ms=max(_update_delay, UPDATE_CHECK_STARTUP_DELAY_MS),
         update_enabled=UPDATE_CHECK_ON_STARTUP and silent_update_on_start,
     )
 
     if core.hide_window or args.hide:
         window.hide()
     else:
+        try:
+            window.prepare_initial_geometry()
+        except Exception:
+            pass
         window.show()
     code = app.exec()
     if window.tray:

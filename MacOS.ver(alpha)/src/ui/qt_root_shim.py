@@ -3,38 +3,71 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, QTimer
+from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import QApplication
 
 if TYPE_CHECKING:
     from ui.main_window import ShangBackgroundWindow
 
 class QtRootShim(QObject):
-    """给核心模块提供最小 root.after/deiconify 兼容层。"""
+    """给核心模块提供最小 root.after/deiconify 兼容层。
+
+    ``root.after`` is often called from worker threads (global hotkeys,
+    wallpaper operations and IPC callbacks).  QTimer must be created in the
+    QObject's owning Qt thread, so scheduling/cancelling is marshalled through
+    queued signals before touching the timer map.
+    """
+
+    _after_requested = Signal(str, int, object, object)
+    _cancel_requested = Signal(str)
 
     def __init__(self, window: "ShangBackgroundWindow"):
         super().__init__(window)
         self.window = window
         self._timers: dict[str, QTimer] = {}
         self._seq = 0
+        self._after_requested.connect(self._schedule_after, Qt.ConnectionType.QueuedConnection)
+        self._cancel_requested.connect(self._cancel_after, Qt.ConnectionType.QueuedConnection)
 
     def after(self, ms: int, func=None, *args):
         self._seq += 1
         timer_id = f"qt-after-{self._seq}"
+        try:
+            delay = max(0, int(ms))
+        except Exception:
+            delay = 0
+        self._after_requested.emit(timer_id, delay, func, args)
+        return timer_id
+
+    @Slot(str, int, object, object)
+    def _schedule_after(self, timer_id: str, ms: int, func, args_obj):
+        old_timer = self._timers.pop(str(timer_id), None)
+        if old_timer is not None:
+            old_timer.stop()
+            old_timer.deleteLater()
+
         timer = QTimer(self)
         timer.setSingleShot(True)
 
         def _fire():
             self._timers.pop(timer_id, None)
+            try:
+                timer.deleteLater()
+            except Exception:
+                pass
             if callable(func):
+                args = args_obj if isinstance(args_obj, tuple) else ()
                 func(*args)
 
         timer.timeout.connect(_fire)
         self._timers[timer_id] = timer
         timer.start(max(0, int(ms)))
-        return timer_id
 
     def after_cancel(self, timer_id):
+        self._cancel_requested.emit(str(timer_id))
+
+    @Slot(str)
+    def _cancel_after(self, timer_id: str):
         timer = self._timers.pop(str(timer_id), None)
         if timer is not None:
             timer.stop()

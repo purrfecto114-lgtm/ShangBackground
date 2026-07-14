@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 import threading
-import time
 
 from PySide6.QtCore import (
     QEasingCurve, QEvent, QObject, QPoint,
@@ -42,14 +41,16 @@ THUMB_HEIGHT  = 94
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────────────────
-def log_to_file(msg: str, log_path=None) -> None:
+def _log_sidebar(msg: str, log_path=None) -> None:
+    """Route sidebar diagnostics through the unified logging system.
+
+    The old implementation printed and appended to a separate user-selected file,
+    which duplicated the newer in-app log viewer.  Keep the `log_path` parameter
+    for existing constructor calls, but ignore it so there is one log pipeline.
+    """
+    del log_path
     try:
-        ts   = time.strftime("[%H:%M:%S]")
-        line = f"{ts} [Sidebar] {msg}"
-        print(line)
-        if log_path:
-            with open(log_path, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
+        core.log(f"[Sidebar] {msg}")
     except Exception:
         pass
 
@@ -67,7 +68,7 @@ def generate_thumbnail_fast(
         )
         return img.resize(size, Image.Resampling.BILINEAR)
     except Exception as exc:
-        log_to_file(f"生成缩略图失败 {img_path}: {exc}")
+        _log_sidebar(f"生成缩略图失败 {img_path}: {exc}")
         return Image.new("RGB", size, (200, 200, 200))
 
 
@@ -114,7 +115,7 @@ class ThumbnailLoader:
             if not self._stop:
                 self._signals.ready.emit(idx, pil_img, path)
         except Exception as exc:
-            log_to_file(f"加载缩略图线程异常 {path}: {exc}")
+            _log_sidebar(f"加载缩略图线程异常 {path}: {exc}")
 
     def stop(self) -> None:
         self._stop = True
@@ -384,9 +385,9 @@ class WallpaperSidebar(QWidget):
                 if f.lower().endswith(SUPPORTED_EXT)
                 and not f.startswith(COPY_PREFIX)
             ])
-            log_to_file(f"找到 {len(files)} 张图片", log_path)
+            _log_sidebar(f"找到 {len(files)} 张图片", log_path)
         except Exception as exc:
-            log_to_file(f"列出图片失败: {exc}", log_path)
+            _log_sidebar(f"列出图片失败: {exc}", log_path)
             # 把异常原因一起带给用户，否则用户只看到"无法读取壁纸文件夹"
             # 却不知道是权限问题、路径过长还是磁盘故障
             self.show_message(t("错误"), t("无法读取壁纸文件夹") + f"：{exc}")
@@ -394,7 +395,7 @@ class WallpaperSidebar(QWidget):
             return
 
         if not files:
-            log_to_file("文件夹中没有图片", log_path)
+            _log_sidebar("文件夹中没有图片", log_path)
             self.show_message("提示喵", "壁纸文件夹中没有图片")
             QTimer.singleShot(0, self.deleteLater)
             return
@@ -429,7 +430,7 @@ class WallpaperSidebar(QWidget):
         QTimer.singleShot(300,  self.highlight_current)
         QTimer.singleShot(500,  self.start_loading_thumbnails)
         QTimer.singleShot(1500, self.scroll_to_current_after_load)
-        log_to_file("侧边栏初始化完成", self.log_path)
+        _log_sidebar("侧边栏初始化完成", self.log_path)
 
     # ═══════════════════════════════ UI 构建 ══════════════════════════════════
 
@@ -514,7 +515,7 @@ class WallpaperSidebar(QWidget):
             return
         self.loader = ThumbnailLoader(self)
         self.loader.load_all()
-        log_to_file("开始后台加载缩略图", self.log_path)
+        _log_sidebar("开始后台加载缩略图", self.log_path)
 
     def on_thumbnail_ready(self, idx: int, pil_img, path: str) -> None:
         if self._is_closing or idx >= len(self.thumbnail_items):
@@ -527,7 +528,7 @@ class WallpaperSidebar(QWidget):
             if os.path.normpath(path) == os.path.normpath(self.current_path):
                 item.set_highlighted(True)
         except Exception as exc:
-            log_to_file(f"更新缩略图 UI 失败: {exc}", self.log_path)
+            _log_sidebar(f"更新缩略图 UI 失败: {exc}", self.log_path)
 
     # ═══════════════════════════════ 高亮 / 滚动 ══════════════════════════════
 
@@ -545,7 +546,7 @@ class WallpaperSidebar(QWidget):
                 target = i
 
         if target >= 0:
-            log_to_file(
+            _log_sidebar(
                 f"高亮当前壁纸: "
                 f"{os.path.basename(self.thumbnail_items[target].img_path)}",
                 self.log_path,
@@ -564,7 +565,7 @@ class WallpaperSidebar(QWidget):
             if self._is_closing:
                 return
             if all(it.loaded for it in self.thumbnail_items):
-                log_to_file("所有缩略图加载完成，重新定位", self.log_path)
+                _log_sidebar("所有缩略图加载完成，重新定位", self.log_path)
                 self.highlight_current()
             else:
                 QTimer.singleShot(500, _check)
@@ -574,13 +575,13 @@ class WallpaperSidebar(QWidget):
     # ═══════════════════════════════ 交互逻辑 ═════════════════════════════════
 
     def on_thumbnail_click(self, path: str) -> None:
-        log_to_file(f"点击壁纸: {path}", self.log_path)
+        _log_sidebar(f"点击壁纸: {path}", self.log_path)
         try:
             if self.switch_wallpaper:
                 self.switch_wallpaper(path)
-            log_to_file("已切换壁纸", self.log_path)
+            _log_sidebar("已切换壁纸", self.log_path)
         except Exception as exc:
-            log_to_file(f"切换壁纸失败: {exc}", self.log_path)
+            _log_sidebar(f"切换壁纸失败: {exc}", self.log_path)
         QTimer.singleShot(100, self.close_sidebar)
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
@@ -646,15 +647,30 @@ class WallpaperSidebar(QWidget):
 
     # ═══════════════════════════════ /滑出动画 ════════════════════════════
 
+    def _animations_enabled(self) -> bool:
+        """Return True when interface animations should be played.
+
+        Mirrors ``MainWindow._animations_enabled``: reads the
+        ``enable_animations`` flag from ``core.config`` so the sidebar
+        respects the same global toggle as the rest of the UI.  Defaults to
+        True to preserve the historical behaviour for users upgrading from
+        older configs that do not yet contain the key.
+        """
+        try:
+            return bool(core.config.get("enable_animations", True))
+        except Exception:
+            return True
+
     def animate_in(self) -> None:
-        """从屏幕右边缘滑入（OutCubic 200 ms）。"""
+        """从屏幕右边缘滑入（OutCubic 200 ms）。
+
+        Bug 9 同期: 当 ``enable_animations`` 为 False 时跳过滑入动画,
+        直接 ``move`` 到最终位置并立即显示, 让侧边栏内容立即可见.
+        这避免了 200 ms 的等待, 对低端机器或对动态效果敏感的用户更友好.
+        """
         start = QPoint(self._sx + self._sw, self._sy)
         end   = QPoint(self._tx, self._sy)
 
-        self.move(start)
-        if self._shield:
-            self._shield.show()
-            self._shield.raise_()
         self.show()
         self.raise_()
         self.activateWindow()
@@ -663,6 +679,21 @@ class WallpaperSidebar(QWidget):
             self._container.setUpdatesEnabled(False)
         except Exception:
             pass
+
+        if not self._animations_enabled():
+            # 直接跳到终态, 不创建 QPropertyAnimation
+            self.move(end)
+            if self._shield:
+                self._shield.show()
+                self._shield.raise_()
+            self.is_animating = False
+            self._on_in_done()
+            return
+
+        self.move(start)
+        if self._shield:
+            self._shield.show()
+            self._shield.raise_()
 
         self.is_animating = True
         self._anim = QPropertyAnimation(self, b"pos", self)
@@ -685,7 +716,12 @@ class WallpaperSidebar(QWidget):
         self.activateWindow()
 
     def animate_out(self, on_complete=None) -> None:
-        """滑出至屏幕右边缘（InCubic 160 ms）。"""
+        """滑出至屏幕右边缘（InCubic 160 ms）。
+
+        Bug 9 同期: 当 ``enable_animations`` 为 False 时跳过滑出动画,
+        直接执行 ``on_complete`` 回调并隐藏窗口. 这避免了 160 ms 的
+        等待, 让侧边栏关闭即时反馈.
+        """
         if self.is_animating:
             return
         self.is_animating = True
@@ -698,12 +734,6 @@ class WallpaperSidebar(QWidget):
         start = QPoint(self._tx, self._sy)
         end   = QPoint(self._sx + self._sw, self._sy)
 
-        self._anim = QPropertyAnimation(self, b"pos", self)
-        self._anim.setDuration(160)
-        self._anim.setEasingCurve(QEasingCurve.Type.InCubic)
-        self._anim.setStartValue(start)
-        self._anim.setEndValue(end)
-
         def _done() -> None:
             self.is_animating = False
             try:
@@ -713,6 +743,18 @@ class WallpaperSidebar(QWidget):
                 pass
             if on_complete:
                 on_complete()
+
+        if not self._animations_enabled():
+            # 直接跳到终态位置并立即触发完成回调
+            self.move(end)
+            _done()
+            return
+
+        self._anim = QPropertyAnimation(self, b"pos", self)
+        self._anim.setDuration(160)
+        self._anim.setEasingCurve(QEasingCurve.Type.InCubic)
+        self._anim.setStartValue(start)
+        self._anim.setEndValue(end)
 
         self._anim.finished.connect(_done)
         self._anim.start()
@@ -730,7 +772,7 @@ class WallpaperSidebar(QWidget):
         if self._outside_poll_timer:
             self._outside_poll_timer.stop()
             self._outside_poll_timer = None
-        log_to_file("关闭侧边栏", self.log_path)
+        _log_sidebar("关闭侧边栏", self.log_path)
         self._remove_event_filter()
         self._close_click_shield()
 

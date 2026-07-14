@@ -16,14 +16,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
+from urllib.request import Request, build_opener
 
-try:
-    import httpx
-except ImportError:  # pragma: no cover - httpx 为可选依赖，缺失时降级
-    httpx = None
 
 from core.display import DEFAULT_RESOLUTION, choose_resolution
+from app.config import APP_VERSION
 
 
 # 单次同步最大张数限制，防止用户设置过大导致请求过多
@@ -60,7 +58,7 @@ class BingDownloader:
     ]
     IMAGE_BASES = ["https://www.bing.com", "https://cn.bing.com"]
     HEADERS = {
-        "User-Agent": "ShangBackground/1.1",
+        "User-Agent": f"ShangBackground/{APP_VERSION}",
         "Accept": "application/json,text/javascript,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Referer": "https://cn.bing.com/",
@@ -72,43 +70,37 @@ class BingDownloader:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.fallback_resolution = fallback_resolution
-        self._http_client = None
+        self._http_opener = None
         # 最近一次失败原因（供 GUI 层在 fetch/download 返回 None 时读取，
         # 避免 bing_sync worker 只能向用户回退一句"获取必应壁纸信息失败"
         # 这种不带原因的通用提示）。每次成功的 fetch/download 都会清空它。
         self.last_error: Exception | None = None
 
-    def _get_http_client(self):
-        """获取或创建复用的 httpx 客户端（连接池复用，减少 TCP 握手开销）。"""
-        if self._http_client is None and httpx is not None:
-            self._http_client = httpx.Client(
-                headers=self.HEADERS, timeout=20, follow_redirects=True,
-                limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
-            )
-        return self._http_client
+    def _get_http_opener(self):
+        """Return a reusable stdlib opener; avoids bundling requests/httpx trees."""
+        if self._http_opener is None:
+            self._http_opener = build_opener()
+        return self._http_opener
+
+    def _open(self, url: str, *, params: dict | None = None, timeout: float = 20):
+        if params:
+            separator = "&" if "?" in url else "?"
+            url = f"{url}{separator}{urlencode(params)}"
+        request = Request(url, headers=self.HEADERS, method="GET")
+        return self._get_http_opener().open(request, timeout=timeout)
 
     def close(self):
-        """关闭 HTTP 客户端，释放连接池资源。"""
-        if self._http_client is not None:
-            try:
-                self._http_client.close()
-            except Exception:
-                pass
-            self._http_client = None
+        """Compatibility no-op for callers that previously closed httpx."""
+        self._http_opener = None
 
     def _fetch_metadata(self, index: int, mkt: str) -> Optional[dict]:
-        if httpx is None:
-            print("httpx 未安装，无法获取 Bing 壁纸信息")
-            self.last_error = RuntimeError("httpx 未安装")
-            return None
         params = {"format": "js", "idx": index, "n": 1, "mkt": mkt}
         last_error: Exception | None = None
-        client = self._get_http_client()
         for api in self.API_URLS:
             try:
-                response = client.get(api, params=params)
-                response.raise_for_status()
-                data = response.json()
+                with self._open(api, params=params, timeout=20) as response:
+                    import json
+                    data = json.load(response)
                 images = data.get("images") or []
                 if images:
                     self.last_error = None
@@ -155,7 +147,7 @@ class BingDownloader:
         img = self._fetch_metadata(index, mkt)
         if not img:
             return None
-        img_id = img.get("hsh", hashlib.md5(str(img.get("url", "")).encode()).hexdigest()[:16])
+        img_id = img.get("hsh", hashlib.sha256(str(img.get("url", "")).encode()).hexdigest()[:16])
         candidates = self._url_candidates(img, res.resolution)
         return WallpaperInfo(
             id=str(img_id),
@@ -206,14 +198,9 @@ class BingDownloader:
         if filepath.exists() and filepath.stat().st_size > 1024:
             return str(filepath)
 
-        if httpx is None:
-            print("httpx 未安装，无法下载 Bing 壁纸")
-            self.last_error = RuntimeError("httpx 未安装")
-            return None
         img_stub = {"urlbase": info.urlbase, "url": info.url}
         urls = self._url_candidates(img_stub, info.resolution) or [info.url]
         last_error: Exception | None = None
-        client = self._get_http_client()
         for url in urls:
             try:
                 if not self._is_allowed_bing_url(url):
@@ -222,16 +209,16 @@ class BingDownloader:
                 total = 0
                 first_chunk = b""
                 try:
-                    with client.stream("GET", url, timeout=30) as response:
-                        response.raise_for_status()
+                    with self._open(url, timeout=30) as response:
                         ctype = response.headers.get("content-type", "")
                         content_length = response.headers.get("content-length")
                         if content_length and int(content_length) > MAX_IMAGE_BYTES:
                             raise ValueError("图片超过 64MB 限制")
                         with temp_path.open("wb") as output:
-                            for chunk in response.iter_bytes(64 * 1024):
+                            while True:
+                                chunk = response.read(64 * 1024)
                                 if not chunk:
-                                    continue
+                                    break
                                 if not first_chunk:
                                     first_chunk = chunk[:16]
                                 total += len(chunk)
@@ -283,10 +270,9 @@ class BingDownloader:
             batch_found = False
             for api in self.API_URLS:
                 try:
-                    client = self._get_http_client()
-                    response = client.get(api, params=params)
-                    response.raise_for_status()
-                    data = response.json()
+                    with self._open(api, params=params, timeout=20) as response:
+                        import json
+                        data = json.load(response)
                     images = data.get("images") or []
                     if images:
                         batch_found = True
@@ -294,7 +280,7 @@ class BingDownloader:
                             if len(wallpapers) >= days:
                                 break
                             res = choose_resolution(resolution, fallback=self.fallback_resolution)
-                            img_id = img.get("hsh", hashlib.md5(str(img.get("url", "")).encode()).hexdigest()[:16])
+                            img_id = img.get("hsh", hashlib.sha256(str(img.get("url", "")).encode()).hexdigest()[:16])
                             candidates = self._url_candidates(img, res.resolution)
                             info = WallpaperInfo(
                                 id=str(img_id),
