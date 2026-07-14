@@ -1,3 +1,4 @@
+
 <h1 align="center">
   <img src="https://xxdz-official.github.io/ShangBackground/img/LOGO.png" width="80" height="80" alt="Logo"><br>
   上一个桌面背景 / ShangBackground
@@ -170,6 +171,9 @@ python scripts/build_nuitka.py --platform macos
 
 # Dry run（只打印命令）
 python scripts/build_nuitka.py --platform linux --dry-run
+```
+
+> **修复**：此处补上了闭合反引号，确保后续内容正常渲染。
 
 ---
 
@@ -237,16 +241,3 @@ ShangBackground-1.4.0/
 ---
 
 <p align="center">Made with ❤️ by ShangBackground Team · 上一个桌面背景</p>
-```
-
----
-
-## 主要修复点
-
-| 问题 | 修复 |
-|------|------|
-| `https://.shields.io/` 链接错误 | 改为 `https://img.shields.io/` |
-| `<p>` 内用 Markdown `![alt](url)` 语法 | 改为 HTML `<img>` 标签 |
-| 中英文重复描述冗余 | 精简，表格中保留关键信息 |
-| 项目网站部分过长 | 压缩为一句话 + 链接 |
-| 整体篇幅 | 删除重复和过度详细的说明 |
