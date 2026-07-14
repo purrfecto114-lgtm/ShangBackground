@@ -149,31 +149,8 @@ pip install -r scripts/requirements-build.txt
 # C 编译器
 # Linux: apt install gcc patchelf
 # macOS: xcode-select --install
-# Windows: Nuitka 自动下载 MinGW64
+# Windows: Nuitka 自动下载 Zig
 ```
-
-### 构建命令
-
-```bash
-# Windows — 独立文件夹
-python scripts/build_nuitka.py --platform windows --standalone
-
-# Windows — 单文件 exe
-python scripts/build_nuitka.py --platform windows --onefile
-
-# Linux
-python scripts/build_nuitka.py --platform linux
-# → build/nuitka/linux/ShangBackground-1.4.0-linux-x64.tar.gz
-
-# macOS
-python scripts/build_nuitka.py --platform macos
-# → build/nuitka/macos/ShangBackground.app/
-
-# Dry run（只打印命令）
-python scripts/build_nuitka.py --platform linux --dry-run
-```
-
-> **修复**：此处补上了闭合反引号，确保后续内容正常渲染。
 
 ---
 
