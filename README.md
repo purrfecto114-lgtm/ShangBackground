@@ -167,7 +167,6 @@ ShangBackground-1.4.0/
 ├── MacOS.ver(alpha)/           # macOS 源码树
 ├── tests/                      # 18 个冒烟测试
 ├── tools/                      # 5 个工程化脚本
-├── CHANGES-v1.4.0.md           # 完整变更日志
 ├── GETTING_MPV.md              # mpv 打包说明
 ├── README.md
 ├── LICENSE                     # GPLv3
