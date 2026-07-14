@@ -13,7 +13,6 @@ ShangBackground-1.4.0/
 ├── NOTICE                        # 第三方声明
 ├── GETTING_MPV.md                # mpv 二进制打包说明
 ├── PROJECT_STRUCTURE.md          # ← 本文件
-├── CHANGES-v1.4.0.md             # v1.4.0 完整变更日志
 ├── CHANGES-html-fix-v*.md        # 历史 HTML 壁纸专项修复日志
 │
 ├── Windows.ver/                  # Windows 源码树
@@ -40,11 +39,6 @@ Windows.ver/
 ├── build_gui.py                  # PySide6 GUI 构建器
 ├── build_gui.pyw                 # Windows 「无控制台」启动包装
 ├── build_nuitka.py               # 跨平台 Nuitka CLI 驱动
-├── build_windows_nuitka.bat      # 原有 Nuitka standalone 脚本
-├── build_windows_nuitka_onefile.bat
-├── build_windows_onedir.bat
-├── build_windows_onedir_noupx.bat
-├── build_windows_pyside6_deploy.bat
 │
 ├── requirements-windows.txt      # 运行时依赖（精简）
 ├── requirements-windows-full.txt # 含 mpv / QtWebEngine 的全量依赖
@@ -161,7 +155,6 @@ Windows.ver/
 ```
 lang/
 ├── en.json        # 英文（约 350+ 条键）
-└── zh.json        # 简体中文
 ```
 
 `en.json` 在 v1.4.0 中：
@@ -190,9 +183,7 @@ lang/
 
 ## `tests/` 与 `tools/`
 
-详见 [`CHANGES-v1.4.0.md`](./CHANGES-v1.4.0.md#-测试--tests) 的「测试」与「工具」章节。
-
-- `tests/` — 19 个冒烟测试，CI 友好，无需 GUI
+- `tests/` — 18 个冒烟测试，CI 友好，无需 GUI
 - `tools/` — 5 个工程化脚本（构建大小分析、平台可行性检查、Linux 30s 浸入等）
 
 ---
