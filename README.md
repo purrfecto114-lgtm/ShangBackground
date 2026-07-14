@@ -9,13 +9,13 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.4.0-0ea5e9?style=flat-square">
-  <img src="https://img.shields.io/badge/Windows-Stable-blue?style=flat-square&logo=windows&logoColor=white">
-  <img src="https://img.shields.io/badge/Linux-Beta-orange?style=flat-square&logo=linux&logoColor=black">
-  <img src="https://img.shields.io/badge/macOS-Alpha-lightgrey?style=flat-square&logo=apple&logoColor=white">
-  <img src="https://img.shields.io/badge/License-GPLv3-blue?style=flat-square">
-  <img src="https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white">
-  <img src="https://img.shields.io/badge/PySide6-6.7%2B-41cd52?style=flat-square&logo=qt&logoColor=white">
+  ![Version](https://img.shields.io/badge/version-v1.4.0-blue)
+  ![Windows](https://.shields.io/badge/Windows-Stable-brightgreen)
+  ![Linux](https://img.shields.io/badge/Linux-Beta-orange)
+  ![macOS](https://img.shields.io/badge/macOS-Alpha-lightgrey)
+  ![License](https://img.shields.io/badge/License-GPLv3-blue)
+  ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)
+  ![PySide6](https://img.shields.io/badge/PySide6-6.7+-41CD52?logo=qt&logoColor=white)
 </p>
 
 <p align="center">
@@ -317,29 +317,5 @@ ShangBackground-1.4.0/
 - 💻 上游仓库 / Upstream: [xxdz-official/ShangBackground](https://github.com/xxdz-official/ShangBackground)
 - 🍴 当前仓库 / Current Fork: [purrfecto114-lgtm/ShangBackground](https://github.com/purrfecto114-lgtm/ShangBackground)
 - 📦 最新发布 / Latest Release: [v1.4.0](https://github.com/purrfecto114-lgtm/ShangBackground/releases/latest)
-
 ---
-
-## 📋 v1.4.0 变更摘要 / v1.4.0 Changelog Summary
-
-> 完整变更日志见 [`CHANGES-v1.4.0.md`](./CHANGES-v1.4.0.md)。
-
-| 领域 / Area | 变更 / Change |
-|------|--------|
-| 版本 / Version | 1.3.6 → **1.4.0**（所有平台树 + 工具链） |
-| 质量 / Quality | 修复 22 个 Bug（`Bug 1`‑`Bug 22`），含 SVG 主题色注入、单实例 SHA‑256 摘要、概率权重 mtime 缓存等 |
-| 新增 / New | HTML 交互式壁纸（Windows 完整 + Linux/macOS best‑effort），含首帧门控、桌面可见性 auto‑pause |
-| 新增 / New | 应用内日志页（统一 `app/log_setup.py` + Qt message handler + 内存环形缓冲） |
-| 新增 / New | 运行时能力探测（`platform_adapters/capabilities.py`） |
-| 新增 / New | 每平台 `build_gui.py` / `build_nuitka.py` |
-| 新增 / New | `src/bin/` 目录用于打包 mpv（详见 `GETTING_MPV.md`） |
-| 新增 / New | `tests/`（19 冒烟测试）+ `tools/`（5 工程化脚本） |
-| 新增 / New | `CHANGES-v1.4.0.md`、`PROJECT_STRUCTURE.md`、`CHANGES-html-fix-v*.md` |
-| 国际化 / i18n | `en.json` 从 ~280 键扩展到 ~350 键；`i18n.py` 现支持 gzip 压缩 JSON |
-| 延期 / Deferred | `scripts/build_nuitka.py` + `shangbackground.iss`（→ v1.4.1）；Next.js 16 主页（→ v1.4.1） |
-
-**无破坏性变更** — 桌面应用行为与 v1.3.6 v6‑step2 完全一致。本版本聚焦质量硬化、跨平台一致性、HTML 壁纸、构建工具链。
-
----
-
 <p align="center">Made with ❤️ by ShangBackground Team · 上一个桌面背景</p>
