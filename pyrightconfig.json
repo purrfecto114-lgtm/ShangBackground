@@ -1,9 +1,29 @@
 {
-  "include": ["src", "build_tools"],
-  "extraPaths": [".", "src"],
-  "executionEnvironments": [
-    {"root": "build_tools", "extraPaths": [".", "src"]},
-    {"root": "src", "extraPaths": ["src", "."]}
+  "include": [
+    "src",
+    "build_tools"
   ],
-  "typeCheckingMode": "basic"
+  "extraPaths": [
+    ".",
+    "src"
+  ],
+  "executionEnvironments": [
+    {
+      "root": "build_tools",
+      "extraPaths": [
+        ".",
+        "src"
+      ]
+    },
+    {
+      "root": "src",
+      "extraPaths": [
+        "src",
+        "."
+      ]
+    }
+  ],
+  "typeCheckingMode": "basic",
+  "venvPath": ".",
+  "venv": ".venv"
 }

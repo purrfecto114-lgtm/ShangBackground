@@ -8,8 +8,14 @@ import sys
 from typing import TYPE_CHECKING, Iterable
 
 from .constants import (
-    MODES, MPV_MODES, PROFILES, PYINSTALLER_CONTENTS_DIRECTORY, TARGETS,
-    WINDOWS_CONSOLE_MODES, host_target,
+    ARCHES,
+    MODES,
+    MPV_MODES,
+    PROFILES,
+    PYINSTALLER_CONTENTS_DIRECTORY,
+    TARGETS,
+    WINDOWS_CONSOLE_MODES,
+    host_target,
 )
 from .features import FEATURE_KEYS, feature_summary
 
@@ -52,27 +58,47 @@ def create_build_parser(tool: str, *, include_contents_directory: bool = False) 
     build.add_argument("--jobs", type=int, choices=(1, 2, 4), default=2)
 
     feature_group = parser.add_argument_group("Feature selection")
-    feature_group.add_argument("--features", default=None, metavar="LIST", help=f"Comma-separated: {', '.join(FEATURE_KEYS)}; accepts all or none")
+    feature_group.add_argument(
+        "--features",
+        default=None,
+        metavar="LIST",
+        help=f"Comma-separated: {', '.join(FEATURE_KEYS)}; accepts all or none",
+    )
     feature_group.add_argument("--exclude-features", default=None, metavar="LIST")
 
     runtime = parser.add_argument_group("Native runtime")
     runtime.add_argument("--mpv-runtime", choices=MPV_MODES, default="auto")
     runtime.add_argument("--mpv-version", default="auto", metavar="VERSION")
-    runtime.add_argument("--mpv-arch", default="auto", metavar="ARCH")
+    runtime.add_argument(
+        "--arch",
+        "--mpv-arch",
+        dest="arch",
+        choices=("auto", *ARCHES),
+        default="auto",
+        metavar="ARCH",
+        help="Output architecture; must match the selected build Python. --mpv-arch is a compatibility alias.",
+    )
 
     platform_group = parser.add_argument_group("Platform packaging")
     platform_group.add_argument("--windows-console-mode", choices=WINDOWS_CONSOLE_MODES, default="disable")
     if include_contents_directory:
         platform_group.add_argument(
-            "--contents-directory", type=_contents_directory, default=PYINSTALLER_CONTENTS_DIRECTORY,
-            metavar="NAME", help="PyInstaller onedir support directory; _internal is the release layout",
+            "--contents-directory",
+            type=_contents_directory,
+            default=PYINSTALLER_CONTENTS_DIRECTORY,
+            metavar="NAME",
+            help="PyInstaller onedir support directory; _internal is the release layout",
         )
 
     execution = parser.add_argument_group("Execution")
     execution.add_argument("--skip-install", action="store_true")
     execution.add_argument("--verbose-install", action="store_true")
     execution.add_argument("--dry-run", action="store_true")
-    execution.add_argument("--skip-validate", action="store_true", help="Skip post-build bundle structure validation")
+    execution.add_argument(
+        "--skip-validate",
+        action="store_true",
+        help="Compatibility flag accepted only with --dry-run; publishable builds always validate",
+    )
     return parser
 
 
@@ -111,6 +137,7 @@ def print_plan(plan: "BuildPlan", *, extra: Iterable[tuple[str, str]] = ()) -> N
     print_banner("ShangBackground build plan", f"{plan.tool} · {plan.target} · {plan.mode}")
     rows = [
         ("Profile", plan.profile),
+        ("Arch", plan.arch),
         ("Features", feature_summary(plan.features)),
         ("MPV", plan.mpv.description),
         ("Variant", plan.variant),

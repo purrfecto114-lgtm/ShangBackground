@@ -1,11 +1,13 @@
 """Fast, platform-independent checks for the build command contract."""
+
 from __future__ import annotations
 
 import argparse
 import compileall
+import subprocess
 
 from .bundle import WEBVIEW_MODULES
-from .constants import PROJECT_ROOT, PYINSTALLER_CONTENTS_DIRECTORY, TARGETS
+from .constants import PROJECT_ROOT, PYINSTALLER_CONTENTS_DIRECTORY, TARGETS, python_executable
 from .diagnostics import preflight
 from .features import default_features
 from .nuitka import build_args as nuitka_args
@@ -32,7 +34,7 @@ def _plan(tool: str, target: str, profile: str):
         features=default_features(profile),
         mpv_runtime="system",
         mpv_version="auto",
-        mpv_arch="auto",
+        arch="auto",
         dry_run=True,
     )
 
@@ -89,21 +91,50 @@ def run_checks() -> tuple[str, ...]:
         _check("webview" not in lite_hidden, f"{target}: lite PyInstaller build still imports webview", errors)
         _check("webview" in lite_excluded, f"{target}: lite PyInstaller build does not exclude webview", errors)
         lite_nui, _env = nuitka_args(_plan("nuitka", target, "lite"), windows_console_mode="disable")
-        _check("--disable-plugin=pywebview" not in lite_nui, f"{target}: lite Nuitka build enables HTML workaround", errors)
-        _check("--nofollow-import-to=webview" in lite_nui, f"{target}: lite Nuitka build does not exclude webview", errors)
+        _check(
+            "--disable-plugin=pywebview" not in lite_nui, f"{target}: lite Nuitka build enables HTML workaround", errors
+        )
+        _check(
+            "--nofollow-import-to=webview" in lite_nui, f"{target}: lite Nuitka build does not exclude webview", errors
+        )
 
     return tuple(errors)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate ShangBackground build-tool invariants.")
-    parser.parse_args(argv)
+    parser.add_argument(
+        "--dynamic", action="store_true", help="Perform a real core-only frozen build and runtime verification"
+    )
+    parser.add_argument("--dynamic-tool", choices=("pyinstaller", "nuitka"), default="pyinstaller")
+    args = parser.parse_args(argv)
     errors = run_checks()
     if errors:
         print("Build-tool self-test failed:")
         for error in errors:
             print(f"  - {error}")
         return 1
-    print("Build-tool self-test passed.")
-    print("Checked syntax, PyInstaller _internal layout, native HTML backend chains, Qt WebEngine exclusion, and lite builds.")
-    return 0
+    print("Build-tool self-test passed.", flush=True)
+    print(
+        "Checked syntax, staging output, native HTML backend chains, Qt WebEngine exclusion, and lite build plans.",
+        flush=True,
+    )
+    if not args.dynamic:
+        return 0
+    command = [
+        python_executable(),
+        str(PROJECT_ROOT / "build_tools" / "build.py"),
+        "--tool",
+        args.dynamic_tool,
+        "--profile",
+        "lite",
+        "--mode",
+        "standalone",
+        "--features",
+        "none",
+        "--mpv-runtime",
+        "system",
+    ]
+    print("Running dynamic frozen-build verification:", flush=True)
+    print("  " + " ".join(command), flush=True)
+    return subprocess.run(command, cwd=PROJECT_ROOT, check=False).returncode

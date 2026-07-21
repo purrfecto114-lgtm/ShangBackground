@@ -201,7 +201,13 @@ def collect_diagnostics() -> DiagnosticReport:
     )
 
     if PLATFORM_ID == "windows":
-        checks.append(_module_check("comtypes", "Windows COM wallpaper", required=False))
+        checks.append(
+            DiagnosticCheck(
+                "Windows COM wallpaper",
+                "pass",
+                "built-in ctypes + ole32 IDesktopWallpaper",
+            )
+        )
     elif PLATFORM_ID == "linux":
         checks.extend(
             [

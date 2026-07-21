@@ -77,6 +77,16 @@ def main() -> int:
         from app.diagnostics import main as diagnostics_main
 
         return diagnostics_main(json_output="--doctor-json" in sys.argv)
+    verification_flag = "--build-verify-file"
+    if verification_flag in sys.argv:
+        index = sys.argv.index(verification_flag)
+        try:
+            report_path = sys.argv[index + 1]
+        except IndexError:
+            return 2
+        from app.build_verification import write_build_verification
+
+        return write_build_verification(report_path)
 
     internal_result = _dispatch_internal_mode()
     if internal_result is not None:

@@ -1,2 +1,1 @@
 -r base.txt
-comtypes>=1.4,<2

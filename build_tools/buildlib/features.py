@@ -96,12 +96,21 @@ def requirement_files(project: Path, target: str, features: Iterable[str]) -> tu
     return tuple(dict.fromkeys(result))
 
 
-def manifest_payload(target: str, profile: str, features: Iterable[str], *, tool: str, video_runtime: Mapping[str, object]) -> dict[str, object]:
+def manifest_payload(
+    target: str,
+    profile: str,
+    features: Iterable[str],
+    *,
+    tool: str,
+    arch: str,
+    video_runtime: Mapping[str, object],
+) -> dict[str, object]:
     selected = set(features)
     return {
         "schema": 3,
         "tool": tool,
         "target": target,
+        "arch": arch,
         "profile": profile,
         "enabled": {key: key in selected for key in FEATURE_KEYS},
         "html_runtime": "native" if "html" in selected else "disabled",
