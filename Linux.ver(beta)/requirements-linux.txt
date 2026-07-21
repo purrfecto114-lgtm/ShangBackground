@@ -1,5 +1,0 @@
-# Lite runtime: HTML wallpaper is intentionally disabled.
-PySide6-Essentials==6.11.1
-Pillow>=10,<13
-psutil>=5.9,<8
-pynput>=1,<3

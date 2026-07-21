@@ -6,6 +6,9 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 dist-nuitka/
+dist-pyinstaller/
+build-pyinstaller/
+build-generated/
 *.build/
 *.dist/
 *.onefile-build/
@@ -14,3 +17,18 @@ VALIDATION_ARTIFACTS/
 Thumbs.db
 
 build-logs/
+
+WINDOWS_NUITKA_*_ONE_LINE.txt
+
+# Release and quality reports
+/BUILD-INFO.json
+/dist-release/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.prof
+*.lprof
+
+# Locally downloaded versioned MPV runtimes (source releases keep README only)
+/src/bin/mpv/

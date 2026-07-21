@@ -1,218 +1,147 @@
-
 <h1 align="center">
-  <img src="https://xxdz-official.github.io/ShangBackground/img/LOGO.png" width="80" height="80" alt="Logo"><br>
+  <img src="https://xxdz-official.github.io/ShangBackground/img/LOGO.png" width="80" height="80" alt="ShangBackground Logo"><br>
   上一个桌面背景 / ShangBackground
 </h1>
 
 <p align="center">
-  <b>恢复经典"上一个桌面背景"右键菜单，支持多平台与现代化壁纸管理</b><br>
-  <b>Restore the classic "Previous Desktop Background" menu with modern wallpaper management</b>
+  跨平台桌面壁纸管理器：静态壁纸、幻灯片、Bing、视频与交互式 HTML 壁纸。
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.4.0-blue" alt="Version">
-  <img src="https://img.shields.io/badge/Windows-Stable-brightgreen" alt="Windows">
-  <img src="https://img.shields.io/badge/Linux-Beta-orange" alt="Linux">
-  <img src="https://img.shields.io/badge/macOS-Alpha-lightgrey" alt="macOS">
-  <img src="https://img.shields.io/badge/License-GPLv3-blue" alt="License">
-  <img src="https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/PySide6-6.7+-41CD52?logo=qt&logoColor=white" alt="PySide6">
+  <img src="https://img.shields.io/badge/version-v1.4.2-0ea5e9?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/PySide6-6.11-41cd52?style=flat-square&logo=qt&logoColor=white" alt="PySide6">
+  <img src="https://img.shields.io/badge/License-GPLv3-blue?style=flat-square" alt="GPLv3">
 </p>
 
-<p align="center">
-  <a href="#-功能特性--features">功能</a> ·
-  <a href="#-平台支持--platform-support">平台</a> ·
-  <a href="#-快速开始--quick-start">快速开始</a> ·
-  <a href="#-从源码构建-nuitka--building-from-source">构建</a> ·
-  <a href="#-v14-项目主页--project-hub">v1.4 主页</a> ·
-  <a href="#-贡献者--contributors">贡献者</a>
-</p>
+## 项目定位
 
----
+ShangBackground 使用一份共享源码支持 Windows、Linux 和 macOS。Windows 版可恢复经典“上一个桌面背景”桌面右键菜单；Linux/macOS 提供托盘、壁纸切换和受支持会话中的全局热键，但不宣称文件管理器级右键菜单集成。
 
-## 📖 项目简介 / Overview
+主要能力：
 
-ShangBackground（上一个桌面背景）是一个跨平台桌面壁纸管理应用。Windows 版恢复经典的桌面右键"上一个桌面背景"菜单；Linux/macOS 版提供壁纸切换、托盘菜单与全局热键。
+- 图片、幻灯片、纯色和渐变壁纸；
+- Bing 每日壁纸、收藏、历史与概率权重；
+- 可选直接 libmpv/外部 mpv 视频壁纸，以及三端系统原生 WebView HTML 壁纸；
+- 全局热键、托盘、开机自启、幂等的启动前壁纸恢复与单实例守护；
+- 中英界面、主题、字体、DPI 和可搜索设置；
+- Nuitka/PyInstaller 统一构建，以及按功能勾选的模块化产物。
 
-它不只是一个壁纸切换器，而是一个完整的壁纸工作站：
+## UI 技术路线
 
-- 🖱️ **右键菜单集成** — Windows 原生注册表 shell verb；Linux & macOS 提供系统托盘右键菜单
-- 🎬 **切换动画** — 顺滑视觉过渡
-- 🌐 **Bing 每日壁纸** — 自动同步，自适应分辨率
-- 🎲 **概率权重** — 滑块 + 数值双控，精准分配随机壁纸权重
-- ⌨️ **全局热键** — `Ctrl+Alt+N` 等；保存后立即注册，不再依赖右键菜单开关（Windows 含焦点防误触，Linux/macOS 暂无）
-- 🌍 **双语界面** — 中英实时切换，无需重启
-- 🎨 **主题与字体** — 自定义字体、主题颜色、应用内 DPI 调整
-- 🔒 **单实例守护** — 进程级锁，重复启动自动唤起主窗口
+项目主界面使用 **Qt Widgets**。HTML 壁纸运行在独立子进程，并强制调用操作系统提供的网页控件：
 
----
+- Windows：WebView2；
+- macOS：WKWebView；
+- Linux：WebKitGTK（当前桌面嵌入限 X11）；
+- 主 Widgets 进程不嵌入网页，也不随包携带 Qt WebEngine/Chromium。
 
-## ✨ 功能特性 / Features
+细节见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 与 [`docs/HTML_WALLPAPER_PERFORMANCE.md`](docs/HTML_WALLPAPER_PERFORMANCE.md)。
 
-| 功能 | 说明 |
-|---|---|
-| 🖱️ 桌面右键菜单 | Windows 恢复经典"上一个桌面背景"菜单；Linux/macOS 使用托盘菜单 |
-| 🎬 切换动画 | 多种壁纸切换动画 |
-| 🎨 主题与字体 | 自定义字体、主题颜色、应用内 DPI 调整 |
-| 🔔 更新渠道 | 支持多更新源切换 |
-| 🌐 双语界面 | 中英实时切换，无需重启 |
-| 🎲 概率分配 | 滑块+数值双控，壁纸随机权重精准分配 |
-| 🧠 Bing 壁纸 | 自动同步 Bing 每日壁纸，自适应分辨率 |
-| 🛡️ 单实例守护 | 进程级锁，重复启动自动唤起主窗口 |
-| 🔄 退出还原 | 关闭程序自动恢复原始壁纸 |
-| 🚀 开机自启 | Windows、Linux 与 macOS 开机启动 |
-| 📦 配置迁移 | 首次启动自动迁移旧配置 |
-| ⌨️ 全局热键 | 保存后立即注册；Windows 含焦点防误触，Linux/macOS 基于 pynput |
-| 🎬 视频壁纸 | 基于 mpv（Windows 完整支持，Linux/macOS 部分） |
-| 🧩 HTML 壁纸 | Windows WorkerW 嵌入 HTML 壁纸 |
+## 平台状态
 
----
-
-## 🖥️ 平台支持 / Platform Support
-
-| 平台 | 状态 | 说明 |
-|---|---|---|
-| Windows | ✅ Stable | 完整功能：注册表、右键菜单、托盘、自启、WorkerW HTML 壁纸 |
-| Linux | 🧪 Beta | `gsettings` / `xfconf` / `feh` 三后端 |
-| macOS | ⚠️ Alpha | `osascript` + `LaunchAgent`，欢迎反馈 |
-
-### 功能对比矩阵
-
-| 功能 | Windows | Linux | macOS |
+| 能力 | Windows | Linux | macOS |
 |---|:---:|:---:|:---:|
-| 桌面右键菜单 | ✅ | ❌ | ❌ |
-| 切换动画 | ✅ | ✅ | ✅ |
-| 主题与字体 | ✅ | ✅ | ✅ |
-| 双语界面 | ✅ | ✅ | ✅ |
-| 概率权重 | ✅ | ✅ | ✅ |
-| Bing 壁纸 | ✅ | ✅ | ✅ |
-| 单实例守护 | ✅ | ✅ | ✅ |
-| 退出还原 | ✅ | ✅ | ✅ |
+| 静态壁纸、托盘、设置 | ✅ | ✅ | ✅ |
+| 桌面右键菜单 | ✅ | — | — |
+| 全局热键 | ✅ 原生 | 🟡 X11；Wayland 未接入 Portal | 🟡 需系统权限 |
+| 视频壁纸 | 🟡 WorkerW | 🟡 X11/桌面环境相关 | 🟡 AppKit/系统环境相关 |
+| HTML 壁纸 | 🟡 WorkerW | 🟡 X11 | 🟡 AppKit |
 | 开机自启 | ✅ | ✅ | ✅ |
-| 全局热键 | ✅（含焦点防误触） | 🟡（pynput，无焦点防误触） | 🟡（pynput，无焦点防误触） |
-| HTML 壁纸 (WorkerW) | ✅ | ❌ | ❌ |
-| 鼠标穿透 | ✅ | 🟡 | ❌ |
-| 配置迁移 | ✅ | ✅ | ✅ |
-| 视频壁纸 (mpv) | ✅ | 🟡 | 🟡 |
 
-图例：✅ 支持 · 🟡 部分 · ❌ 暂未
+`✅` 表示主路径已实现；`🟡` 表示实现存在，但仍依赖桌面环境、权限或目标系统真机验证。非本机 dry-run 只能验证构建参数，不能代替原生验收。
 
----
-
-## 🚀 快速开始 / Quick Start
-
-### Windows
-
-1. 下载 [Release](https://github.com/purrfecto114-lgtm/ShangBackground/releases) 并解压至非系统目录
-2. 运行 `ShangBackground.exe`
-3. 桌面右键即可使用"上一个桌面背景"菜单
-
-### Linux
+## 快速开始
 
 ```bash
 git clone https://github.com/purrfecto114-lgtm/ShangBackground.git
-cd "上一个桌面背景 - 源代码"
-
-python3 -m pip install -r "Linux.ver(beta)/requirements-linux.txt"
-python3 -m pip install pynput || true  # 可选：全局热键
-
-python3 "Linux.ver(beta)/src/main.py"
+cd ShangBackground
+python -m venv .venv
 ```
 
-### macOS
+激活虚拟环境后，按当前平台安装完整运行依赖并启动：
 
 ```bash
-git clone https://github.com/purrfecto114-lgtm/ShangBackground.git
-cd "上一个桌面背景 - 源代码"
+# Windows
+python -m pip install -r requirements/windows-full.txt
 
-python3 -m pip install -r "MacOS.ver(alpha)/requirements-macos.txt"
-python3 -m pip install pynput || true  # 可选：全局热键（需授予辅助功能权限）
+# Linux
+python -m pip install -r requirements/linux-full.txt
 
-python3 "MacOS.ver(alpha)/src/main.py"
+# macOS
+python -m pip install -r requirements/macos-full.txt
+
+python src/main.py
 ```
 
-> 💡 `psutil` 与 `pynput` 为可选依赖：缺少 `psutil` 时仅跳过旧进程清理；缺少 `pynput` 时仅禁用全局热键。
+当前发布源码包只保留应用源码和独立构建工具；内部测试树、审计脚本与阶段性验证产物不随包分发。
 
----
+## 模块化构建
 
-## 🔨 从源码构建 (Nuitka) / Building from Source
-
-### 前置依赖
+打开构建工作台（目标平台自动锁定为当前系统，包含命令预览、折叠高级选项、有界实时日志和完整进程树停止）：
 
 ```bash
-# Python 3.10+
-python --version
-
-# 安装构建依赖
-pip install -r scripts/requirements-build.txt
-
-# C 编译器
-# Linux: apt install gcc patchelf
-# macOS: xcode-select --install
-# Windows: Nuitka 自动下载 Zig
+python build_tools/build.py --gui
+# 或窗口化入口
+python build_tools/build_gui.py
 ```
 
----
+CLI 使用分组帮助并显示默认值：
 
-## 📂 项目结构 / Project Structure
-
-```
-ShangBackground-1.4.0/
-├── Windows.ver/                # Windows 源码树
-│   ├── src/                    # PySide6 源码
-│   ├── build_gui.py            # GUI 构建器
-│   ├── build_nuitka.py         # Nuitka CLI 驱动
-│   └── requirements-windows*.txt
-├── Linux.ver(beta)/            # Linux 源码树
-├── MacOS.ver(alpha)/           # macOS 源码树
-├── tests/                      # 18 个冒烟测试
-├── tools/                      # 5 个工程化脚本
-├── GETTING_MPV.md              # mpv 打包说明
-├── README.md
-├── LICENSE                     # GPLv3
-└── NOTICE                      # 第三方声明
+```bash
+python build_tools/build.py --tool pyinstaller --help
+python build_tools/build.py --tool nuitka --help
+python build_tools/build.py mpv --help
 ```
 
----
+可选模块：`video`、`html`、`bing`、`hotkeys`、`updates`、`fonts`。图片、幻灯片、纯色和渐变属于核心功能，始终保留。
 
-## 👥 贡献者 / Contributors
+Windows 自包含视频包需先显式下载或手动放置匹配架构的完整 libmpv 运行时：
 
-| 贡献者 | 贡献内容 |
-|---|---|
-| [小小电子xxdz](https://space.bilibili.com/) | 项目创始人、Windows 原版 |
-| [@purrfecto114-lgtm](https://github.com/purrfecto114-lgtm) | Fork 维护、PySide6 重构、Linux 支持、v1.4.0 质量硬化 |
+```bash
+python build_tools/build.py mpv download --target windows --arch x86_64 --channel stable
+python build_tools/build.py mpv verify --target windows --arch x86_64
+python build_tools/build.py mpv list --target windows --arch x86_64
+```
 
----
+下载内容按平台/架构/版本保存到 `src/bin/mpv/`，构建时只携带选中的一个版本。普通构建不会隐式联网下载原生代码。Linux 可使用本地或目标系统 libmpv，macOS 使用 AVFoundation。
 
-## 🤝 贡献 / Contributing
+```bash
+# 查看功能列表
+python build_tools/build.py --tool nuitka --list-features
 
-1. Fork 仓库
-2. 创建分支：`git checkout -b feat/my-feature`
-3. 约定式提交：`feat: add X`、`fix: resolve Y`
-4. 提交 Pull Request
+# 仅核心功能
+python build_tools/build.py --tool nuitka --profile full --features none --mode standalone
 
-### 需要帮助的领域
-- ⌨️ Linux/macOS 全局热键完善
-- 🍎 macOS 鼠标穿透（AUD-007）
-- 🌐 更多 i18n 语言（日语、韩语、西班牙语）
+# 核心 + 视频 + Bing
+python build_tools/build.py --tool pyinstaller --profile full --features video,bing --mode standalone
 
----
+# 含 HTML：只打包当前平台的原生 WebView 桥接，不携带 Qt WebEngine
+python build_tools/build.py --tool pyinstaller --profile full --features html --mode standalone
 
-## ⚠️ 授权说明 / License
+# 只检查其他平台的命令生成，不构建
+python build_tools/build.py --tool pyinstaller --target windows --profile full \
+  --mode standalone --skip-install --dry-run
+```
 
-- **源代码**: [GPLv3](LICENSE) — 可自由修改与分发，衍生作品须保持相同许可
-- **图像素材** (`/img/`): 由 **小小电子xxdz** 创作，**保留所有权利**，不包含在 GPLv3 范围内
+`full` 默认启用全部可选模块；`lite` 默认关闭视频和 HTML。构建 GUI 与 CLI 都委托给同一份构建计划，GUI 不包含隐式参数。Target 锁定为当前系统，非本机参数检查只保留在 CLI `--dry-run`。自定义组合会生成 `build-features.json`，运行时据此隐藏未打包功能并跳过对应依赖检查。详见 [`docs/BUILD_SYSTEM.md`](docs/BUILD_SYSTEM.md)。
 
----
+## 文档
 
-## 🔗 相关链接 / Links
+- [`docs/UI_ARCHITECTURE.md`](docs/UI_ARCHITECTURE.md)：Widgets 与独立原生 WebView 的职责边界
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)：Service、Port、RuntimeState 与平台后端
+- [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md)：目录职责和生成文件
+- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)：开发环境与日常流程
+- [`docs/BUILD_SYSTEM.md`](docs/BUILD_SYSTEM.md)：统一、模块化构建
+- [`docs/GETTING_MPV.md`](docs/GETTING_MPV.md)：libmpv/mpv 运行时与发布约束
+- [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md)：发布与源码归档
+- [`docs/ROADMAP.md`](docs/ROADMAP.md)：当前优先级
+- [`CHANGELOG.md`](CHANGELOG.md)：可追踪的版本变更
 
-- 🌐 官网: [xxdz-official.github.io](https://xxdz-official.github.io/)
-- 📺 Bilibili: [小小电子xxdz](https://space.bilibili.com/)
-- 💻 上游仓库: [xxdz-official/ShangBackground](https://github.com/xxdz-official/ShangBackground)
-- 🍴 当前仓库: [purrfecto114-lgtm/ShangBackground](https://github.com/purrfecto114-lgtm/ShangBackground)
-- 📦 最新发布: [v1.4.0](https://github.com/purrfecto114-lgtm/ShangBackground/releases/latest)
+## 仓库说明
 
----
+根目录的 `index.html`、`v1.html` 与 `img/` 是 GitHub Pages 站点资源，因此保留。缓存、构建目录、阶段性验证报告、`BUILD-INFO.json` 和 `build-generated/` 不属于发布源码。
 
-<p align="center">Made with ❤️ by ShangBackground Team · 上一个桌面背景</p>
+## 贡献与许可证
+
+贡献规则见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。项目按 GPL-3.0 发布，第三方声明见 [`NOTICE`](NOTICE)。

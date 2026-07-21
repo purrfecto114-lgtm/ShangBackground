@@ -1,0 +1,2 @@
+# Optional global-hotkey backend for Linux and macOS.
+pynput>=1,<3

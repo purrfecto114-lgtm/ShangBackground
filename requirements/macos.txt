@@ -1,0 +1,4 @@
+-r base.txt
+# Cocoa/Quartz are also used by the native image wallpaper and desktop-layer integration.
+pyobjc-framework-Quartz>=11,<13
+pyobjc-framework-Cocoa>=11,<13

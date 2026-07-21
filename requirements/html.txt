@@ -1,0 +1,2 @@
+# Compatibility alias for the system-native HTML wallpaper runtime.
+-r html-native.txt

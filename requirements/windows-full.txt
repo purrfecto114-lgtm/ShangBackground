@@ -1,0 +1,3 @@
+-r windows.txt
+-r html-native.txt
+-r windows-video.txt

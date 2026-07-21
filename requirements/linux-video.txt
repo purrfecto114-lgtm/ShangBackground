@@ -1,0 +1,2 @@
+# Linux video support uses the direct ctypes libmpv client API.
+# No extra Python package is required; bundle the complete native libmpv runtime under src/bin/<platform>/.

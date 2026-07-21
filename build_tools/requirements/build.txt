@@ -1,0 +1,3 @@
+# Build backends pinned for reproducible release environments.
+-r build-nuitka.txt
+-r build-pyinstaller.txt

@@ -1,0 +1,2 @@
+# Optional macOS native video-wallpaper backend.
+pyobjc-framework-AVFoundation>=11,<13

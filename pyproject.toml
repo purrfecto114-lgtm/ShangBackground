@@ -1,0 +1,23 @@
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+extend-exclude = [
+  ".git",
+  ".venv",
+  "build-logs",
+  "dist-nuitka",
+  "dist-pyinstaller",
+  "build-pyinstaller",
+  "build-generated",
+  "dist-release",
+  "VALIDATION_ARTIFACTS",
+]
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/app/config_repository.py" = []
+"src/app/wallpaper_repositories.py" = []
+"src/app/wallpaper_library.py" = []
+"src/app/runtime_state.py" = []
