@@ -57,6 +57,40 @@ def test_installer_script_uses_python_rendered_placeholders():
         assert f"#define {placeholder}" in text, placeholder
 
 
+def test_installer_script_uses_only_valid_inno_setup_directives():
+    """Guard against typos in [Setup] section directives. Inno Setup aborts
+    compilation with 'Unrecognized [Setup] section directive' if a directive
+    name is misspelled (e.g. ``VersionInfoFileVersion`` which does not exist;
+    the correct name is just ``VersionInfoVersion``).
+    """
+    text = installer_module.ISS_PATH.read_text(encoding="utf-8")
+    # Source: Inno Setup 6 help file, [Setup] section directives list.
+    # We only assert the directives we actually use plus a denylist of
+    # common misspellings that look right but cause compile failures.
+    forbidden_directives = (
+        "VersionInfoFileVersion",  # NOT a real Inno Setup directive; the correct name is VersionInfoVersion
+        "VersionInfoProductText",  # misspelling of VersionInfoProductVersion
+    )
+    for forbidden in forbidden_directives:
+        assert forbidden not in text, f".iss uses non-existent Inno Setup directive: {forbidden}"
+
+    # Spot-check that the directives we DO use are the canonical names.
+    for required in (
+        "VersionInfoVersion=",
+        "VersionInfoCompany=",
+        "VersionInfoProductName=",
+        "VersionInfoProductVersion=",
+        "AppId=",
+        "AppName=",
+        "AppVersion=",
+        "LicenseFile=",
+        "OutputDir=",
+        "OutputBaseFilename=",
+        "ArchitecturesInstallIn64BitMode=",
+    ):
+        assert required in text, f".iss is missing required [Setup] directive: {required}"
+
+
 def test_installer_plan_resolves_for_windows_x86_64():
     plan = create_installer_plan(
         target="windows",

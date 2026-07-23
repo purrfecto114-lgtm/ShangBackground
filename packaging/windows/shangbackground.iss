@@ -72,7 +72,6 @@ AppCopyright=Copyright (C) {#COMPANY_NAME}
 VersionInfoVersion={#APP_VERSION_PUB}
 VersionInfoCompany={#COMPANY_NAME}
 VersionInfoProductName={#PRODUCT_NAME}
-VersionInfoFileVersion={#APP_VERSION_PUB}
 VersionInfoProductVersion={#APP_VERSION_PUB}
 
 ; License agreement shown right after the welcome page. The Next button is
