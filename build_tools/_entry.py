@@ -58,6 +58,10 @@ def run_unified(argv: Sequence[str] | None = None) -> int:
         from build_tools.buildlib.mpv_runtime import main
 
         return _guard_cli(lambda: int(main(values[1:])))
+    if values and values[0] == "installer":
+        from build_tools.buildlib.installer import main
+
+        return _guard_cli(lambda: int(main(values[1:])))
     if values and values[0] in {"self-test", "selftest"}:
         from build_tools.buildlib.selftest import main
 

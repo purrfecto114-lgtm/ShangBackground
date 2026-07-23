@@ -25,6 +25,7 @@ def test_release_metadata_matches_project_files():
     assert re.fullmatch(r"\d+\.\d+\.\d+", metadata.version)
     assert metadata.tag == f"v{metadata.version}"
     assert metadata.source_archive.endswith("-source.zip")
+    assert metadata.windows_installer("x86_64") == f"ShangBackground-{metadata.tag}-windows-x86_64-setup.exe"
 
 
 def test_linux_binary_archive_preserves_bundle_layout(tmp_path: Path):
@@ -101,3 +102,19 @@ def test_standard_workflows_use_pinned_major_actions_and_minimal_permissions():
     assert "github/codeql-action/init@v4" in codeql
     assert "github/codeql-action/analyze@v4" in codeql
     assert "actions/dependency-review-action@v5" in dependency_review
+
+
+def test_release_workflow_builds_windows_installer():
+    """``release.yml`` must produce the Inno Setup ``setup.exe`` on Windows
+    so it can be included as a release asset alongside the binary archive."""
+    release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "Build Windows setup.exe (Inno Setup)" in release_workflow
+    assert "python build_tools/build.py installer" in release_workflow
+    assert "Install Inno Setup (Windows)" in release_workflow
+    assert "SHANGBACKGROUND_ISCC" in release_workflow
+
+
+def test_expected_release_assets_include_windows_installer():
+    assets = release.expected_release_assets()
+    metadata = release.read_metadata()
+    assert metadata.windows_installer("x86_64") in assets

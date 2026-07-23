@@ -27,7 +27,7 @@ SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 TARGETS = ("windows", "linux", "macos")
 ARCHES = ("x86_64", "arm64")
 
-SOURCE_DIRECTORIES = ("src", "build_tools", "requirements", "docs", "fonts")
+SOURCE_DIRECTORIES = ("src", "build_tools", "requirements", "docs", "fonts", "packaging")
 SOURCE_FILES = (
     ".gitignore",
     "LICENSE",
@@ -50,6 +50,7 @@ EXCLUDED_NAMES = {
     "build-pyinstaller",
     "dist-nuitka",
     "dist-pyinstaller",
+    "dist-installer",
     "dist-release",
     "tests",
     "VALIDATION_ARTIFACTS",
@@ -84,6 +85,10 @@ class ReleaseMetadata:
     def binary_archive(self, target: str, arch: str) -> str:
         extension = "zip" if target == "windows" else "tar.gz"
         return f"{APP_NAME}-{self.tag}-{target}-{arch}.{extension}"
+
+    def windows_installer(self, arch: str = "x86_64") -> str:
+        """Inno Setup ``setup.exe`` produced by ``build_tools/build.py installer``."""
+        return f"{APP_NAME}-{self.tag}-windows-{arch}-setup.exe"
 
 
 def _load_assignment(path: Path, variable: str) -> str:
@@ -383,6 +388,7 @@ def expected_release_assets() -> set[str]:
         metadata.binary_archive("linux", "x86_64"),
         metadata.binary_archive("macos", "x86_64"),
         metadata.binary_archive("macos", "arm64"),
+        metadata.windows_installer("x86_64"),
         metadata.source_archive,
     }
 

@@ -10,6 +10,7 @@ from .bundle import WEBVIEW_MODULES
 from .constants import PROJECT_ROOT, PYINSTALLER_CONTENTS_DIRECTORY, TARGETS, python_executable
 from .diagnostics import preflight
 from .features import default_features
+from .installer import ISS_PATH, LICENSE_PATH
 from .nuitka import build_args as nuitka_args
 from .plan import create_plan
 from .pyinstaller import build_args as pyinstaller_args
@@ -54,6 +55,23 @@ def run_checks() -> tuple[str, ...]:
     hooks = PROJECT_ROOT / "build_tools" / "pyinstaller_hooks"
     for forbidden in ("hook-PySide6.QtCore.py", "hook-PySide6.QtGui.py", "hook-PySide6.QtNetwork.py"):
         _check(not (hooks / forbidden).exists(), f"obsolete Qt hook override still exists: {forbidden}", errors)
+
+    # Installer invariants: the .iss and license.rtf must always be present,
+    # and the .iss must reference the license so acceptance is mandatory.
+    _check(ISS_PATH.is_file(), f"Inno Setup script is missing: {ISS_PATH}", errors)
+    _check(LICENSE_PATH.is_file(), f"Installer license file is missing: {LICENSE_PATH}", errors)
+    if ISS_PATH.is_file():
+        iss_text = ISS_PATH.read_text(encoding="utf-8")
+        _check(
+            "LicenseFile=" in iss_text and "license.rtf" in iss_text,
+            "Inno Setup script must reference LicenseFile pointing to license.rtf",
+            errors,
+        )
+        _check(
+            "ArchitecturesInstallIn64BitMode=x64compatible" in iss_text,
+            "Inno Setup script must lock to 64-bit install mode",
+            errors,
+        )
 
     for target in TARGETS:
         full_pyi = _plan("pyinstaller", target, "full")
@@ -116,7 +134,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print("Build-tool self-test passed.", flush=True)
     print(
-        "Checked syntax, staging output, native HTML backend chains, Qt WebEngine exclusion, and lite build plans.",
+        "Checked syntax, staging output, native HTML backend chains, Qt WebEngine "
+        "exclusion, lite build plans, and Windows installer invariants.",
         flush=True,
     )
     if not args.dynamic:

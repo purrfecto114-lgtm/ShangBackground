@@ -60,12 +60,15 @@ python build_tools/build.py \
 
 ```text
 ShangBackground-vX.Y.Z-windows-x86_64.zip
+ShangBackground-vX.Y.Z-windows-x86_64-setup.exe
 ShangBackground-vX.Y.Z-linux-x86_64.tar.gz
 ShangBackground-vX.Y.Z-macos-x86_64.tar.gz
 ShangBackground-vX.Y.Z-macos-arm64.tar.gz
 ShangBackground-vX.Y.Z-source.zip
 SHA256SUMS.txt
 ```
+
+Windows 在二进制归档之外，还额外提供一个 Inno Setup 安装包（`-setup.exe`）。安装包内嵌用户许可协议（`packaging/windows/license.rtf`），用户必须在向导首页勾选"我接受协议"才能继续安装；安装包同时提供开始菜单、桌面（可选）与开机自启（可选）快捷方式，并写入 Add/Remove Programs 卸载入口。CI 在 Windows runner 上自动安装 Inno Setup 6 后调用 `python build_tools/build.py installer` 生成 `setup.exe`，与本机命令一致。
 
 二进制归档保留 standalone 目录结构与 Unix 可执行权限。源码 ZIP 只含一个顶层目录，并排除 `.github/`、`tests/`、缓存、构建目录、站点资源和验证产物。工作流会重新解压源码包，然后执行：
 
@@ -76,7 +79,7 @@ python build_tools/build.py self-test
 # 三个平台、两种后端的 lite standalone dry-run
 ```
 
-最终发布前，`.github/scripts/release.py checksums` 会验证五个预期归档均存在且没有额外文件，然后生成排序稳定的 SHA-256 清单。
+最终发布前，`.github/scripts/release.py checksums` 会验证六个预期归档（四个二进制包 + Windows setup.exe + 源码包）均存在且没有额外文件，然后生成排序稳定的 SHA-256 清单。
 
 ## 手动验证发布脚本
 
@@ -96,6 +99,32 @@ python .github/scripts/release.py package \
   --input dist-pyinstaller/linux/lite-x86_64/standalone \
   --output-dir dist-release
 ```
+
+## 手动构建 Windows 安装包
+
+CI 之外，开发者也可以在本机生成 `setup.exe`：
+
+1. 先用 PyInstaller 产出已验证的 standalone 目录：
+
+   ```bash
+   python build_tools/build.py --tool pyinstaller --target windows \
+     --profile lite --mode standalone --mpv-runtime system --arch x86_64
+   ```
+
+2. 安装 [Inno Setup 6](https://jrsoftware.org/isdl.php)，或设置 `SHANGBACKGROUND_ISCC` 环境变量指向 `ISCC.exe` 的绝对路径。
+
+3. 调用 `installer` 子命令：
+
+   ```bash
+   python build_tools/build.py installer \
+     --target windows --profile lite --arch x86_64 \
+     --input dist-pyinstaller/windows/lite-x86_64/standalone \
+     --output-dir dist-release
+   ```
+
+4. 产物为 `dist-release/ShangBackground-vX.Y.Z-windows-x86_64-setup.exe`。
+
+`--dry-run` 只解析计划、校验产物布局、打印 ISCC 命令，不真正调用编译器，便于在 Linux/macOS 上预演。
 
 ## 原生验收边界
 
