@@ -4,12 +4,55 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import shutil
+import sys
+import time
 from typing import Iterable
 import uuid
 
 from .constants import PROJECT_ROOT, host_target, normalize_arch
 from .features import manifest_payload, output_profile_name, write_manifest
 from .mpv_runtime import MpvBuildSelection, resolve_build_runtime, verify_runtime_directory
+
+
+# On Windows, antivirus / file-system watchers (and even Explorer thumbnail
+# generation) can briefly hold a lock on freshly-built DLLs and EXEs.
+# ``os.replace`` for a directory that contains such files then fails with
+# ``[WinError 5] Access is denied`` even though no real permission issue
+# exists. The retry loop below lets the lock release naturally; if every
+# retry still fails we fall back to a copy-then-remove which is slower but
+# tolerates locked files (shutil.rmtree ignores errors by default).
+_PUBLISH_RETRY_ATTEMPTS = 5
+_PUBLISH_RETRY_DELAY_SECONDS = 0.5
+
+
+def _replace_directory_with_retry(src: Path, dst: Path) -> None:
+    """``os.replace`` with Windows-friendly retry and copy fallback."""
+    last_error: Exception | None = None
+    for attempt in range(_PUBLISH_RETRY_ATTEMPTS):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError as error:
+            # WinError 5: a file inside src or dst is locked by AV / Explorer.
+            last_error = error
+            time.sleep(_PUBLISH_RETRY_DELAY_SECONDS)
+        except OSError as error:
+            # Some Windows builds surface this as a generic OSError instead
+            # of PermissionError; treat it the same way for one retry cycle.
+            if sys.platform == "win32" and error.winerror == 5 and attempt < _PUBLISH_RETRY_ATTEMPTS - 1:
+                last_error = error
+                time.sleep(_PUBLISH_RETRY_DELAY_SECONDS)
+            else:
+                raise
+    # Retry loop exhausted: fall back to copy-then-remove so we make
+    # progress even when a stray file handle refuses to release.
+    try:
+        shutil.copytree(src, dst)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Could not move {src} to {dst} after {_PUBLISH_RETRY_ATTEMPTS} retries: {last_error}"
+        ) from exc
+    shutil.rmtree(src, ignore_errors=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,7 +175,7 @@ def recover_published_output(plan: BuildPlan) -> None:
     backups = _publication_backups(plan)
     if not final.exists() and backups:
         final.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(backups[0], final)
+        _replace_directory_with_retry(backups[0], final)
         backups = backups[1:]
     if final.exists():
         for backup in backups:
@@ -166,12 +209,12 @@ def publish_staging_output(plan: BuildPlan) -> None:
     moved_old = False
     try:
         if final.exists():
-            os.replace(final, backup)
+            _replace_directory_with_retry(final, backup)
             moved_old = True
-        os.replace(staging, final)
+        _replace_directory_with_retry(staging, final)
     except Exception:
         if moved_old and backup.exists() and not final.exists():
-            os.replace(backup, final)
+            _replace_directory_with_retry(backup, final)
         raise
     else:
         if backup.exists():

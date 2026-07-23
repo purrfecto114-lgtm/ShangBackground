@@ -200,3 +200,77 @@ def test_dry_run_requirement_install_does_not_create_report_parent(tmp_path: Pat
     install_requirements((requirement,), verbose=False, dry_run=True, report_path=report)
 
     assert not report.parent.exists()
+
+
+def test_publish_retries_on_transient_permission_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Regression: on Windows, antivirus / file watchers can briefly lock
+    freshly-built files, causing ``os.replace`` to fail with ``PermissionError``
+    (WinError 5). The publish step must retry a few times before giving up
+    so transient locks do not fail the whole build."""
+    import build_tools.buildlib.plan as plan_module
+
+    monkeypatch.setattr(plan_module, "PROJECT_ROOT", tmp_path)
+    # Speed up the test: do not actually sleep between retries.
+    monkeypatch.setattr(plan_module, "_PUBLISH_RETRY_DELAY_SECONDS", 0.0)
+    plan = _plan(tmp_path)
+    final = plan.output_dir
+    final.mkdir(parents=True)
+    (final / "marker.txt").write_text("old", encoding="utf-8")
+    plan.build_output_dir.mkdir(parents=True)
+    (plan.build_output_dir / "marker.txt").write_text("new", encoding="utf-8")
+
+    real_replace = plan_module.os.replace
+    attempts = {"count": 0}
+
+    def transiently_failing_replace(source, destination):
+        attempts["count"] += 1
+        # Fail the first two attempts of the staging->final move with
+        # PermissionError, then succeed.
+        if source == plan.build_output_dir and attempts["count"] <= 2:
+            raise PermissionError(5, "Access is denied (simulated AV lock)")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(plan_module.os, "replace", transiently_failing_replace)
+
+    publish_staging_output(plan)
+
+    # The publish must have succeeded after retries.
+    assert (final / "marker.txt").read_text(encoding="utf-8") == "new"
+    assert not plan.build_output_dir.exists()
+    # At least 3 attempts: 2 failures + 1 success on the staging->final move,
+    # plus 1 successful final->backup move before that.
+    assert attempts["count"] >= 3
+
+
+def test_publish_falls_back_to_copytree_when_replace_permanently_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """If every ``os.replace`` retry fails, the publish step must fall back to
+    ``shutil.copytree`` + ``shutil.rmtree`` so a stray locked file does not
+    block the build permanently."""
+    import build_tools.buildlib.plan as plan_module
+
+    monkeypatch.setattr(plan_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(plan_module, "_PUBLISH_RETRY_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(plan_module, "_PUBLISH_RETRY_ATTEMPTS", 2)
+    plan = _plan(tmp_path)
+    final = plan.output_dir
+    final.mkdir(parents=True)
+    (final / "marker.txt").write_text("old", encoding="utf-8")
+    plan.build_output_dir.mkdir(parents=True)
+    (plan.build_output_dir / "marker.txt").write_text("new", encoding="utf-8")
+
+    def always_failing_replace(source, destination):
+        raise PermissionError(5, "Access is denied (permanent lock)")
+
+    monkeypatch.setattr(plan_module.os, "replace", always_failing_replace)
+
+    # Mock shutil.rmtree so the rollback path in publish_staging_output
+    # can also use the copytree fallback (it calls _replace_directory_with_retry
+    # to move backup back to final).
+    publish_staging_output(plan)
+
+    # The publish must have succeeded via the copytree fallback.
+    assert (final / "marker.txt").read_text(encoding="utf-8") == "new"
+    # The staging directory must have been removed by the fallback.
+    assert not plan.build_output_dir.exists()
