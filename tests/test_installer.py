@@ -106,6 +106,29 @@ def test_installer_script_uses_only_valid_inno_setup_directives():
         assert required in text, f".iss is missing required [Setup] directive: {required}"
 
 
+def test_installer_script_does_not_check_destination_in_prepare_to_install():
+    """Regression: ``PrepareToInstall`` runs BEFORE [Files] copies anything,
+    so checking ``{app}\\ShangBackground.exe`` at that point always fails and
+    blocks every install with '打包产物缺失'. The .iss must NOT contain a
+    PrepareToInstall function that calls FileExists on a destination path.
+
+    The post-install sanity check belongs in ``CurStepChanged(ssPostInstall)``
+    instead, which fires AFTER all [Files] entries have been copied.
+    """
+    text = installer_module.ISS_PATH.read_text(encoding="utf-8")
+    # The .iss must NOT define a PrepareToInstall function.
+    assert "function PrepareToInstall" not in text, (
+        ".iss defines PrepareToInstall - this hook runs BEFORE file copy, so "
+        "any FileExists check on {app} will always fail and block installation. "
+        "Move the check to CurStepChanged(ssPostInstall) instead."
+    )
+    # The .iss MUST define a CurStepChanged post-install guard.
+    assert "procedure CurStepChanged" in text, (
+        ".iss must define CurStepChanged for post-install sanity check"
+    )
+    assert "ssPostInstall" in text, ".iss CurStepChanged must check ssPostInstall step"
+
+
 def test_installer_plan_resolves_for_windows_x86_64():
     plan = create_installer_plan(
         target="windows",

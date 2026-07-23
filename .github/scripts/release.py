@@ -30,6 +30,8 @@ ARCHES = ("x86_64", "arm64")
 SOURCE_DIRECTORIES = ("src", "build_tools", "requirements", "docs", "fonts", "packaging")
 SOURCE_FILES = (
     ".gitignore",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
     "LICENSE",
     "NOTICE",
     "README.md",

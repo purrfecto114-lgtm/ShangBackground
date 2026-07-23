@@ -162,24 +162,34 @@ Filename: "{app}\ShangBackground.exe"; Parameters: "--quit"; RunOnceId: "StopApp
 Type: filesandordirs; Name: "{localappdata}\{#APP_NAME}"
 
 [Code]
-// Belt-and-suspenders guard: refuse to continue if the PyInstaller bundle is
-// somehow missing the entry executable. This protects against half-staged
-// installs where SourceRoot was set incorrectly.
+// InitializeSetup runs before any file operations. We use it only for
+// environment checks that do NOT depend on installed files - the actual
+// "is ShangBackground.exe present in the source bundle" check is done at
+// build time by build_tools/buildlib/installer.py:_validate_source_layout,
+// and ISCC itself fails compilation if the [Files] Source glob matches
+// nothing. There is intentionally no PrepareToInstall check here because
+// PrepareToInstall fires BEFORE [Files] copies anything, so checking
+// {app}\ShangBackground.exe at that point would always fail.
 function InitializeSetup(): Boolean;
 begin
   Result := True;
 end;
 
-function PrepareToInstall(var NeedsRestart: Boolean): String;
+// CurStepChanged runs AFTER file installation. Use it as a post-install
+// sanity check: if the executable is missing at this point, something
+// went wrong with the [Files] copy (disk full, AV interference, etc.)
+// and we should abort with a clear message instead of letting the
+// [Run] section try to launch a non-existent file.
+procedure CurStepChanged(CurStep: TSetupStep);
 var
   ExecutablePath: String;
 begin
-  ExecutablePath := ExpandConstant('{app}\ShangBackground.exe');
-  if not FileExists(ExecutablePath) then
+  if CurStep = ssPostInstall then
   begin
-    Result := '打包产物缺失：未找到 ' + ExecutablePath + '。请重新下载安装包或联系作者。';
-    NeedsRestart := False;
-    Exit;
+    ExecutablePath := ExpandConstant('{app}\ShangBackground.exe');
+    if not FileExists(ExecutablePath) then
+    begin
+      RaiseException('打包产物缺失：安装后未找到 ' + ExecutablePath + '。可能是磁盘空间不足或杀毒软件拦截，请关闭杀毒软件后重试或联系作者。');
+    end;
   end;
-  Result := '';
 end;
