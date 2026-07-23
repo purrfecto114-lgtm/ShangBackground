@@ -136,6 +136,7 @@ def test_installer_plan_resolves_for_windows_x86_64():
         arch="x86_64",
         features=frozenset({"bing", "hotkeys", "updates", "fonts"}),
         dry_run=True,
+        tool="pyinstaller",
     )
     assert isinstance(plan, InstallerPlan)
     assert plan.arch == "x86_64"
@@ -202,7 +203,9 @@ def test_validate_source_layout_reports_missing_root(tmp_path: Path):
     assert any("missing" in error for error in errors)
 
 
-def test_validate_source_layout_reports_missing_executable(tmp_path: Path):
+def test_validate_source_layout_reports_missing_executable_pyinstaller(tmp_path: Path):
+    """PyInstaller layout: source/ShangBackground/ exists but ShangBackground.exe
+    and _internal/ are missing."""
     source = tmp_path / "standalone"
     bundle = source / "ShangBackground"
     bundle.mkdir(parents=True)
@@ -212,13 +215,34 @@ def test_validate_source_layout_reports_missing_executable(tmp_path: Path):
     assert any("_internal" in error for error in errors)
 
 
-def test_validate_source_layout_accepts_full_bundle(tmp_path: Path):
+def test_validate_source_layout_reports_missing_executable_nuitka(tmp_path: Path):
+    """Nuitka layout: source/ShangBackground.dist/ exists but ShangBackground.exe
+    and build-features.json are missing."""
+    source = tmp_path / "standalone"
+    dist = source / "ShangBackground.dist"
+    dist.mkdir(parents=True)
+    errors = _validate_source_layout(source)
+    assert any("ShangBackground.exe" in error for error in errors)
+    assert any("build-features.json" in error for error in errors)
+
+
+def test_validate_source_layout_accepts_full_bundle_pyinstaller(tmp_path: Path):
     source = tmp_path / "standalone"
     bundle = source / "ShangBackground"
     internal = bundle / "_internal"
     internal.mkdir(parents=True)
     (bundle / "ShangBackground.exe").write_bytes(b"MZ")
     (internal / "build-features.json").write_text("{}", encoding="utf-8")
+    errors = _validate_source_layout(source)
+    assert errors == ()
+
+
+def test_validate_source_layout_accepts_full_bundle_nuitka(tmp_path: Path):
+    source = tmp_path / "standalone"
+    dist = source / "ShangBackground.dist"
+    dist.mkdir(parents=True)
+    (dist / "ShangBackground.exe").write_bytes(b"MZ")
+    (dist / "build-features.json").write_text("{}", encoding="utf-8")
     errors = _validate_source_layout(source)
     assert errors == ()
 
@@ -233,11 +257,13 @@ def test_installer_cli_parser_accepts_expected_flags():
     assert args.skip_validate is False
 
 
-def test_installer_cli_parser_defaults_to_lite_windows_x86_64():
+def test_installer_cli_parser_defaults_to_full_nuitka_windows():
     parser = create_installer_parser()
     args = parser.parse_args([])
     assert args.target == "windows"
-    assert args.profile == "lite"
+    # The default is now full + nuitka to match the release pipeline.
+    assert args.profile == "full"
+    assert args.tool == "nuitka"
     assert args.arch == "auto"
 
 
@@ -248,7 +274,7 @@ def test_installer_cli_parser_rejects_non_windows_targets():
 
 
 def test_installer_main_dry_run_returns_zero(capsys: pytest.CaptureFixture[str]):
-    rc = installer_module.main(["--dry-run"])
+    rc = installer_module.main(["--dry-run", "--tool", "pyinstaller", "--profile", "lite"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "Inno Setup command" in out

@@ -108,15 +108,57 @@ def test_release_workflow_builds_windows_installer():
     """``release.yml`` must produce the Inno Setup ``setup.exe`` on Windows
     so it can be included as a release asset alongside the binary archive."""
     release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
-    assert "Build Windows setup.exe (Inno Setup)" in release_workflow
+    assert "Build Windows setup.exe" in release_workflow
     assert "python build_tools/build.py installer" in release_workflow
-    assert "Install Inno Setup (Windows)" in release_workflow
+    assert "Install Inno Setup" in release_workflow
     assert "SHANGBACKGROUND_ISCC" in release_workflow
     # The installer step must NOT pin a hard-coded Inno Setup download URL,
     # which 404s whenever JR Software ships a new version. Use Chocolatey
     # (pre-installed on GitHub Actions Windows runners) instead.
     assert "files.jrsoftware.org/is/6/innosetup-" not in release_workflow
     assert "choco install innosetup" in release_workflow
+
+
+def test_release_workflow_uses_nuitka_full_with_upx():
+    """``release.yml`` must use Nuitka (not PyInstaller) with the full profile
+    and UPX compression for all three platforms. The full profile includes
+    all features (video, html, bing, hotkeys, updates, fonts); UPX reduces
+    binary size 30-60% on Windows/Linux."""
+    release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "--tool nuitka" in release_workflow
+    assert "--profile full" in release_workflow
+    assert "--upx" in release_workflow
+    assert "--mpv-runtime auto" in release_workflow
+    # The release archive path must point to dist-nuitka, not dist-pyinstaller.
+    assert "dist-nuitka/" in release_workflow
+    assert "dist-pyinstaller/" not in release_workflow
+
+
+def test_release_workflow_installs_upx():
+    """``release.yml`` must install UPX on both Windows (via Chocolatey) and
+    Linux (via apt) so the Nuitka --upx flag has a binary to invoke."""
+    release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    # Windows: Chocolatey installs upx alongside innosetup.
+    assert "choco install innosetup upx" in release_workflow
+    assert "SHANGBACKGROUND_UPX_BINARY" in release_workflow
+    # Linux: apt installs upx-ucl (the Debian/Ubuntu package name for UPX).
+    assert "upx-ucl" in release_workflow
+
+
+def test_release_workflow_installs_mpv_on_windows():
+    """``release.yml`` must download and verify the MPV runtime on Windows so
+    the full video feature can bundle libmpv into the standalone package."""
+    release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "Install libmpv" in release_workflow
+    assert "mpv download" in release_workflow
+    assert "mpv verify" in release_workflow
+
+
+def test_release_workflow_publishes_as_prerelease():
+    """``release.yml`` must pass --prerelease to gh release create so the
+    GitHub Release is marked as a pre-release (not a stable release)."""
+    release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "--prerelease" in release_workflow
 
 
 def test_release_workflow_installs_linux_qt_xcb_prerequisites():

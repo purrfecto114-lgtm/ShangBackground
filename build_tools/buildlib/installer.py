@@ -43,12 +43,18 @@ from .constants import (
     PROJECT_ROOT,
     ARCHES,
     PROFILES,
+    TOOLS,
     normalize_arch,
     read_version,
     windows_numeric_version,
 )
 from .features import default_features, feature_summary
 from .plan import BuildPlan, create_plan
+
+
+# Maps a build tool to the relative directory name under ``dist-<tool>/``.
+# The installer can consume either backend's output as the setup.exe source.
+TOOL_DIST_DIR = {"pyinstaller": "dist-pyinstaller", "nuitka": "dist-nuitka"}
 
 
 INSTALLER_DIR = PROJECT_ROOT / "packaging" / "windows"
@@ -77,34 +83,87 @@ class InstallerPlan:
         return self.plan.arch
 
 
-def _pyinstaller_publish_dir(plan: BuildPlan) -> Path:
-    """Return the validated PyInstaller standalone output for ``plan``."""
+def _publish_dir(plan: BuildPlan) -> Path:
+    """Return the published standalone output directory for ``plan``.
+
+    The directory is the same for both backends because :class:`BuildPlan`
+    keys it off ``tool``: ``dist-pyinstaller/<target>/<variant>/standalone``
+    for PyInstaller, ``dist-nuitka/<target>/<variant>/standalone`` for Nuitka.
+    """
     return plan.output_dir
 
 
-def _validate_source_layout(source: Path) -> tuple[str, ...]:
-    """Ensure the published PyInstaller output is ready for the installer.
+def _detect_source_layout(source: Path) -> str | None:
+    """Return ``"pyinstaller"`` or ``"nuitka"`` based on the directory
+    structure of ``source``, or ``None`` if neither layout matches.
 
-    We deliberately do not call :func:`validate_pyinstaller_output` because
-    that helper inspects ``plan.build_output_dir`` (the ephemeral staging
-    directory). The installer consumes the *published* output under
-    ``dist-pyinstaller/...`` instead, so we run a focused check here.
+    Detection is based on which top-level directory exists, NOT on whether
+    the files inside are complete. This way, a half-populated bundle still
+    reports its layout type so :func:`_validate_source_layout` can produce
+    specific error messages about which files are missing.
+    """
+    # PyInstaller standalone: source/ShangBackground/ (contains .exe + _internal/)
+    pyi_app = source / "ShangBackground"
+    if pyi_app.is_dir():
+        return "pyinstaller"
+    # Nuitka standalone: source/ShangBackground.dist/ (contains .exe + resources)
+    nui_dist = source / "ShangBackground.dist"
+    if nui_dist.is_dir():
+        return "nuitka"
+    # Some Nuitka versions emit the .dist directory directly without an
+    # intermediate ShangBackground.dist parent. Fall back to scanning for any
+    # *.dist directory.
+    for candidate in sorted(source.glob("*.dist")):
+        if candidate.is_dir():
+            return "nuitka"
+    return None
+
+
+def _validate_source_layout(source: Path) -> tuple[str, ...]:
+    """Ensure the published standalone output is ready for the installer.
+
+    Supports both PyInstaller (``ShangBackground/`` + ``_internal/``) and
+    Nuitka (``ShangBackground.dist/``) layouts. The Inno Setup [Files] glob
+    is layout-agnostic: it pulls in ``ShangBackground.dist/*`` OR
+    ``ShangBackground/*`` depending on which exists at compile time, so we
+    only need to verify the entry executable + manifest are present.
     """
     errors: list[str] = []
     if not source.is_dir():
-        return (f"PyInstaller output is missing: {source}",)
-    app_root = source / "ShangBackground"
-    if not app_root.is_dir():
-        return (f"ShangBackground/ bundle directory is missing under {source}",)
-    executable = app_root / "ShangBackground.exe"
-    if not executable.is_file():
-        errors.append(f"ShangBackground.exe is missing: {executable}")
-    internal = app_root / "_internal"
-    if not internal.is_dir():
-        errors.append(f"PyInstaller _internal directory is missing: {internal}")
-    manifest = internal / "build-features.json"
-    if not manifest.is_file():
-        errors.append(f"build-features.json manifest is missing: {manifest}")
+        return (f"Standalone build output is missing: {source}",)
+    layout = _detect_source_layout(source)
+    if layout == "pyinstaller":
+        app_root = source / "ShangBackground"
+        executable = app_root / "ShangBackground.exe"
+        if not executable.is_file():
+            errors.append(f"ShangBackground.exe is missing: {executable}")
+        internal = app_root / "_internal"
+        if not internal.is_dir():
+            errors.append(f"PyInstaller _internal directory is missing: {internal}")
+        manifest = internal / "build-features.json"
+        if not manifest.is_file():
+            errors.append(f"build-features.json manifest is missing: {manifest}")
+    elif layout == "nuitka":
+        # The .dist directory name is deterministic for our build, but the
+        # validator should still pass if a future Nuitka rename lands.
+        dist_dir = source / "ShangBackground.dist"
+        if not dist_dir.is_dir():
+            for candidate in sorted(source.glob("*.dist")):
+                if (candidate / "ShangBackground.exe").is_file():
+                    dist_dir = candidate
+                    break
+        executable = dist_dir / "ShangBackground.exe"
+        if not executable.is_file():
+            errors.append(f"ShangBackground.exe is missing: {executable}")
+        manifest = dist_dir / "build-features.json"
+        if not manifest.is_file():
+            errors.append(f"build-features.json manifest is missing: {manifest}")
+    else:
+        errors.append(
+            f"Unrecognized standalone layout under {source}. Expected either "
+            "ShangBackground/ShangBackground.exe (PyInstaller) or "
+            "ShangBackground.dist/ShangBackground.exe (Nuitka)."
+        )
     return tuple(errors)
 
 
@@ -117,17 +176,24 @@ def create_installer_plan(
     source: Path | None = None,
     output_dir: Path | None = None,
     dry_run: bool = False,
+    tool: str = "nuitka",
 ) -> InstallerPlan:
     """Resolve every path ISCC needs without invoking it.
 
     On a non-Windows host, or when ``dry_run`` is True, the function still
     succeeds: it just produces a plan + command preview rather than compiling.
+
+    ``tool`` selects which backend's published output the installer should
+    consume. Defaults to ``"nuitka"`` for the full-feature release pipeline;
+    ``"pyinstaller"`` is still supported for the legacy lite path.
     """
     if target != "windows":
         raise RuntimeError(
             f"Inno Setup installer is Windows-only; got target={target!r}. "
             "Use PyInstaller standalone archives for Linux and macOS."
         )
+    if tool not in TOOLS:
+        raise RuntimeError(f"Unsupported build tool: {tool!r}. Must be one of {TOOLS}.")
     if not ISS_PATH.is_file():
         raise RuntimeError(f"Inno Setup script is missing: {ISS_PATH}")
     if not LICENSE_PATH.is_file():
@@ -135,7 +201,7 @@ def create_installer_plan(
 
     arch = normalize_arch(arch)
     build_plan = create_plan(
-        tool="pyinstaller",
+        tool=tool,
         target=target,
         profile=profile,
         mode="standalone",
@@ -146,7 +212,7 @@ def create_installer_plan(
         arch=arch,
         dry_run=True,  # planner is purely informational for the installer step
     )
-    source_root = (source or _pyinstaller_publish_dir(build_plan)).resolve()
+    source_root = (source or _publish_dir(build_plan)).resolve()
     out_dir = (output_dir or INSTALLER_OUTPUT_DIR / "windows" / build_plan.variant).resolve()
     version = read_version()
     tag = f"v{version}"
@@ -240,12 +306,12 @@ def _print_plan(plan: InstallerPlan) -> None:
 def create_installer_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="build.py installer",
-        description="Build the Windows setup.exe from a validated PyInstaller standalone layout.",
+        description="Build the Windows setup.exe from a validated standalone build (Nuitka or PyInstaller).",
         epilog=(
             "Examples:\n"
             "  python build_tools/build.py installer\n"
-            "  python build_tools/build.py installer --profile lite --arch x86_64\n"
-            "  python build_tools/build.py installer --dry-run\n"
+            "  python build_tools/build.py installer --tool nuitka --profile full --arch x86_64\n"
+            "  python build_tools/build.py installer --tool pyinstaller --profile lite --dry-run\n"
         ),
         formatter_class=BuildHelpFormatter,
     )
@@ -254,12 +320,18 @@ def create_installer_parser() -> argparse.ArgumentParser:
     # ``windows`` is a valid value. The argparse choices list makes misuse
     # fail-fast at parse time.
     parser.add_argument("--target", choices=("windows",), default="windows")
-    parser.add_argument("--profile", choices=PROFILES, default="lite")
+    parser.add_argument(
+        "--tool",
+        choices=TOOLS,
+        default="nuitka",
+        help="Which backend's published output to consume. Default: nuitka (full release pipeline).",
+    )
+    parser.add_argument("--profile", choices=PROFILES, default="full")
     parser.add_argument(
         "--arch",
         choices=("auto", *ARCHES),
         default="auto",
-        help="Must match the PyInstaller build arch that produced --input.",
+        help="Must match the standalone build arch that produced --input.",
     )
     parser.add_argument(
         "--features",
@@ -271,7 +343,7 @@ def create_installer_parser() -> argparse.ArgumentParser:
         "--input",
         type=Path,
         default=None,
-        help="Override the PyInstaller standalone root (default: dist-pyinstaller/windows/<variant>/standalone).",
+        help="Override the standalone root (default: dist-<tool>/windows/<variant>/standalone).",
     )
     parser.add_argument(
         "--output-dir",
@@ -318,6 +390,7 @@ def main(argv: list[str] | None = None) -> int:
         source=args.input,
         output_dir=args.output_dir,
         dry_run=args.dry_run,
+        tool=args.tool,
     )
     _print_plan(plan)
 

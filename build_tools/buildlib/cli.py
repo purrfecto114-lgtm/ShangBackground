@@ -89,6 +89,20 @@ def create_build_parser(tool: str, *, include_contents_directory: bool = False) 
             metavar="NAME",
             help="PyInstaller onedir support directory; _internal is the release layout",
         )
+    platform_group.add_argument(
+        "--upx",
+        dest="upx",
+        action="store_true",
+        default=None,
+        help="Compress frozen binaries with UPX (Windows/Linux only; auto-disabled on macOS). "
+        "Requires upx >= 4.2.0 on PATH or SHANGBACKGROUND_UPX_BINARY env var.",
+    )
+    platform_group.add_argument(
+        "--no-upx",
+        dest="upx",
+        action="store_false",
+        help="Disable UPX even if a compatible binary is installed.",
+    )
 
     execution = parser.add_argument_group("Execution")
     execution.add_argument("--skip-install", action="store_true")

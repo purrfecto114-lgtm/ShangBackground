@@ -29,6 +29,7 @@ from .plan import (
     relative,
 )
 from .runner import install_requirements, run_build
+from .upx import resolve_upx_for_build, upx_supported_for_target
 
 
 def _runtime_package(plan: BuildPlan, *, materialize: bool) -> tuple[Path | None, Path | None]:
@@ -101,7 +102,11 @@ def _runtime_package(plan: BuildPlan, *, materialize: bool) -> tuple[Path | None
 
 
 def build_args(
-    plan: BuildPlan, *, windows_console_mode: str, materialize_runtime: bool = False
+    plan: BuildPlan,
+    *,
+    windows_console_mode: str,
+    materialize_runtime: bool = False,
+    upx_binary: str | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     report = plan.build_output_dir / "compilation-report.xml"
     command = [
@@ -120,6 +125,17 @@ def build_args(
         "--noinclude-setuptools-mode=nofollow",
         "--noinclude-pytest-mode=nofollow",
     ]
+    # UPX post-build compression. Nuitka accepts --upx-binary=PATH and applies
+    # UPX to every collected DLL/SO/EXE during the freeze step (before any
+    # code signing, which keeps signatures valid). On macOS we never pass
+    # --upx-binary: compressed Mach-O breaks codesign and Apple Silicon ABI.
+    if upx_binary is not None:
+        if not upx_supported_for_target(plan.target):
+            raise RuntimeError(
+                f"UPX was requested for target {plan.target!r} but UPX is only "
+                "supported on Windows and Linux. Drop --upx for macOS builds."
+            )
+        command.append(f"--upx-binary={upx_binary}")
     for source, destination in data_directories(plan):
         command.append(f"--include-data-dir={relative(source)}={destination}")
     command.append(f"--include-data-files={relative(plan.manifest_path)}=build-features.json")
@@ -204,11 +220,43 @@ def _execute(args: argparse.Namespace) -> int:
     warnings = preflight(plan, dry_run=args.dry_run)
     for warning in warnings:
         print(f"  WARNING: {warning}")
+
+    # Resolve UPX. ``--upx`` enables it (errors out if UPX is missing on a
+    # supported target); ``--no-upx`` disables it; the default (None) auto-
+    # enables UPX when a compatible binary is present on Windows/Linux and
+    # silently skips on macOS. During dry-run, UPX is never actually invoked,
+    # so we skip the resolution entirely to avoid false failures on hosts
+    # that don't have UPX installed.
+    upx_enabled_requested = args.upx if args.upx is not None else True
+    upx_binary: str | None = None
+    if upx_enabled_requested and upx_supported_for_target(plan.target) and not args.dry_run:
+        try:
+            upx_binary = resolve_upx_for_build(plan.target, enabled=True)
+        except RuntimeError as exc:
+            if args.upx is True:
+                # User explicitly asked for --upx; surface the error.
+                raise
+            # Default auto-mode: UPX is optional, just warn.
+            print(f"  WARNING: UPX not used: {exc}")
+            upx_binary = None
+    elif upx_enabled_requested and upx_supported_for_target(plan.target) and args.dry_run:
+        # During dry-run, report what would happen but don't fail.
+        from .upx import find_upx_binary
+        found = find_upx_binary()
+        if found:
+            print(f"  INFO: UPX would use: {found}")
+        else:
+            print("  INFO: UPX not found locally; CI installs it automatically.")
+    if upx_binary is not None:
+        print_section("UPX compression enabled")
+        print(f"  binary: {upx_binary}")
+
     print_section("Compile with Nuitka")
     command, env = build_args(
         plan,
         windows_console_mode=args.windows_console_mode,
         materialize_runtime=not args.dry_run,
+        upx_binary=upx_binary,
     )
 
     def _validate() -> tuple[str, ...]:

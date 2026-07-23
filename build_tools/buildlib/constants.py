@@ -30,6 +30,15 @@ PYINSTALLER_HOOKS_VERSION = "2026.6"
 PYSIDE6_ESSENTIALS_VERSION = "6.11.1"
 PYWEBVIEW_VERSION = "6.2.1"
 
+# UPX (Ultimate Packer for eXecutables) is optional post-build compression
+# applied by Nuitka to the frozen ELF/PE binaries. Pinning a known-good
+# version lets the build verify the right binary is on PATH before invoking
+# Nuitka, and lets Dependabot track future UPX releases. UPX is intentionally
+# disabled on macOS (codesign + notarization + Apple Silicon ABI constraints
+# make compressed Mach-O binaries unreliable).
+UPX_MIN_VERSION = "4.2.0"
+UPX_TARGETS = ("windows", "linux")
+
 
 def host_target() -> str:
     if os.name == "nt" or sys.platform.startswith("win"):

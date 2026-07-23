@@ -126,10 +126,15 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "startup"; Description: "开机自启动 {#APP_NAME}"; GroupDescription: "其他选项:"
 
 [Files]
-; Pull in the entire validated PyInstaller standalone layout. The trailing
-; flag ``recursesubdirs`` keeps the ShangBackground/ and ShangBackground/_internal/
-; layout intact, while ``createallsubdirs`` ensures empty dirs survive.
-Source: "{#SOURCE_ROOT}\ShangBackground\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Pull in the entire validated standalone layout. The build pipeline produces
+; either a PyInstaller layout (ShangBackground\ShangBackground.exe +
+; ShangBackground\_internal\) or a Nuitka layout (ShangBackground.dist\*).
+; Both are emitted under {#SOURCE_ROOT}; we use Check: directives to select
+; the right Source glob at compile time so a single .iss works with either
+; backend. ``recursesubdirs`` keeps the on-disk tree intact, while
+; ``createallsubdirs`` ensures empty dirs survive.
+Source: "{#SOURCE_ROOT}\ShangBackground\*"; DestDir: "{app}"; Check: DirExists(ExpandConstant('{#SOURCE_ROOT}\ShangBackground')); Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SOURCE_ROOT}\ShangBackground.dist\*"; DestDir: "{app}"; Check: DirExists(ExpandConstant('{#SOURCE_ROOT}\ShangBackground.dist')); Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#APP_NAME}"; Filename: "{app}\ShangBackground.exe"; WorkingDir: "{app}"; Comment: "{#PRODUCT_NAME}"
