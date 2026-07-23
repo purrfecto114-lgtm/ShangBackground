@@ -110,20 +110,16 @@ def build_args(
 ) -> tuple[list[str], dict[str, str]]:
     report = plan.build_output_dir / "compilation-report.xml"
     # Nuitka 4.1.3 introduced --mode= as the unified way to select standalone /
-    # app / onefile. However, --macos-create-app-bundle is a deprecated flag
-    # that conflicts with --mode on macOS (Nuitka aborts with "Cannot use both
-    # '--mode=' and deprecated options that specify mode"). For macOS, use
-    # --mode=app which creates a .app bundle natively; for Windows/Linux, use
-    # --mode=standalone (or onefile) as before.
-    if plan.target == "macos" and plan.mode == "standalone":
-        nuitka_mode = "app"
-    else:
-        nuitka_mode = plan.mode
+    # onefile. The --macos-create-app-bundle flag is the macOS-specific way to
+    # produce a .app bundle; it does NOT conflict with --mode=standalone
+    # (only with --mode=app). For macOS standalone, use --mode=standalone +
+    # --macos-create-app-bundle to get a .app bundle with the correct
+    # Contents/MacOS/ShangBackground layout that our validator expects.
     command = [
         python_executable(),
         "-m",
         "nuitka",
-        f"--mode={nuitka_mode}",
+        f"--mode={plan.mode}",
         "--assume-yes-for-downloads",
         f"--output-dir={relative(plan.build_output_dir)}",
         f"--output-filename={APP_NAME}{'.exe' if plan.target == 'windows' else ''}",
@@ -135,16 +131,21 @@ def build_args(
         "--noinclude-setuptools-mode=nofollow",
         "--noinclude-pytest-mode=nofollow",
     ]
-    # UPX post-build compression. Nuitka accepts --upx-binary=PATH and applies
-    # UPX to every collected DLL/SO/EXE during the freeze step (before any
-    # code signing, which keeps signatures valid). On macOS we never pass
-    # --upx-binary: compressed Mach-O breaks codesign and Apple Silicon ABI.
+    # UPX post-build compression. In Nuitka 4.1.3, UPX is a standard plugin
+    # activated via --enable-plugin=upx. The optional --upx-binary=PATH
+    # sub-option only becomes a recognized flag AFTER the plugin is enabled,
+    # so we must pass --enable-plugin=upx first, then optionally --upx-binary.
+    # Nuitka auto-detects `upx` on PATH if --upx-binary is omitted; we pass
+    # the explicit path when we have one so CI reproducibility is guaranteed.
+    # On macOS we never enable UPX: compressed Mach-O breaks codesign and
+    # the Apple Silicon ABI.
     if upx_binary is not None:
         if not upx_supported_for_target(plan.target):
             raise RuntimeError(
                 f"UPX was requested for target {plan.target!r} but UPX is only "
                 "supported on Windows and Linux. Drop --upx for macOS builds."
             )
+        command.append("--enable-plugin=upx")
         command.append(f"--upx-binary={upx_binary}")
     for source, destination in data_directories(plan):
         command.append(f"--include-data-dir={relative(source)}={destination}")
@@ -187,10 +188,15 @@ def build_args(
             )
         )
     elif plan.target == "macos":
-        # --mode=app already creates the .app bundle; --macos-create-app-bundle
-        # is deprecated and conflicts with --mode on Nuitka 4.1.3+.
+        # --macos-create-app-bundle produces a .app bundle with the correct
+        # Contents/MacOS/ShangBackground layout. It works with --mode=standalone
+        # (only conflicts with --mode=app, which we don't use).
         command.extend(
-            (f"--macos-app-name={APP_NAME}", f"--macos-app-version={read_version()}")
+            (
+                "--macos-create-app-bundle",
+                f"--macos-app-name={APP_NAME}",
+                f"--macos-app-version={read_version()}",
+            )
         )
     command.append(relative(ENTRY_SCRIPT))
     return command, env

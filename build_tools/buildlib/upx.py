@@ -15,11 +15,15 @@ Security and reliability notes
   refuses to apply UPX on macOS by default.
 - **Signed binaries**: UPX must run BEFORE code signing, not after.
   Compressing an already-signed binary invalidates the signature. The
-  build pipeline runs UPX via Nuitka's ``--upx-binary`` flag, which
-  applies compression during the freeze step before any signing.
+  build pipeline runs UPX via Nuitka's ``--enable-plugin=upx`` flag,
+  which applies compression during the freeze step before any signing.
 - **Reproducibility**: UPX compression is deterministic for a given UPX
   version + input binary, so pinning ``UPX_MIN_VERSION`` keeps release
   artifacts reproducible.
+- **Nuitka integration**: UPX is a Nuitka *plugin*, activated via
+  ``--enable-plugin=upx``. The ``--upx-binary=PATH`` sub-option only
+  becomes a recognized flag AFTER the plugin is enabled, so the build
+  driver always passes both flags together.
 - **Trusted source**: CI installs UPX from the official Chocolatey
   package (Windows) or apt-get (Linux distro package). Local developers
   can override the path via ``SHANGBACKGROUND_UPX_BINARY``.
@@ -135,8 +139,8 @@ def resolve_upx_for_build(target: str, *, enabled: bool) -> str | None:
     - If UPX is not installed, raises :class:`RuntimeError` with an actionable
       message - the caller asked for UPX and we cannot silently skip it.
 
-    The returned path is suitable for passing directly to Nuitka's
-    ``--upx-binary=PATH`` flag.
+    The returned path is suitable for passing to Nuitka's
+    ``--enable-plugin=upx --upx-binary=PATH`` flags.
     """
     if not enabled:
         return None
