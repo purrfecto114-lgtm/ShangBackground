@@ -113,7 +113,12 @@ ShowLanguageDialog=no
 LanguageDetectionMethod=none
 
 [Languages]
-Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+; ChineseSimplified.isl ships with Inno Setup 6.5.0+ only. To stay compatible
+; with older Inno Setup 6.x installs (e.g. the Chocolatey innosetup package
+; currently ships 6.4.x), we bundle the official language file from
+; https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/ChineseSimplified.isl
+; and reference it via a relative path rooted at PROJECT_ROOT.
+Name: "chinesesimp"; MessagesFile: "{#PROJECT_ROOT}\packaging\windows\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]

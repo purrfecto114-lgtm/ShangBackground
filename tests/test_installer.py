@@ -27,6 +27,21 @@ def test_installer_script_and_license_are_present():
     assert installer_module.LICENSE_PATH.is_file(), installer_module.LICENSE_PATH
 
 
+def test_chinese_simplified_language_file_is_bundled():
+    """ChineseSimplified.isl must be bundled in the repo because it ships
+    with Inno Setup 6.5.0+ only. The Chocolatey innosetup package currently
+    installs 6.4.x, so referencing ``compiler:Languages\\ChineseSimplified.isl``
+    fails at compile time. We bundle the official language file from the
+    Inno Setup source repo and reference it via a relative path instead.
+    """
+    isl_path = installer_module.INSTALLER_DIR / "ChineseSimplified.isl"
+    assert isl_path.is_file(), isl_path
+    text = isl_path.read_text(encoding="utf-8")
+    # Sanity-check it's the real Inno Setup language file, not an empty stub.
+    assert "[LangOptions]" in text or "[Messages]" in text, text[:200]
+    assert "chinesesimp" in text.lower() or "simplified" in text.lower(), text[:200]
+
+
 def test_installer_script_references_license_file():
     """``LicenseFile=`` must point to ``license.rtf`` for mandatory acceptance."""
     text = installer_module.ISS_PATH.read_text(encoding="utf-8")
