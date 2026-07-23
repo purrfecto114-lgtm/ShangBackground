@@ -112,6 +112,22 @@ def test_release_workflow_builds_windows_installer():
     assert "python build_tools/build.py installer" in release_workflow
     assert "Install Inno Setup (Windows)" in release_workflow
     assert "SHANGBACKGROUND_ISCC" in release_workflow
+    # The installer step must NOT pin a hard-coded Inno Setup download URL,
+    # which 404s whenever JR Software ships a new version. Use Chocolatey
+    # (pre-installed on GitHub Actions Windows runners) instead.
+    assert "files.jrsoftware.org/is/6/innosetup-" not in release_workflow
+    assert "choco install innosetup" in release_workflow
+
+
+def test_release_workflow_installs_linux_qt_xcb_prerequisites():
+    """``release.yml`` must install the full Qt XCB runtime library set on
+    Linux so the frozen-runtime smoke test does not fail on missing
+    ``libxcb-shape.so.0`` or related shared libraries."""
+    release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "Install Linux packaging prerequisites" in release_workflow
+    assert "libxcb-shape0" in release_workflow
+    assert "libxcb-cursor0" in release_workflow
+    assert "libxkbcommon-x11-0" in release_workflow
 
 
 def test_expected_release_assets_include_windows_installer():

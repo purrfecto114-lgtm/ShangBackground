@@ -517,11 +517,22 @@ def validate_frozen_runtime(plan: BuildPlan, executable: Path | None) -> tuple[s
         resource_root = payload.get("resource_root")
         try:
             reported_root = Path(str(resource_root)).resolve(strict=True)
-            executable_root = executable.parent.resolve(strict=True)
+            # The "packaged application" root depends on the bundle layout:
+            #   - Linux/Windows standalone: <root>/ShangBackground/  (executable.parent)
+            #   - macOS .app bundle:        <root>/ShangBackground.app/
+            #     The executable lives at Contents/MacOS/ShangBackground, but the
+            #     runtime legitimately reports resource roots under
+            #     Contents/Frameworks or Contents/Resources, which are siblings
+            #     of Contents/MacOS. Walking up two levels gives us the .app
+            #     bundle directory, which is the actual packaged application.
+            if plan.target == "macos":
+                packaged_root = executable.parents[2].resolve(strict=True)
+            else:
+                packaged_root = executable.parent.resolve(strict=True)
         except (OSError, RuntimeError):
             errors.append(f"frozen runtime resource root is invalid: {resource_root!r}")
         else:
-            if reported_root != executable_root and not reported_root.is_relative_to(executable_root):
+            if reported_root != packaged_root and not reported_root.is_relative_to(packaged_root):
                 errors.append(
                     f"frozen runtime resource root escapes the packaged application: {reported_root}"
                 )

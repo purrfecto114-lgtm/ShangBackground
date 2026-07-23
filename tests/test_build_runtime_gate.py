@@ -188,3 +188,169 @@ def test_frozen_linux_runtime_forces_xcb_and_rejects_offscreen_plugin(
     assert "QT_PLUGIN_PATH" not in captured_environment
     assert "LD_LIBRARY_PATH" not in captured_environment
     assert any("did not load the XCB" in error for error in errors)
+
+
+def test_frozen_macos_runtime_accepts_frameworks_resource_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Regression: macOS .app bundles legitimately report resource roots under
+    ``Contents/Frameworks`` or ``Contents/Resources``, which are siblings of
+    ``Contents/MacOS`` (where the executable lives). The previous check used
+    ``executable.parent`` as the packaged root, so any Frameworks/Resources
+    path was flagged as "escapes the packaged application" and the build
+    failed at the validation step on both macOS x86_64 and arm64 runners.
+    """
+    import json
+
+    from build_tools.buildlib.mpv_runtime import MpvBuildSelection
+    from build_tools.buildlib.plan import BuildPlan
+
+    # Mimic the PyInstaller macOS bundle layout.
+    app_bundle = tmp_path / "ShangBackground.app"
+    executable = app_bundle / "Contents" / "MacOS" / "ShangBackground"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"MZ")
+    frameworks_dir = app_bundle / "Contents" / "Frameworks"
+    frameworks_dir.mkdir(parents=True)
+
+    manifest = tmp_path / "generated" / "build-features.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": 3,
+                "tool": "pyinstaller",
+                "target": "macos",
+                "arch": "arm64",
+                "profile": "lite",
+                "enabled": {
+                    key: False for key in ("video", "html", "bing", "hotkeys", "updates", "fonts")
+                },
+                "html_runtime": "disabled",
+                "video_runtime": {"mode": "disabled"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    plan = BuildPlan(
+        tool="pyinstaller",
+        target="macos",
+        profile="lite",
+        mode="standalone",
+        jobs=2,
+        arch="arm64",
+        features=frozenset(),
+        mpv=MpvBuildSelection("disabled", "disabled", "macos", "arm64", "", None, {}),
+        variant="unit",
+        generated_dir=manifest.parent,
+        manifest_path=manifest,
+        staged_mpv_dir=None,
+    )
+
+    def fake_run(command, **kwargs):
+        report = Path(command[-1])
+        report.write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "app_version": APP_VERSION,
+                    "platform": "macos",
+                    "architecture": "arm64",
+                    "packaged": True,
+                    # The runtime legitimately reports Contents/Frameworks as
+                    # the resource root (PySide6 ships its Qt libraries there).
+                    "resource_root": str(frameworks_dir),
+                    "enabled_features": [],
+                    "html_runtime": "disabled",
+                    "video_runtime": {"mode": "disabled"},
+                    "qt_smoke": {"ok": True},
+                    "diagnostics": {"healthy": True},
+                }
+            ),
+            encoding="utf-8",
+        )
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(diagnostics.subprocess, "run", fake_run)
+
+    errors = diagnostics.validate_frozen_runtime(plan, executable)
+
+    # The Frameworks path must NOT be flagged as escaping the .app bundle.
+    assert not any("escapes the packaged application" in error for error in errors), errors
+
+
+def test_frozen_macos_runtime_rejects_path_outside_app_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The macOS fix must still reject a resource root that genuinely escapes
+    the .app bundle (e.g. ``/usr/local/lib``)."""
+    import json
+
+    from build_tools.buildlib.mpv_runtime import MpvBuildSelection
+    from build_tools.buildlib.plan import BuildPlan
+
+    app_bundle = tmp_path / "ShangBackground.app"
+    executable = app_bundle / "Contents" / "MacOS" / "ShangBackground"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"MZ")
+    # A path that is clearly outside the .app bundle.
+    outside_root = tmp_path / "elsewhere"
+    outside_root.mkdir()
+
+    manifest = tmp_path / "generated" / "build-features.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": 3,
+                "tool": "pyinstaller",
+                "target": "macos",
+                "arch": "x86_64",
+                "profile": "lite",
+                "enabled": {
+                    key: False for key in ("video", "html", "bing", "hotkeys", "updates", "fonts")
+                },
+                "html_runtime": "disabled",
+                "video_runtime": {"mode": "disabled"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    plan = BuildPlan(
+        tool="pyinstaller",
+        target="macos",
+        profile="lite",
+        mode="standalone",
+        jobs=2,
+        arch="x86_64",
+        features=frozenset(),
+        mpv=MpvBuildSelection("disabled", "disabled", "macos", "x86_64", "", None, {}),
+        variant="unit",
+        generated_dir=manifest.parent,
+        manifest_path=manifest,
+        staged_mpv_dir=None,
+    )
+
+    def fake_run(command, **kwargs):
+        report = Path(command[-1])
+        report.write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "app_version": APP_VERSION,
+                    "platform": "macos",
+                    "architecture": "x86_64",
+                    "packaged": True,
+                    "resource_root": str(outside_root),
+                    "enabled_features": [],
+                    "html_runtime": "disabled",
+                    "video_runtime": {"mode": "disabled"},
+                    "qt_smoke": {"ok": True},
+                    "diagnostics": {"healthy": True},
+                }
+            ),
+            encoding="utf-8",
+        )
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(diagnostics.subprocess, "run", fake_run)
+
+    errors = diagnostics.validate_frozen_runtime(plan, executable)
+
+    assert any("escapes the packaged application" in error for error in errors), errors
