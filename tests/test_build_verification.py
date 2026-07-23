@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from app.build_verification import write_build_verification
+from app.version import APP_VERSION
 
 
 def test_source_build_verification_writes_report_but_fails_packaged_gate(tmp_path: Path):
@@ -15,4 +16,4 @@ def test_source_build_verification_writes_report_but_fails_packaged_gate(tmp_pat
     assert code == 2
     assert payload["schema"] == 1
     assert payload["packaged"] is False
-    assert payload["app_version"] == "1.4.2"
+    assert payload["app_version"] == APP_VERSION

@@ -5,6 +5,7 @@ from subprocess import CompletedProcess
 
 import pytest
 
+from app.version import APP_VERSION
 from build_tools.buildlib import diagnostics
 
 
@@ -155,7 +156,7 @@ def test_frozen_linux_runtime_forces_xcb_and_rejects_offscreen_plugin(
             json.dumps(
                 {
                     "schema": 1,
-                    "app_version": "1.4.2",
+                    "app_version": APP_VERSION,
                     "platform": "linux",
                     "architecture": "x86_64",
                     "packaged": True,

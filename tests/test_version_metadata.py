@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from app.version import APP_VERSION, APP_VERSION_FILE, APP_VERSION_TUPLE
 
@@ -11,4 +12,4 @@ def test_windows_file_metadata_matches_runtime_version():
     assert f"filevers=({tuple_literal})" in metadata
     assert f"prodvers=({tuple_literal})" in metadata
     assert f"u'{APP_VERSION_FILE}'" in metadata
-    assert APP_VERSION == "1.4.2"
+    assert re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", APP_VERSION)
