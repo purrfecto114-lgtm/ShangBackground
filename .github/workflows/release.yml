@@ -1,0 +1,256 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - src/app/version.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Validate release state
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      tag: ${{ steps.metadata.outputs.tag }}
+      title: ${{ steps.metadata.outputs.title }}
+      should_release: ${{ steps.state.outputs.should_release }}
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Require the default branch
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          expected_ref="refs/heads/$DEFAULT_BRANCH"
+          if [[ "$GITHUB_REF" != "$expected_ref" ]]; then
+            echo "Releases must run from $expected_ref, got $GITHUB_REF" >&2
+            exit 1
+          fi
+
+      - name: Validate version metadata
+        id: metadata
+        run: python .github/scripts/release.py metadata --github-output "$GITHUB_OUTPUT"
+
+      - name: Run release gate tests
+        run: |
+          python -m pip install --upgrade "pip>=25" "pytest>=8,<10"
+          python -m pytest -q
+          python build_tools/build.py self-test
+
+      - name: Check Tag and Release state
+        id: state
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.metadata.outputs.tag }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if git show-ref --tags --verify --quiet "refs/tags/$TAG"; then
+            tagged_commit="$(git rev-list -n 1 "$TAG")"
+            if [[ "$tagged_commit" != "$COMMIT_SHA" ]]; then
+              echo "Tag $TAG already points to $tagged_commit, not $COMMIT_SHA" >&2
+              exit 1
+            fi
+          fi
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; this run is intentionally idempotent."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build ${{ matrix.target }} ${{ matrix.arch }}
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows
+            arch: x86_64
+            os: windows-latest
+          - target: linux
+            arch: x86_64
+            os: ubuntu-24.04
+          - target: macos
+            arch: x86_64
+            os: macos-15-intel
+          - target: macos
+            arch: arm64
+            os: macos-15
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements/*.txt
+            build_tools/requirements/*.txt
+
+      - name: Install Linux packaging prerequisites
+        if: runner.os == 'Linux'
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes
+          binutils xvfb xauth libgl1 libegl1 libxkbcommon-x11-0
+          libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-randr0
+          libxcb-render-util0 libxcb-xinerama0
+
+      - name: Run tests on native runner
+        run: |
+          python -m pip install --upgrade "pip>=25" "pytest>=8,<10"
+          python -m pytest -q
+
+      - name: Build validated lite standalone package
+        run: >-
+          python build_tools/build.py
+          --tool pyinstaller
+          --target ${{ matrix.target }}
+          --profile lite
+          --mode standalone
+          --mpv-runtime system
+          --arch ${{ matrix.arch }}
+
+      - name: Create release archive
+        run: >-
+          python .github/scripts/release.py package
+          --target ${{ matrix.target }}
+          --arch ${{ matrix.arch }}
+          --input dist-pyinstaller/${{ matrix.target }}/lite-${{ matrix.arch }}/standalone
+          --output-dir release-assets
+
+      - name: Upload native archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.target }}-${{ matrix.arch }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  source:
+    name: Build and verify source archive
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Create source archive
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/scripts/release.py source-archive --output-dir release-assets
+          archive="release-assets/ShangBackground-${{ needs.prepare.outputs.tag }}-source.zip"
+          python .github/scripts/release.py verify-source-archive "$archive"
+
+      - name: Upload source archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-source
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: [prepare, build, source]
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Download all release assets
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify assets and create checksums
+        run: python .github/scripts/release.py checksums release-assets
+
+      - name: Create Tag when absent
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists and was validated by the prepare job."
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$TAG" \
+              -f sha="$COMMIT_SHA" >/dev/null
+          fi
+
+      - name: Publish Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          TITLE: ${{ needs.prepare.outputs.title }}
+        run: >-
+          gh release create "$TAG"
+          release-assets/*
+          --repo "$GITHUB_REPOSITORY"
+          --verify-tag
+          --title "$TITLE"
+          --generate-notes

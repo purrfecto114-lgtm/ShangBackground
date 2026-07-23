@@ -1,0 +1,159 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality and build plans
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements/*.txt
+            build_tools/requirements/*.txt
+
+      - name: Install quality tools
+        run: python -m pip install --upgrade "pip>=25" "pytest>=8,<10" "ruff>=0.12,<1"
+
+      - name: Validate release metadata
+        run: python .github/scripts/release.py metadata
+
+      - name: Compile Python sources
+        run: python -m compileall -q build_tools src tests .github/scripts
+
+      - name: Run Ruff
+        run: python -m ruff check build_tools src tests .github/scripts
+
+      - name: Run build-system self-test
+        run: python build_tools/build.py self-test
+
+      - name: Validate all native build plans
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in windows linux macos; do
+            for tool in pyinstaller nuitka; do
+              python build_tools/build.py \
+                --tool "$tool" \
+                --target "$target" \
+                --profile lite \
+                --mode standalone \
+                --mpv-runtime system \
+                --skip-install \
+                --dry-run
+            done
+          done
+
+  tests:
+    name: Tests (${{ matrix.label }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x86_64
+            os: ubuntu-24.04
+            target: linux
+            arch: x86_64
+            python: "3.10"
+          - label: Linux x86_64
+            os: ubuntu-24.04
+            target: linux
+            arch: x86_64
+            python: "3.13"
+          - label: Windows x86_64
+            os: windows-latest
+            target: windows
+            arch: x86_64
+            python: "3.10"
+          - label: Windows x86_64
+            os: windows-latest
+            target: windows
+            arch: x86_64
+            python: "3.13"
+          - label: macOS x86_64
+            os: macos-15-intel
+            target: macos
+            arch: x86_64
+            python: "3.10"
+          - label: macOS arm64
+            os: macos-15
+            target: macos
+            arch: arm64
+            python: "3.13"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install Linux test prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes xvfb xauth python3-tk
+
+      - name: Install test dependencies
+        run: python -m pip install --upgrade "pip>=25" "pytest>=8,<10"
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Check runtime version entry point
+        shell: bash
+        run: test "$(python src/main.py --version)" = "$(python -c 'from app.version import APP_VERSION; print(APP_VERSION)')"
+        env:
+          PYTHONPATH: src
+
+      - name: Validate host PyInstaller plan
+        run: >-
+          python build_tools/build.py
+          --tool pyinstaller
+          --target ${{ matrix.target }}
+          --profile lite
+          --mode standalone
+          --mpv-runtime system
+          --arch ${{ matrix.arch }}
+          --skip-install
+          --dry-run
+
+      - name: Validate host Nuitka plan
+        run: >-
+          python build_tools/build.py
+          --tool nuitka
+          --target ${{ matrix.target }}
+          --profile lite
+          --mode standalone
+          --mpv-runtime system
+          --arch ${{ matrix.arch }}
+          --skip-install
+          --dry-run

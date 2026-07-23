@@ -12,6 +12,8 @@
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/PySide6-6.11-41cd52?style=flat-square&logo=qt&logoColor=white" alt="PySide6">
   <img src="https://img.shields.io/badge/License-GPLv3-blue?style=flat-square" alt="GPLv3">
+  <a href="https://github.com/purrfecto114-lgtm/ShangBackground/actions/workflows/ci.yml"><img src="https://github.com/purrfecto114-lgtm/ShangBackground/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/purrfecto114-lgtm/ShangBackground/actions/workflows/codeql.yml"><img src="https://github.com/purrfecto114-lgtm/ShangBackground/actions/workflows/codeql.yml/badge.svg" alt="CodeQL"></a>
 </p>
 
 ## 项目定位
@@ -125,6 +127,18 @@ python build_tools/build.py --tool pyinstaller --target windows --profile full \
 ```
 
 `full` 默认启用全部可选模块；`lite` 默认关闭视频和 HTML。构建 GUI 与 CLI 都委托给同一份构建计划，GUI 不包含隐式参数。Target 锁定为当前系统，非本机参数检查只保留在 CLI `--dry-run`。自定义组合会生成 `build-features.json`，运行时据此隐藏未打包功能并跳过对应依赖检查。详见 [`docs/BUILD_SYSTEM.md`](docs/BUILD_SYSTEM.md)。
+
+
+## 自动化检查与发布
+
+仓库提供四套标准 GitHub Actions 工作流：
+
+- `CI`：Ruff、编译检查、构建系统自检、全量 pytest，以及 Windows/Linux/macOS 原生构建计划检查；
+- `Build and release`：当 `main` 分支的 `src/app/version.py` 发生版本变更时，自动校验版本一致性，在原生 Runner 上构建 lite standalone 包，并创建 Tag 与 GitHub Release；
+- `CodeQL`：在推送、Pull Request 和每周计划任务中执行 Python 安全分析；
+- `Dependency review`：阻止 Pull Request 引入已知高危依赖，并由 Dependabot 每周维护 Python 与 Action 版本。
+
+自动发布默认生成 Windows x86_64、Linux x86_64、macOS x86_64、macOS arm64 四个运行包、一个经重新解压验证的源码包和 `SHA256SUMS.txt`。稳定自动产物使用 `lite` 配置，保留 Bing、更新、字体与热键，暂不包含需要额外原生运行时或目标桌面真机验收的视频和 HTML 模块。完整流程见 [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md)。
 
 ## 文档
 
