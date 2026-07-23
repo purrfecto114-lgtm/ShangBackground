@@ -128,7 +128,7 @@ def test_release_workflow_uses_nuitka_full_with_upx():
     assert "--tool nuitka" in release_workflow
     assert "--profile full" in release_workflow
     assert "--upx" in release_workflow
-    assert "--mpv-runtime auto" in release_workflow
+    assert "--mpv-runtime system" in release_workflow
     # The release archive path must point to dist-nuitka, not dist-pyinstaller.
     assert "dist-nuitka/" in release_workflow
     assert "dist-pyinstaller/" not in release_workflow
@@ -145,13 +145,12 @@ def test_release_workflow_installs_upx():
     assert "upx-ucl" in release_workflow
 
 
-def test_release_workflow_installs_mpv_on_windows():
-    """``release.yml`` must download and verify the MPV runtime on Windows so
-    the full video feature can bundle libmpv into the standalone package."""
+def test_release_workflow_installs_libmpv_on_linux():
+    """``release.yml`` must install libmpv on Linux so the full video feature
+    can link against the system MPV runtime during the frozen-runtime check."""
     release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
     assert "Install libmpv" in release_workflow
-    assert "mpv download" in release_workflow
-    assert "mpv verify" in release_workflow
+    assert "libmpv2" in release_workflow
 
 
 def test_release_workflow_publishes_as_prerelease():

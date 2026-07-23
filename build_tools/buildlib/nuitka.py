@@ -109,11 +109,21 @@ def build_args(
     upx_binary: str | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     report = plan.build_output_dir / "compilation-report.xml"
+    # Nuitka 4.1.3 introduced --mode= as the unified way to select standalone /
+    # app / onefile. However, --macos-create-app-bundle is a deprecated flag
+    # that conflicts with --mode on macOS (Nuitka aborts with "Cannot use both
+    # '--mode=' and deprecated options that specify mode"). For macOS, use
+    # --mode=app which creates a .app bundle natively; for Windows/Linux, use
+    # --mode=standalone (or onefile) as before.
+    if plan.target == "macos" and plan.mode == "standalone":
+        nuitka_mode = "app"
+    else:
+        nuitka_mode = plan.mode
     command = [
         python_executable(),
         "-m",
         "nuitka",
-        f"--mode={plan.mode}",
+        f"--mode={nuitka_mode}",
         "--assume-yes-for-downloads",
         f"--output-dir={relative(plan.build_output_dir)}",
         f"--output-filename={APP_NAME}{'.exe' if plan.target == 'windows' else ''}",
@@ -177,8 +187,10 @@ def build_args(
             )
         )
     elif plan.target == "macos":
+        # --mode=app already creates the .app bundle; --macos-create-app-bundle
+        # is deprecated and conflicts with --mode on Nuitka 4.1.3+.
         command.extend(
-            ("--macos-create-app-bundle", f"--macos-app-name={APP_NAME}", f"--macos-app-version={read_version()}")
+            (f"--macos-app-name={APP_NAME}", f"--macos-app-version={read_version()}")
         )
     command.append(relative(ENTRY_SCRIPT))
     return command, env

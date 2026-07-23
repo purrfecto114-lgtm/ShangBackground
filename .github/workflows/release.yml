@@ -130,6 +130,7 @@ jobs:
           libxcb-xkb1 libxkbcommon-x11-0 libdbus-1-3
           libmpv2 upx-ucl
           libgirepository1.0-dev gir1.2-gtk-3.0 gir1.2-webkit2-4.1
+          libcairo2-dev pkg-config cmake
 
       - name: Install Inno Setup + UPX (Windows)
         if: runner.os == 'Windows'
@@ -155,16 +156,9 @@ jobs:
           Write-Host "UPX at: $($upx.Source)"
           & $upx.Source --version | Select-Object -First 2
 
-      - name: Install libmpv (Windows, full video feature)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Download the versioned MPV runtime so the full video feature can
-          # bundle libmpv into the standalone package. The build tool verifies
-          # SHA-256 hashes and refuses to use an unverifiable payload.
-          python build_tools/build.py mpv download --target windows --arch x86_64 --channel stable
-          python build_tools/build.py mpv verify --target windows --arch x86_64
+      - name: Install libmpv (Linux, full video feature)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install --yes libmpv2
 
       - name: Run tests on native runner
         run: |
@@ -176,13 +170,17 @@ jobs:
         # UPX is auto-disabled on macOS by the build tool; Windows and Linux
         # get a 30-60% smaller binary. Nuitka's --upx-binary runs BEFORE any
         # code signing, so signatures remain valid.
+        # --mpv-runtime system: use the target system's libmpv (Linux) or
+        # AVFoundation (macOS). Windows video relies on the user installing
+        # MPV separately; this is acceptable for a prerelease and avoids the
+        # MPV GitHub release asset format mismatch that breaks auto-download.
         run: >-
           python build_tools/build.py
           --tool nuitka
           --target ${{ matrix.target }}
           --profile full
           --mode standalone
-          --mpv-runtime auto
+          --mpv-runtime system
           --arch ${{ matrix.arch }}
           --upx
 
