@@ -189,8 +189,11 @@ def build_args(
     # On macOS, --mode=app-dist creates <output-folder-name>.app; without this
     # flag the bundle would be named main.app (after the entry script), which
     # our frozen-runtime validator cannot find.
-    if plan.target == "macos" and plan.mode == "standalone":
-        command.append(f"--output-folder-name={APP_NAME}")
+    # On Windows/Linux standalone, Nuitka creates <output-folder-name>.dist;
+    # without this flag it would be main.dist (after main.pyw), which our
+    # release.py _expected_bundle_root and installer.py _detect_source_layout
+    # cannot find.
+    command.append(f"--output-folder-name={APP_NAME}")
     # UPX post-build compression. In Nuitka 4.1.3, UPX is a standard plugin
     # activated via --enable-plugin=upx. The optional --upx-binary=PATH
     # sub-option only becomes a recognized flag AFTER the plugin is enabled,
