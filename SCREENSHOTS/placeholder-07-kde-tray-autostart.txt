@@ -1,0 +1,5 @@
++------------------------------------------------------------+
+| PLACEHOLDER — NOT A RUNTIME SCREENSHOT                    |
+| KDE tray / autostart / single instance                    |
+| Tray menu and integration settings.                       |
++------------------------------------------------------------+

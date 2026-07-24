@@ -172,9 +172,22 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
             pass
         time.sleep(0.2)
         if process.poll() is not None:
+            _CURRENT_PROC = None
+            process_state.remove_state(PID_FILE)
+            try:
+                os.remove(IPC_FILE)
+            except OSError:
+                pass
+            _reap_child(getattr(process, "pid", None))
             return False, "macOS 视频播放器启动后立即退出，请检查权限、依赖或文件编码。"
         return True, ""
     except Exception as exc:
+        _CURRENT_PROC = None
+        process_state.remove_state(PID_FILE)
+        try:
+            os.remove(IPC_FILE)
+        except OSError:
+            pass
         return False, f"启动视频壁纸失败：{exc}"
 
 

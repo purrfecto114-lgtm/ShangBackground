@@ -214,6 +214,17 @@ def _privilege_prefix() -> list[str]:
     return []
 
 
+def _pip_install_command(packages: Iterable[str]) -> list[str]:
+    command = [sys.executable, "-m", "pip", "install"]
+    # ``pip --user`` is rejected inside a normal virtual environment because
+    # the user site-packages directory is not on sys.path.
+    in_virtualenv = getattr(sys, "base_prefix", sys.prefix) != sys.prefix
+    if not in_virtualenv and not (hasattr(os, "geteuid") and os.geteuid() == 0):
+        command.append("--user")
+    command.extend(str(package) for package in packages)
+    return command
+
+
 def _package_manager_command(manager: str, packages: list[str]) -> list[str]:
     prefix = _privilege_prefix()
     if manager == "apt":
@@ -226,52 +237,71 @@ def _package_manager_command(manager: str, packages: list[str]) -> list[str]:
         return prefix + ["zypper", "install", "-y", *packages]
     if manager == "apk":
         return prefix + ["apk", "add", *packages]
-    # Unknown Linux: do not invent distro package names; fall back to pip with PyPI names.
-    return [sys.executable, "-m", "pip", "install", "--user", *packages]
+    # Unknown Linux: do not invent distro package names; fall back to the
+    # active interpreter's pip so venv/source launches install into the same runtime.
+    return _pip_install_command(packages)
 
 
 def build_install_plan(packages: Iterable[str]) -> InstallPlan:
     python_packages = _dedupe(packages)
     distro, manager = detect_linux_family()
-    system_packages: list[str] = []
-    note = ""
-
     package_map = SYSTEM_PACKAGE_MAP.get(manager, {})
-    if package_map:
-        unmapped: list[str] = []
-        for package in python_packages:
-            mapped = package_map.get(package)
-            if mapped:
-                system_packages.extend(mapped)
-            else:
-                unmapped.append(package)
-        system_packages = _dedupe(system_packages)
-        if unmapped:
-            note = (
-                t("以下依赖已映射到系统包，将使用 {manager} 安装。").format(manager=manager)
-                + "\n"
-                + t("其余 Python 依赖将在系统包安装成功后通过当前解释器的 pip 安装。")
-            )
-        else:
-            if manager == "apt":
-                note = t("如 apt 提示找不到包，请先执行：sudo apt update，并确认已启用 universe/main 仓库。")
-            elif manager == "dnf":
-                note = t("Fedora/RHEL 系使用 dnf 安装发行版维护的 Python 包。")
-            elif manager == "pacman":
-                note = t("Arch 系使用 pacman 安装官方仓库包；如使用 AUR 变体，请按发行版文档调整。")
-            elif manager == "zypper":
-                note = t("openSUSE/SUSE 系使用 zypper 安装发行版维护的 Python 包。")
-            elif manager == "apk":
-                note = t("Alpine 系使用 apk 安装 py3-* Python 包。")
+    in_virtualenv = getattr(sys, "base_prefix", sys.prefix) != sys.prefix
+    system_packages: list[str] = []
+    pip_packages: list[str] = []
 
-    command = _package_manager_command(manager, system_packages if system_packages else python_packages)
-    mapped_names = {name for name in python_packages if package_map.get(name)}
-    unmapped = [name for name in python_packages if name not in mapped_names] if system_packages else []
-    followups: tuple[tuple[str, ...], ...] = ()
-    if unmapped:
-        followups = ((sys.executable, "-m", "pip", "install", "--user", *unmapped),)
-    all_commands = [command, *[list(item) for item in followups]]
-    display = " &&\n".join(_command_display(item) for item in all_commands if item)
+    for package in python_packages:
+        mapped = package_map.get(package)
+        if in_virtualenv:
+            # Distribution Python modules are normally invisible to a venv.
+            # Install every Python package into the active interpreter.  For
+            # PyGObject, also install the distro-provided native GTK/WebKit
+            # runtime/typelibs before asking pip to build/import the binding.
+            if package == "PyGObject" and mapped:
+                system_packages.extend(mapped)
+            pip_packages.append(package)
+        elif mapped:
+            system_packages.extend(mapped)
+        else:
+            pip_packages.append(package)
+
+    system_packages = _dedupe(system_packages)
+    pip_packages = _dedupe(pip_packages)
+    commands: list[list[str]] = []
+    if system_packages:
+        commands.append(_package_manager_command(manager, system_packages))
+    if pip_packages:
+        commands.append(_pip_install_command(pip_packages))
+
+    command = commands[0] if commands else []
+    followups = tuple(tuple(item) for item in commands[1:])
+    display = " &&\n".join(_command_display(item) for item in commands)
+
+    if in_virtualenv:
+        note = t(
+            "检测到虚拟环境：Python 包将安装到当前解释器，避免发行版包安装后仍无法导入。"
+        )
+        if system_packages:
+            note += "\n" + t("GTK/WebKit 等原生运行库仍通过系统包管理器安装。")
+    elif system_packages and pip_packages:
+        note = (
+            t("以下依赖已映射到系统包，将使用 {manager} 安装。").format(manager=manager)
+            + "\n"
+            + t("其余 Python 依赖将在系统包安装成功后通过当前解释器的 pip 安装。")
+        )
+    elif manager == "apt" and system_packages:
+        note = t("如 apt 提示找不到包，请先执行：sudo apt update，并确认已启用 universe/main 仓库。")
+    elif manager == "dnf" and system_packages:
+        note = t("Fedora/RHEL 系使用 dnf 安装发行版维护的 Python 包。")
+    elif manager == "pacman" and system_packages:
+        note = t("Arch 系使用 pacman 安装官方仓库包；如使用 AUR 变体，请按发行版文档调整。")
+    elif manager == "zypper" and system_packages:
+        note = t("openSUSE/SUSE 系使用 zypper 安装发行版维护的 Python 包。")
+    elif manager == "apk" and system_packages:
+        note = t("Alpine 系使用 apk 安装 py3-* Python 包。")
+    else:
+        note = ""
+
     return InstallPlan(
         command=command,
         display_command=display,

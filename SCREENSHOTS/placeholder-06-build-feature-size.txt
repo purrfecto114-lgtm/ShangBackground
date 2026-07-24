@@ -1,0 +1,5 @@
++------------------------------------------------------------+
+| PLACEHOLDER — NOT A RUNTIME SCREENSHOT                    |
+| Build GUI feature matrix                                  |
+| Selected features and artifact/runtime hint.              |
++------------------------------------------------------------+

@@ -22,7 +22,7 @@ from app.config import (
     normalize_mode_key,
     normalize_style_key,
 )
-from app.i18n import get_language, load_language, set_language, t
+from app.i18n import LanguageChangeEvent, get_language, load_language, subscribe_language_changes, t
 from app.build_features import is_feature_enabled
 from app.system_info import collect_system_info, render_system_info
 from app.config_normalization import normalize_runtime_config_in_place
@@ -151,6 +151,7 @@ class _SharedShangBackgroundWindow(QMainWindow):
         self._init_icon()
         self._apply_theme()
         self._build_ui()
+        self._i18n_unsubscribe = subscribe_language_changes(self._on_i18n_language_changed)
         # 配置已在 core.engine 导入时加载；这里在首帧显示前同步填充控件，
         # 避免先显示默认值/空白值再跳变，引发用户感知上的“首帧卡顿”。
         self.refresh_from_config()
@@ -3050,7 +3051,6 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                     core.log(f"factory reset could not remove {_failed_logs} log item(s)", level="WARNING")
             except Exception as exc:
                 core.log(f"factory reset log cleanup failed: {exc}", level="WARNING")
-            set_language(core.config.get("language", "zh"))
             load_language(core.config.get("language", "zh"))
             self._theme_color = core.config.get("theme_color", DEFAULT_THEME_COLOR)
             self._icon_pixmap_cache = OrderedDict()
@@ -3221,12 +3221,20 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         previous_lang = core.config.get("language", "zh")
         core.config["language"] = lang_data
         core.save_config()
-        set_language(lang_data)
         load_language(lang_data)
-        self._refresh_header_language_buttons(lang_data)
-        if lang_data != previous_lang:
-            self._rebuild_ui_for_language_change()
-            self._schedule_preview_refresh(0)
+        if lang_data == previous_lang:
+            self._refresh_header_language_buttons(lang_data)
+
+    def _on_i18n_language_changed(self, event: LanguageChangeEvent) -> None:
+        """Re-render visible Qt surfaces after the JSON dictionary changes."""
+        self._refresh_header_language_buttons(event.current)
+        if event.current == event.previous:
+            return
+        self._rebuild_ui_for_language_change()
+        self._schedule_preview_refresh(0)
+        if not event.translations_loaded and event.current != "zh":
+            self.set_status(t("语言资源加载失败，界面已回退到中文键值。"))
+        else:
             self.set_status(t("界面语言已切换。少数系统菜单和后台组件会在重启程序后完全生效。"))
 
     def _rebuild_ui_for_language_change(self) -> None:
@@ -7186,6 +7194,13 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
 
     def _disconnect_own_signals(self):
         """Best-effort cleanup for self-owned Qt signal connections before exit."""
+        unsubscribe = getattr(self, "_i18n_unsubscribe", None)
+        self._i18n_unsubscribe = None
+        if unsubscribe is not None:
+            try:
+                unsubscribe()
+            except Exception:
+                pass
         for signal, slot in (
             (self.bing_result_signal, self._on_bing_finished),
             (self.core_result_signal, self._on_core_finished),

@@ -16,6 +16,7 @@ except ImportError:  # pragma: no cover - optional dependency
     psutil = None
 
 from platform_adapters import process_state
+from platform_adapters.backends.linux.session import is_wayland_session
 
 try:
     from app.paths import (
@@ -266,7 +267,7 @@ def _wayland_layer_shell_session() -> bool:
     ).lower()
     if any(os.environ.get(name) for name in ("SWAYSOCK", "HYPRLAND_INSTANCE_SIGNATURE", "WAYFIRE_SOCKET")):
         return True
-    return any(name in tokens for name in ("sway", "hyprland", "wayfire", "river", "wlroots"))
+    return any(name in tokens for name in ("sway", "hyprland", "wayfire", "river", "wlroots", "kde", "plasma"))
 
 
 def _internal_libmpv_x11_command(
@@ -298,13 +299,13 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
     clamped_volume = max(0, min(100, int(volume)))
     # IPC socket for live volume/mute control (mpv / mpvpaper both支持)。
     ipc_path = _mpv_ipc_path()
-    if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
+    if is_wayland_session():
         if not _wayland_layer_shell_session():
             desktop = os.environ.get("XDG_CURRENT_DESKTOP") or os.environ.get("XDG_SESSION_DESKTOP") or "unknown"
             return False, (
                 "当前 Wayland 桌面不提供本项目已实现的通用视频壁纸层。"
                 f"检测到桌面：{desktop}。mpvpaper 仅适用于兼容 layer-shell 的合成器；"
-                "GNOME/KDE Wayland 需要各自的桌面扩展/插件后端，不能用普通窗口冒充壁纸。"
+                "GNOME Wayland 仍需要桌面扩展/插件后端；KDE/KWin 与 wlroots 会话可尝试 layer-shell。"
             )
         mpvpaper = shutil.which("mpvpaper") if external_media_runtime_allowed() else None
         if mpvpaper:
@@ -314,12 +315,20 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
             # (some mpvpaper builds ignore `volume=0` on its own).
             # 同时启用 input-ipc-server 让 GUI 能热调音量而不重启播放。
             # See https://github.com/GhostNaN/mpvpaper (mpv IPC support).
+            safe_options = (
+                "no-config load-scripts=no autoload-files=no sub-auto=no "
+                "audio-file-auto=no no-osc no-osd-bar no-input-default-bindings "
+                "loop-file=inf"
+            )
             if muted:
-                mpv_options = f"loop-file=inf no-audio volume=0 input-ipc-server={ipc_path}"
+                mpv_options = f"{safe_options} no-audio volume=0 input-ipc-server={ipc_path}"
             else:
-                mpv_options = f"loop-file=inf volume={clamped_volume} input-ipc-server={ipc_path}"
-            return _start_process([mpvpaper, "-o", mpv_options, "*", abs_video], "mpvpaper", ipc_path=ipc_path)
-        return False, "当前 Wayland 合成器可尝试 mpvpaper，但未找到可执行文件。请安装 mpvpaper，或切换到 X11 后使用 xwinwrap + mpv。"
+                mpv_options = f"{safe_options} volume={clamped_volume} input-ipc-server={ipc_path}"
+            # Current mpvpaper documents ALL as the selector for every output.
+            # Keep an opt-in override for users who want one named connector.
+            output = os.environ.get("SHANGBACKGROUND_MPVPAPER_OUTPUT", "").strip() or "ALL"
+            return _start_process([mpvpaper, "-o", mpv_options, output, abs_video], "mpvpaper", ipc_path=ipc_path)
+        return False, "当前 Wayland 合成器可尝试 mpvpaper layer-shell，但未找到可执行文件。请安装 mpvpaper，或切换到 X11 后使用 xwinwrap + mpv。"
     xwinwrap = shutil.which("xwinwrap")
     if not xwinwrap:
         return False, "Linux X11 视频壁纸需要 xwinwrap。请使用发行版包管理器安装。"

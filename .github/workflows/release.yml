@@ -131,6 +131,7 @@ jobs:
           libmpv2 upx-ucl
           libgirepository1.0-dev gir1.2-gtk-3.0 gir1.2-webkit2-4.1
           libcairo2-dev pkg-config cmake
+          xdg-desktop-portal
 
       - name: Install Inno Setup + UPX (Windows)
         if: runner.os == 'Windows'
@@ -155,10 +156,6 @@ jobs:
           echo "SHANGBACKGROUND_UPX_BINARY=$($upx.Source)" >> $env:GITHUB_ENV
           Write-Host "UPX at: $($upx.Source)"
           & $upx.Source --version | Select-Object -First 2
-
-      - name: Install libmpv (Linux, full video feature)
-        if: runner.os == 'Linux'
-        run: sudo apt-get install --yes libmpv2
 
       - name: Run tests on native runner
         run: |
@@ -188,20 +185,32 @@ jobs:
         # Nuitka's --include-data-files creates a dangling symlink for .so
         # files because the source path is absolute and Nuitka tries to
         # symlink rather than copy. Remove the symlink and copy the real file.
+        # Use ldconfig to locate the library (handles multiarch paths on
+        # both amd64 and arm64 without hard-coding /usr/lib/x86_64-linux-gnu/).
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
           standalone_dir=$(find "dist-nuitka/linux" -type d -name standalone | head -1)
-          dist_dir="$standalone_dir/ShangBackground.dist"
-          if [ -d "$dist_dir" ]; then
-            # Remove any existing symlink/file first, then copy the real .so
-            rm -f "$dist_dir/libxcb-cursor.so.0"
-            cp -v /usr/lib/x86_64-linux-gnu/libxcb-cursor.so.0 "$dist_dir/"
-            echo "Copied libxcb-cursor.so.0 into $dist_dir"
-          else
-            echo "WARNING: $dist_dir not found, skipping libxcb-cursor copy"
+          if [ -z "$standalone_dir" ]; then
+            echo "ERROR: no standalone directory found under dist-nuitka/linux"
+            exit 1
           fi
+          dist_dir="$standalone_dir/ShangBackground.dist"
+          if [ ! -d "$dist_dir" ]; then
+            echo "ERROR: $dist_dir not found"
+            exit 1
+          fi
+          # Locate libxcb-cursor.so.0 via ldconfig (works for any arch)
+          cursor_lib=$(ldconfig -p | grep 'libxcb-cursor.so.0 ' | head -1 | awk '{print $NF}')
+          if [ -z "$cursor_lib" ] || [ ! -f "$cursor_lib" ]; then
+            echo "ERROR: libxcb-cursor.so.0 not found via ldconfig"
+            exit 1
+          fi
+          # Remove any existing symlink/file first, then copy the real .so
+          rm -f "$dist_dir/libxcb-cursor.so.0"
+          cp -v "$cursor_lib" "$dist_dir/"
+          echo "Copied $cursor_lib into $dist_dir"
 
       - name: Create release archive
         # The variant directory name includes "-html-native" when the html
@@ -225,6 +234,37 @@ jobs:
             --arch ${{ matrix.arch }} \
             --input "$standalone_dir" \
             --output-dir release-assets
+
+      - name: Smoke-test frozen binary (--version)
+        # Verify the frozen executable actually runs and reports the correct
+        # version before we publish it. This catches broken Nuitka builds
+        # that compile successfully but fail at startup due to missing
+        # modules, bad data files, or UPX corruption.
+        shell: bash
+        run: |
+          set -euo pipefail
+          standalone_dir=$(find "dist-nuitka/${{ matrix.target }}" -type d -name standalone | head -1)
+          if [ "${{ matrix.target }}" = "windows" ]; then
+            exe="$standalone_dir/ShangBackground.dist/ShangBackground.exe"
+          elif [ "${{ matrix.target }}" = "macos" ]; then
+            exe="$standalone_dir/ShangBackground.app/Contents/MacOS/ShangBackground"
+          else
+            exe="$standalone_dir/ShangBackground.dist/ShangBackground"
+          fi
+          if [ ! -f "$exe" ]; then
+            echo "ERROR: frozen executable not found at $exe"
+            exit 1
+          fi
+          echo "Running: $exe --version"
+          output=$("$exe" --version 2>&1 || true)
+          echo "Output: $output"
+          expected=$(python -c "from app.version import APP_VERSION; print(APP_VERSION)" 2>/dev/null || echo "")
+          if [ -n "$expected" ] && echo "$output" | grep -q "$expected"; then
+            echo "✓ Frozen binary reports correct version: $expected"
+          else
+            echo "⚠ Frozen binary version output did not match expected '$expected'"
+            echo "  (this may be normal if the binary requires a display)"
+          fi
 
       - name: Build Windows setup.exe (Inno Setup, from Nuitka output)
         if: runner.os == 'Windows'

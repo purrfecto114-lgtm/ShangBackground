@@ -1,0 +1,5 @@
++------------------------------------------------------------+
+| PLACEHOLDER — NOT A RUNTIME SCREENSHOT                    |
+| Language switch — after                                   |
+| English UI re-rendered without restart.                   |
++------------------------------------------------------------+

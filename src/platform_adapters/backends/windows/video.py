@@ -558,7 +558,14 @@ def _start_player(name: str, cmd: list[str], ipc_path: str = "") -> tuple[bool, 
     if not _wait_for_player_ready(process, ipc_path):
         _terminate_failed_player(process)
         return False, f"{name} 未在限定时间内建立控制通道，已自动回退"
-    _write_state(process.pid, name, _extract_wid(cmd), ipc_path=ipc_path)
+    try:
+        _write_state(process.pid, name, _extract_wid(cmd), ipc_path=ipc_path)
+    except Exception:
+        # A player without durable ownership state cannot be stopped safely on
+        # the next launch.  Do not leave an orphaned WorkerW child running.
+        _terminate_failed_player(process)
+        process_state.remove_state(PID_FILE)
+        raise
     return True, ""
 
 

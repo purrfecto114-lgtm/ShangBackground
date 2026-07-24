@@ -95,10 +95,36 @@ DEPENDENCIES = [
     {"module": "PySide6", "package": "PySide6-Essentials", "required": True, "desc": "新版 PySide6 图形界面与系统托盘"},
     {"module": "psutil", "package": "psutil", "required": False, "desc": "进程清理与辅助控制"},
 ]
-if not IS_WINDOWS and is_feature_enabled("hotkeys"):
-    DEPENDENCIES.append(
-        {"module": "pynput", "package": "pynput", "required": False, "desc": "可选的系统级全局热键"}
-    )
+if is_feature_enabled("hotkeys"):
+    if IS_LINUX:
+        try:
+            from platform_adapters.backends.linux.session import is_wayland_session
+            _linux_wayland = is_wayland_session()
+        except Exception:
+            _linux_wayland = False
+        if _linux_wayland:
+            DEPENDENCIES.extend([
+                {
+                    "module": "dbus_next",
+                    "package": "dbus-next",
+                    "required": False,
+                    "desc": "Wayland XDG Portal 全局热键注册",
+                },
+                {
+                    "module": "pynput",
+                    "package": "pynput",
+                    "required": False,
+                    "desc": "快捷键录制辅助（Portal 负责实际注册）",
+                },
+            ])
+        else:
+            DEPENDENCIES.append(
+                {"module": "pynput", "package": "pynput", "required": False, "desc": "X11 系统级全局热键"}
+            )
+    elif IS_MACOS:
+        DEPENDENCIES.append(
+            {"module": "pynput", "package": "pynput", "required": False, "desc": "可选的系统级全局热键"}
+        )
 if IS_MACOS:
     DEPENDENCIES.extend([
         {"module": "AppKit", "package": "pyobjc-framework-Cocoa", "required": False, "desc": "macOS 原生桌面集成"},

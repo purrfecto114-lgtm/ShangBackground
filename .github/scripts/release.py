@@ -56,6 +56,19 @@ EXCLUDED_NAMES = {
     "dist-release",
     "tests",
     "VALIDATION_ARTIFACTS",
+    # Documentation-only audit artifacts that should not ship in source releases.
+    "SCREENSHOTS",
+    "REFACTOR_PATCHES",
+    "CURRENT_STATE_AUDIT.md",
+    "DIALECTICS.md",
+    "DYNAMIC_TODO.md",
+    "EXECUTIVE_SUMMARY.md",
+    "PLATFORM_FIX_REPORT.md",
+    "PLATFORM_FIX_TEST_OUTPUT.txt",
+    "RISK_REGISTER.md",
+    "TEST_REPORT.md",
+    "WEB_VERIFICATION.md",
+    "WORKFLOW_RECOMMENDATIONS.md",
 }
 EXCLUDED_SUFFIXES = (".pyc", ".pyo")
 

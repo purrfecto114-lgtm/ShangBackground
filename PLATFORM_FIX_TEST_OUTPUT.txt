@@ -1,0 +1,26 @@
+# Platform fix validation output
+
+## pytest
+........................................................................ [ 56%]
+.......................................................                  [100%]
+127 passed in 8.22s
+
+## build self-test
+Build-tool self-test passed.
+Checked syntax, staging output, native HTML backend chains, Qt WebEngine exclusion, lite build plans, and Windows installer invariants.
+
+## dry-run matrix
+=== windows / pyinstaller ===
+=== windows / nuitka ===
+=== linux / pyinstaller ===
+=== linux / nuitka ===
+=== macos / pyinstaller ===
+=== macos / nuitka ===
+All six dry-run commands exited 0.
+
+## doctor-json smoke
+linux: healthy=False, checks=14, failures=['PySide6 Essentials: PySide6: missing']
+windows: healthy=False, checks=12, failures=['PySide6 Essentials: PySide6: missing']
+macos: healthy=False, checks=14, failures=['PySide6 Essentials: PySide6: missing']
+
+The sandbox does not contain PySide6, so doctor exits 2 only for the missing required GUI runtime.

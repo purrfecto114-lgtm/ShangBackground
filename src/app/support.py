@@ -321,9 +321,6 @@ PYSIDE_IMPORT_ERROR = None
 try:
     from PySide6.QtCore import QTranslator, QLibraryInfo, QLocale
     from PySide6.QtGui import QFontDatabase
-    from PySide6.QtWidgets import (
-        QApplication,
-    )
     PYSIDE_AVAILABLE = True
 except Exception as exc:  # pragma: no cover - 运行环境缺 PySide6 时回退
     PYSIDE_AVAILABLE = False
@@ -375,94 +372,81 @@ def _dependency_availability_for_pyside() -> dict:
     }
 
 
-if PYSIDE_AVAILABLE:
-
-
-
-
-
-
-    def _iter_font_files(path: str):
-        if not path:
-            return []
-        target = Path(path).expanduser()
-        if target.is_file() and target.suffix.lower() in {".ttf", ".ttc", ".otf"}:
-            return [target]
-        if target.is_dir():
-            files = []
-            for suffix in ("*.ttf", "*.ttc", "*.otf"):
-                files.extend(target.glob(suffix))
-            return sorted(files)
+def _iter_font_files(path: str):
+    if not path:
         return []
+    target = Path(path).expanduser()
+    if target.is_file() and target.suffix.lower() in {".ttf", ".ttc", ".otf"}:
+        return [target]
+    if target.is_dir():
+        files = []
+        for suffix in ("*.ttf", "*.ttc", "*.otf"):
+            files.extend(target.glob(suffix))
+        return sorted(files)
+    return []
 
 
-    def apply_application_font(app: QApplication) -> str:
-        """应用自定义字体文件/目录；显示大小由程序内 DPI 统一控制.
+def apply_application_font(app) -> str:
+    """Apply the configured application font when the Qt runtime is present.
 
-        v1.4.7: 支持 font_weight (normal/medium/bold) 和 font_size (0=系统默认, 否则 px).
-        """
-        if app is None:
-            return ""
-        # v1.4.7: 读取字体粗细和大小配置
-        font_weight_str = str(core.config.get("font_weight", "normal")).lower()
-        from PySide6.QtGui import QFont
-        weight_map = {
-            "normal": QFont.Weight.Normal,
-            "medium": QFont.Weight.Medium,
-            "bold": QFont.Weight.Bold,
-        }
-        target_weight = weight_map.get(font_weight_str, QFont.Weight.Normal)
+    Keeping this symbol available even when PySide6 is missing prevents direct
+    imports from failing with a misleading support-module error; the main
+    entry point can then report the actual Qt dependency problem.
+    """
+    if not PYSIDE_AVAILABLE or app is None:
+        return ""
+    font_weight_str = str(core.config.get("font_weight", "normal")).lower()
+    from PySide6.QtGui import QFont
+    weight_map = {
+        "normal": QFont.Weight.Normal,
+        "medium": QFont.Weight.Medium,
+        "bold": QFont.Weight.Bold,
+    }
+    target_weight = weight_map.get(font_weight_str, QFont.Weight.Normal)
+    try:
+        target_size = int(core.config.get("font_size", 0))
+    except Exception:
         target_size = 0
+
+    candidates = []
+    candidates.extend(_iter_font_files(core.config.get("font_path", "")))
+    for font_dir in font_directories():
+        candidates.extend(_iter_font_files(os.fspath(font_dir)))
+
+    current_size = app.font().pointSize() if app.font().pointSize() > 0 else -1
+    for font_file in candidates:
         try:
-            target_size = int(core.config.get("font_size", 0))
-        except Exception:
-            target_size = 0
-
-        candidates = []
-        custom_path = core.config.get("font_path", "")
-        candidates.extend(_iter_font_files(custom_path))
-        for font_dir in font_directories():
-            candidates.extend(_iter_font_files(os.fspath(font_dir)))
-
-        current_size = app.font().pointSize() if app.font().pointSize() > 0 else -1
-        for font_file in candidates:
-            try:
-                font_id = QFontDatabase.addApplicationFont(str(font_file))
-                if font_id < 0:
-                    continue
-                families = QFontDatabase.applicationFontFamilies(font_id)
-                if families:
-                    font = QFont(families[0])
-                    font.setWeight(target_weight)  # v1.4.7: 应用粗细
-                    if target_size > 0:
-                        font.setPixelSize(target_size)  # v1.4.7: 应用大小 (px)
-                    elif current_size > 0:
-                        font.setPointSize(current_size)
-                    app.setFont(font)
-                    return families[0]
-            except Exception as exc:
-                core.log(f"字体加载失败: {font_file.name}: {exc}")
-
-        fallback = [
-            core.config.get("font_family", ""),
-            "Microsoft YaHei UI",
-            "Microsoft YaHei",
-            "SimHei",
-            "Noto Sans CJK SC",
-            "Source Han Sans SC",
-            "PingFang SC",
-            "Segoe UI",
-            "Arial",
-        ]
-        available = set(QFontDatabase.families())
-        for family in fallback:
-            if family and family in available:
-                font = QFont(family)
-                font.setWeight(target_weight)  # v1.4.7: 应用粗细
+            font_id = QFontDatabase.addApplicationFont(str(font_file))
+            if font_id < 0:
+                continue
+            families = QFontDatabase.applicationFontFamilies(font_id)
+            if families:
+                font = QFont(families[0])
+                font.setWeight(target_weight)
                 if target_size > 0:
-                    font.setPixelSize(target_size)  # v1.4.7: 应用大小
+                    font.setPixelSize(target_size)
                 elif current_size > 0:
                     font.setPointSize(current_size)
                 app.setFont(font)
-                return family
-        return app.font().family()
+                return families[0]
+        except Exception as exc:
+            core.log(f"字体加载失败: {font_file.name}: {exc}")
+
+    fallback = [
+        core.config.get("font_family", ""), "Microsoft YaHei UI",
+        "Microsoft YaHei", "SimHei", "Noto Sans CJK SC",
+        "Source Han Sans SC", "PingFang SC", "Segoe UI", "Arial",
+    ]
+    available = set(QFontDatabase.families())
+    for family in fallback:
+        if family and family in available:
+            font = QFont(family)
+            font.setWeight(target_weight)
+            if target_size > 0:
+                font.setPixelSize(target_size)
+            elif current_size > 0:
+                font.setPointSize(current_size)
+            app.setFont(font)
+            return family
+    return app.font().family()
+

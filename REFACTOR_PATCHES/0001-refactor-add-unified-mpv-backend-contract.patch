@@ -1,0 +1,274 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Research Refactor <research@example.invalid>
+Date: Fri, 24 Jul 2026 05:06:58 +0000
+Subject: [PATCH 1/3] refactor: add unified mpv backend contract
+
+
+diff --git a/src/app/bootstrap.py b/src/app/bootstrap.py
+index 4779997..d16dec6 100644
+--- a/src/app/bootstrap.py
++++ b/src/app/bootstrap.py
+@@ -13,6 +13,7 @@ from typing import Any
+ from app.exit_service import ExitService
+ from app.hotkey_service import HotkeyService
+ from app.media_service import MediaService
++from app.mpv_backend import LegacyModuleMpvBackend
+ from app.ports import BackendResult, HotkeyBackend, MediaBackend, MediaKind, WallpaperBackend
+ from app.runtime_state import RuntimeState
+ from app.session_wallpaper_service import SessionWallpaperService
+@@ -83,37 +84,38 @@ class ModuleMediaBackend:
+         module = self._module(kind)
+         values = dict(options or {})
+         if kind == "video":
+-            raw = module.start_video_wallpaper(
++            return LegacyModuleMpvBackend(module).start(
+                 target,
+                 muted=bool(values.get("muted", True)),
+                 volume=int(values.get("volume", 100)),
+             )
+-        else:
+-            raw = module.start_html_wallpaper(target)
++        raw = module.start_html_wallpaper(target)
+         return _backend_result(raw)
+ 
+     def stop(self, kind: MediaKind) -> None:
+         module = self._module(kind)
+-        getattr(module, f"stop_{kind}_wallpaper")()
++        if kind == "video":
++            LegacyModuleMpvBackend(module).stop()
++            return
++        module.stop_html_wallpaper()
+ 
+     def is_running(self, kind: MediaKind) -> bool:
+         module = self._module(kind)
+-        return bool(getattr(module, f"is_{kind}_wallpaper_running")())
++        if kind == "video":
++            return LegacyModuleMpvBackend(module).is_running()
++        return bool(module.is_html_wallpaper_running())
+ 
+     def set_option(self, kind: MediaKind, key: str, value: Any) -> bool:
+         module = self._module(kind)
+         if kind == "video":
+-            if key == "paused" and hasattr(module, "set_video_paused"):
+-                return bool(module.set_video_paused(bool(value)))
+-            if key == "volume" and hasattr(module, "set_video_volume"):
+-                muted, volume = value
+-                return bool(module.set_video_volume(bool(muted), int(volume)))
+-            return False
++            return LegacyModuleMpvBackend(module).set_property(key, value)
+         setter = getattr(module, "runtime_set_option", None)
+         return bool(setter and setter(str(key), value))
+ 
+     def last_target(self, kind: MediaKind) -> str:
+         module = self._module(kind)
++        if kind == "video":
++            return LegacyModuleMpvBackend(module).last_target()
+         getter = getattr(module, "get_last_path", None)
+         return str(getter() or "") if getter else ""
+ 
+diff --git a/src/app/mpv_backend.py b/src/app/mpv_backend.py
+new file mode 100644
+index 0000000..d2f90a8
+--- /dev/null
++++ b/src/app/mpv_backend.py
+@@ -0,0 +1,143 @@
++"""Stable mpv lifecycle/control abstraction.
++
++Platform modules in ``platform_adapters.backends.*.video`` intentionally keep
++legacy function entry points for compatibility with existing plugins and CLI
++helpers.  ``LegacyModuleMpvBackend`` adapts those functions to one explicit
++contract so application services do not need to know whether playback uses
++ctypes/libmpv, an external mpv process, mpvpaper, or a native platform player.
++"""
++from __future__ import annotations
++
++from abc import ABC, abstractmethod
++from collections.abc import Callable, Mapping, Sequence
++from types import ModuleType
++from typing import Any
++
++from app.ports import BackendResult
++
++PropertyObserver = Callable[[str, Any], None]
++
++
++class MpvBackend(ABC):
++    """Unified lifecycle and control surface for video-wallpaper players."""
++
++    @abstractmethod
++    def start(
++        self,
++        target: str,
++        *,
++        muted: bool = True,
++        volume: int = 100,
++    ) -> BackendResult:
++        """Start playback and return a normalized result."""
++
++    @abstractmethod
++    def pause(self, paused: bool) -> bool:
++        """Pause or resume the active player without restarting it."""
++
++    @abstractmethod
++    def stop(self) -> None:
++        """Stop the active video wallpaper."""
++
++    @abstractmethod
++    def is_running(self) -> bool:
++        """Return whether the backend owns a live player."""
++
++    @abstractmethod
++    def set_property(self, name: str, value: Any) -> bool:
++        """Set a normalized runtime property such as ``volume`` or ``pause``."""
++
++    @abstractmethod
++    def observe_property(self, name: str, callback: PropertyObserver) -> bool:
++        """Subscribe to a player property when supported by the backend."""
++
++    @abstractmethod
++    def ipc(self, command: Sequence[Any] | Mapping[str, Any]) -> bool:
++        """Send a raw backend command when a compatible IPC channel is exposed."""
++
++    @abstractmethod
++    def last_target(self) -> str:
++        """Return the most recently started video target, if known."""
++
++
++class LegacyModuleMpvBackend(MpvBackend):
++    """Adapt the project's existing module-level video API to :class:`MpvBackend`.
++
++    Unsupported optional operations deliberately return ``False`` instead of
++    raising.  This keeps Windows WorkerW, Linux mpvpaper/xwinwrap, and macOS
++    AVPlayer paths behavior-compatible while giving callers one capability
++    boundary.
++    """
++
++    def __init__(self, module: ModuleType) -> None:
++        self._module = module
++
++    @property
++    def module(self) -> ModuleType:
++        return self._module
++
++    def start(
++        self,
++        target: str,
++        *,
++        muted: bool = True,
++        volume: int = 100,
++    ) -> BackendResult:
++        raw = self._module.start_video_wallpaper(
++            target,
++            muted=bool(muted),
++            volume=max(0, min(100, int(volume))),
++        )
++        return _backend_result(raw)
++
++    def pause(self, paused: bool) -> bool:
++        setter = getattr(self._module, "set_video_paused", None)
++        return bool(setter and setter(bool(paused)))
++
++    def stop(self) -> None:
++        self._module.stop_video_wallpaper()
++
++    def is_running(self) -> bool:
++        return bool(self._module.is_video_wallpaper_running())
++
++    def set_property(self, name: str, value: Any) -> bool:
++        normalized = str(name or "").strip().lower().replace("-", "_")
++        if normalized in {"pause", "paused"}:
++            return self.pause(bool(value))
++        if normalized in {"volume", "audio"}:
++            setter = getattr(self._module, "set_video_volume", None)
++            if setter is None:
++                return False
++            if isinstance(value, (tuple, list)) and len(value) == 2:
++                muted, volume = value
++            elif isinstance(value, Mapping):
++                muted = bool(value.get("muted", False))
++                volume = value.get("volume", 100)
++            else:
++                muted = False
++                volume = value
++            return bool(setter(bool(muted), max(0, min(100, int(volume)))))
++        generic = getattr(self._module, "set_video_property", None)
++        return bool(generic and generic(normalized, value))
++
++    def observe_property(self, name: str, callback: PropertyObserver) -> bool:
++        observer = getattr(self._module, "observe_video_property", None)
++        return bool(observer and observer(str(name), callback))
++
++    def ipc(self, command: Sequence[Any] | Mapping[str, Any]) -> bool:
++        sender = getattr(self._module, "send_video_ipc", None)
++        return bool(sender and sender(command))
++
++    def last_target(self) -> str:
++        getter = getattr(self._module, "get_last_path", None)
++        return str(getter() or "") if getter else ""
++
++
++def _backend_result(raw: Any) -> BackendResult:
++    if isinstance(raw, BackendResult):
++        return raw
++    if isinstance(raw, tuple):
++        ok = bool(raw[0]) if raw else False
++        message = str(raw[1]) if len(raw) > 1 else ""
++        return BackendResult(ok, message)
++    return BackendResult(bool(raw), "")
+diff --git a/tests/test_mpv_backend.py b/tests/test_mpv_backend.py
+new file mode 100644
+index 0000000..523eadc
+--- /dev/null
++++ b/tests/test_mpv_backend.py
+@@ -0,0 +1,48 @@
++from __future__ import annotations
++
++from types import SimpleNamespace
++
++from app.mpv_backend import LegacyModuleMpvBackend
++
++
++def test_legacy_mpv_backend_normalizes_lifecycle_and_properties():
++    calls: list[tuple] = []
++    module = SimpleNamespace(
++        start_video_wallpaper=lambda target, muted, volume: calls.append(("start", target, muted, volume)) or (True, "ok"),
++        stop_video_wallpaper=lambda: calls.append(("stop",)),
++        is_video_wallpaper_running=lambda: True,
++        set_video_paused=lambda paused: calls.append(("pause", paused)) or True,
++        set_video_volume=lambda muted, volume: calls.append(("volume", muted, volume)) or True,
++        get_last_path=lambda: "/tmp/demo.mp4",
++    )
++    backend = LegacyModuleMpvBackend(module)
++
++    result = backend.start("demo.mp4", muted=False, volume=150)
++
++    assert result.ok is True
++    assert result.message == "ok"
++    assert backend.is_running() is True
++    assert backend.pause(True) is True
++    assert backend.set_property("volume", (False, -5)) is True
++    assert backend.last_target() == "/tmp/demo.mp4"
++    backend.stop()
++    assert calls == [
++        ("start", "demo.mp4", False, 100),
++        ("pause", True),
++        ("volume", False, 0),
++        ("stop",),
++    ]
++
++
++def test_legacy_mpv_backend_optional_controls_degrade_to_false():
++    module = SimpleNamespace(
++        start_video_wallpaper=lambda *_args, **_kwargs: False,
++        stop_video_wallpaper=lambda: None,
++        is_video_wallpaper_running=lambda: False,
++    )
++    backend = LegacyModuleMpvBackend(module)
++
++    assert backend.pause(False) is False
++    assert backend.set_property("unknown", 1) is False
++    assert backend.observe_property("time-pos", lambda *_args: None) is False
++    assert backend.ipc(["get_property", "pause"]) is False
+-- 
+2.47.3
+

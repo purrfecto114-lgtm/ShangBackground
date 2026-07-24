@@ -1,0 +1,5 @@
++------------------------------------------------------------+
+| PLACEHOLDER — NOT A RUNTIME SCREENSHOT                    |
+| Preferences → mpv settings                                |
+| Verify backend/runtime status and fallback message.       |
++------------------------------------------------------------+

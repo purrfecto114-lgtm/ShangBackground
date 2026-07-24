@@ -1,0 +1,5 @@
++------------------------------------------------------------+
+| PLACEHOLDER — NOT A RUNTIME SCREENSHOT                    |
+| KDE X11 video wallpaper                                   |
+| xwinwrap/libmpv or mpv behind desktop icons.              |
++------------------------------------------------------------+

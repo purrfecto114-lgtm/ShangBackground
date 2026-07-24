@@ -1,0 +1,5 @@
++------------------------------------------------------------+
+| PLACEHOLDER — NOT A RUNTIME SCREENSHOT                    |
+| Language switch — before                                  |
+| Chinese UI and language dropdown visible.                 |
++------------------------------------------------------------+

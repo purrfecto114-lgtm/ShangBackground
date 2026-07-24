@@ -13,6 +13,7 @@ from typing import Any
 from app.exit_service import ExitService
 from app.hotkey_service import HotkeyService
 from app.media_service import MediaService
+from app.mpv_backend import LegacyModuleMpvBackend
 from app.ports import BackendResult, HotkeyBackend, MediaBackend, MediaKind, WallpaperBackend
 from app.runtime_state import RuntimeState
 from app.session_wallpaper_service import SessionWallpaperService
@@ -83,37 +84,38 @@ class ModuleMediaBackend:
         module = self._module(kind)
         values = dict(options or {})
         if kind == "video":
-            raw = module.start_video_wallpaper(
+            return LegacyModuleMpvBackend(module).start(
                 target,
                 muted=bool(values.get("muted", True)),
                 volume=int(values.get("volume", 100)),
             )
-        else:
-            raw = module.start_html_wallpaper(target)
+        raw = module.start_html_wallpaper(target)
         return _backend_result(raw)
 
     def stop(self, kind: MediaKind) -> None:
         module = self._module(kind)
-        getattr(module, f"stop_{kind}_wallpaper")()
+        if kind == "video":
+            LegacyModuleMpvBackend(module).stop()
+            return
+        module.stop_html_wallpaper()
 
     def is_running(self, kind: MediaKind) -> bool:
         module = self._module(kind)
-        return bool(getattr(module, f"is_{kind}_wallpaper_running")())
+        if kind == "video":
+            return LegacyModuleMpvBackend(module).is_running()
+        return bool(module.is_html_wallpaper_running())
 
     def set_option(self, kind: MediaKind, key: str, value: Any) -> bool:
         module = self._module(kind)
         if kind == "video":
-            if key == "paused" and hasattr(module, "set_video_paused"):
-                return bool(module.set_video_paused(bool(value)))
-            if key == "volume" and hasattr(module, "set_video_volume"):
-                muted, volume = value
-                return bool(module.set_video_volume(bool(muted), int(volume)))
-            return False
+            return LegacyModuleMpvBackend(module).set_property(key, value)
         setter = getattr(module, "runtime_set_option", None)
         return bool(setter and setter(str(key), value))
 
     def last_target(self, kind: MediaKind) -> str:
         module = self._module(kind)
+        if kind == "video":
+            return LegacyModuleMpvBackend(module).last_target()
         getter = getattr(module, "get_last_path", None)
         return str(getter() or "") if getter else ""
 

@@ -164,9 +164,9 @@ def collect_diagnostics() -> DiagnosticReport:
         checks.append(
             DiagnosticCheck(
                 "native-html-wallpaper",
-                "pass" if healthy_html else "fail",
+                "pass" if healthy_html else "warn",
                 "; ".join(detail_parts) if detail_parts else "available, importable, and platform-ready",
-                required=True,
+                required=False,
             )
         )
 
@@ -209,13 +209,38 @@ def collect_diagnostics() -> DiagnosticReport:
             )
         )
     elif PLATFORM_ID == "linux":
-        checks.extend(
-            [
-                _module_check("pynput", "global hotkeys", required=False),
-                _command_check(("gsettings", "xfconf-query", "feh"), "static wallpaper backend"),
-                _command_check(("xwinwrap", "mpvpaper"), "desktop video embedding"),
-            ]
+        from platform_adapters.backends.linux.session import (
+            detect_session_type,
+            session_bus_available,
         )
+
+        session = detect_session_type()
+        checks.append(
+            _command_check(
+                (
+                    "plasma-apply-wallpaperimage", "qdbus6", "qdbus",
+                    "gsettings", "xfconf-query", "pcmanfm", "feh", "nitrogen",
+                ),
+                "static wallpaper backend",
+            )
+        )
+        if session == "wayland":
+            module = _module_check("dbus_next", "Wayland global shortcuts", required=False)
+            if module.status == "pass" and not session_bus_available():
+                module.status = "warn"
+                module.detail += "; no D-Bus session bus endpoint detected"
+            checks.append(module)
+            checks.append(_command_check(("mpvpaper",), "Wayland video embedding"))
+        elif session == "x11":
+            checks.append(_module_check("pynput", "X11 global hotkeys", required=False))
+            checks.append(_command_check(("xwinwrap",), "X11 desktop video embedding"))
+        else:
+            checks.append(
+                DiagnosticCheck(
+                    "graphical-session", "warn",
+                    "neither XDG_SESSION_TYPE, WAYLAND_DISPLAY nor DISPLAY identifies a GUI session",
+                )
+            )
     else:
         checks.extend(
             [

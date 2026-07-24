@@ -1,0 +1,470 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Research Refactor <research@example.invalid>
+Date: Fri, 24 Jul 2026 05:06:59 +0000
+Subject: [PATCH 2/3] fix: make JSON i18n switching and bundling deterministic
+
+
+diff --git a/build_tools/buildlib/bundle.py b/build_tools/buildlib/bundle.py
+index fde1c3e..b69605d 100644
+--- a/build_tools/buildlib/bundle.py
++++ b/build_tools/buildlib/bundle.py
+@@ -45,6 +45,29 @@ WEBVIEW_EXCLUDED_PLATFORMS = {
+ }
+ 
+ 
++
++def assert_plain_json_resources(root: Path | None = None) -> None:
++    """Reject gzip payloads that still use a ``.json`` suffix.
++
++    The runtime loader retains magic-byte recovery for old installations, but
++    new frozen artifacts must contain normal UTF-8 JSON so every build backend
++    and external inspection tool sees the same resource format.
++    """
++    directory = Path(root) if root is not None else PROJECT_ROOT / "src" / "lang"
++    if not directory.is_dir():
++        raise RuntimeError(f"language resource directory is missing: {directory}")
++    for path in sorted(directory.rglob("*.json")):
++        try:
++            magic = path.read_bytes()[:2]
++        except OSError as exc:
++            raise RuntimeError(f"cannot read JSON resource: {path}: {exc}") from exc
++        if magic == b"\x1f\x8b":
++            raise RuntimeError(
++                f"gzip-compressed resource keeps a .json suffix: {path}. "
++                "Store plain UTF-8 JSON or rename the payload to .json.gz."
++            )
++
++
+ def dynamic_modules(plan: BuildPlan) -> tuple[str, ...]:
+     target = plan.target
+     modules: list[str] = [
+@@ -57,7 +80,11 @@ def dynamic_modules(plan: BuildPlan) -> tuple[str, ...]:
+     if target == "windows":
+         modules.append("platform_adapters.backends.windows.wallpaper_cli")
+     if "video" in plan.features:
+-        modules.extend(("platform_adapters.video", f"platform_adapters.backends.{target}.video"))
++        modules.extend((
++            "app.mpv_backend",
++            "platform_adapters.video",
++            f"platform_adapters.backends.{target}.video",
++        ))
+         if target != "macos":
+             modules.append("app.libmpv_runtime")
+     if "html" in plan.features:
+@@ -74,6 +101,8 @@ def dynamic_modules(plan: BuildPlan) -> tuple[str, ...]:
+         modules.append("services.updates")
+     if "hotkeys" in plan.features:
+         modules.extend(("platform_adapters.hotkeys", "platform_adapters.hotkey_bindings", f"platform_adapters.backends.{target}.hotkeys"))
++        if target == "linux":
++            modules.extend(("platform_adapters.backends.linux.portal_hotkeys", "dbus_next"))
+     return tuple(dict.fromkeys(modules))
+ 
+ 
+@@ -91,10 +120,13 @@ def excluded_modules(plan: BuildPlan) -> tuple[str, ...]:
+         modules.append("services.updates")
+     if "hotkeys" not in plan.features:
+         modules.extend(("platform_adapters.hotkeys", "platform_adapters.hotkey_bindings"))
++        if plan.target == "linux":
++            modules.extend(("platform_adapters.backends.linux.portal_hotkeys", "dbus_next"))
+     return tuple(dict.fromkeys(modules))
+ 
+ 
+ def data_directories(plan: BuildPlan) -> tuple[tuple[Path, str], ...]:
++    assert_plain_json_resources()
+     result: list[tuple[Path, str]] = [
+         (PROJECT_ROOT / "src" / "img", "img"),
+         (PROJECT_ROOT / "src" / "lang", "lang"),
+diff --git a/src/app/i18n.py b/src/app/i18n.py
+index cf672c4..2a8d3b5 100644
+--- a/src/app/i18n.py
++++ b/src/app/i18n.py
+@@ -2,55 +2,146 @@
+ # Uses a simple dictionary-based approach. No Qt .ts/.qm overhead.
+ from __future__ import annotations
+ 
++from collections.abc import Callable
++from dataclasses import dataclass
+ import gzip
+ import json
+ import os
++from threading import RLock
++from typing import Optional
++import weakref
+ 
+ from app.paths import LANG_DIR as _LANG_DIR
+-from typing import Optional
+ 
+ _CURRENT_LANG = "zh"
+ _TRANSLATIONS: dict[str, dict[str, str]] = {}
++_LISTENER_LOCK = RLock()
++_LISTENERS: dict[int, tuple[bool, object]] = {}
++_NEXT_LISTENER_ID = 0
+ 
+ BASE_DIR = os.fspath(_LANG_DIR.parent)
+ LANG_DIR = os.fspath(_LANG_DIR)
+ 
+ 
++@dataclass(frozen=True, slots=True)
++class LanguageChangeEvent:
++    """Notification emitted after the active JSON language changes."""
++
++    previous: str
++    current: str
++    translations_loaded: bool
++
++
++LanguageChangeListener = Callable[[LanguageChangeEvent], None]
++
++
+ def get_language() -> str:
+     """Return current language code ('zh' or 'en')."""
+     return _CURRENT_LANG
+ 
+ 
++def _listener_entry(callback: LanguageChangeListener) -> tuple[bool, object]:
++    """Keep functions strongly while weakly tracking bound Qt methods."""
++    owner = getattr(callback, "__self__", None)
++    if owner is not None and hasattr(callback, "__func__"):
++        return True, weakref.WeakMethod(callback)  # type: ignore[arg-type]
++    return False, callback
++
++def subscribe_language_changes(callback: LanguageChangeListener) -> Callable[[], None]:
++    """Subscribe to JSON-language changes and return an idempotent unsubscribe.
++
++    Weak references avoid keeping closed Qt windows alive. The callback runs on
++    the same thread that calls :func:`set_language` or :func:`load_language`, so
++    UI callers should change language from the GUI thread.
++    """
++    if not callable(callback):
++        raise TypeError("language change callback must be callable")
++    global _NEXT_LISTENER_ID
++    with _LISTENER_LOCK:
++        _NEXT_LISTENER_ID += 1
++        listener_id = _NEXT_LISTENER_ID
++        _LISTENERS[listener_id] = _listener_entry(callback)
++
++    def unsubscribe() -> None:
++        with _LISTENER_LOCK:
++            _LISTENERS.pop(listener_id, None)
++
++    return unsubscribe
++
++
++def _emit_language_change(previous: str, current: str, *, loaded: bool) -> None:
++    event = LanguageChangeEvent(previous, current, bool(loaded))
++    callbacks: list[LanguageChangeListener] = []
++    stale: list[int] = []
++    with _LISTENER_LOCK:
++        for listener_id, (is_weak, entry) in _LISTENERS.items():
++            callback = entry() if is_weak else entry
++            if callback is None:
++                stale.append(listener_id)
++            else:
++                callbacks.append(callback)  # type: ignore[arg-type]
++        for listener_id in stale:
++            _LISTENERS.pop(listener_id, None)
++    for callback in callbacks:
++        try:
++            callback(event)
++        except Exception:
++            # Translation changes must never make the application unusable just
++            # because an optional surface failed to refresh. UI owners log their
++            # own failures and can rebuild on the next change.
++            continue
++
++
+ def set_language(lang: str) -> None:
+-    """Set current language code."""
++    """Set current language code and notify subscribers when it changes."""
+     global _CURRENT_LANG
+-    if lang in ("zh", "en"):
+-        _CURRENT_LANG = lang
++    if lang not in ("zh", "en"):
++        return
++    previous = _CURRENT_LANG
++    _CURRENT_LANG = lang
++    if previous != lang:
++        _emit_language_change(previous, lang, loaded=lang == "zh" or bool(_TRANSLATIONS.get(lang)))
+ 
+ 
+ def load_language(lang: str) -> None:
+     """Load a language file from lang/<lang>.json and activate it.
+ 
+-    Translation files are shipped as normal UTF-8 JSON.  Some packaging steps in
++    Translation files are shipped as normal UTF-8 JSON. Some packaging steps in
+     older builds accidentally gzip-compressed en.json while keeping the .json
+     suffix, which made runtime language switching silently fall back to Chinese.
+     The loader accepts both formats so source runs, VS Code runs and packaged
+-    runs behave the same.
++    runs behave the same. New builds reject such disguised gzip resources before
++    freezing; this runtime probe remains as backward-compatible recovery.
+     """
+     global _CURRENT_LANG, _TRANSLATIONS
+-    path = os.path.join(LANG_DIR, f"{lang}.json")
+-    if os.path.exists(path):
+-        try:
+-            with open(path, "rb") as f:
+-                raw = f.read()
+-            if raw.startswith(b"\x1f\x8b"):
+-                raw = gzip.decompress(raw)
+-            _TRANSLATIONS[lang] = json.loads(raw.decode("utf-8"))
+-        except Exception:
+-            _TRANSLATIONS[lang] = {}
++    if lang not in ("zh", "en"):
++        return
++    previous = _CURRENT_LANG
++    loaded = lang == "zh"
++    if lang == "zh":
++        _TRANSLATIONS.setdefault("zh", {})
+     else:
+-        _TRANSLATIONS[lang] = {}
++        path = os.path.join(LANG_DIR, f"{lang}.json")
++        if os.path.exists(path):
++            try:
++                with open(path, "rb") as f:
++                    raw = f.read()
++                if raw.startswith(b"\x1f\x8b"):
++                    raw = gzip.decompress(raw)
++                payload = json.loads(raw.decode("utf-8"))
++                if not isinstance(payload, dict):
++                    raise ValueError("translation root must be a JSON object")
++                _TRANSLATIONS[lang] = {
++                    str(key): str(value) for key, value in payload.items()
++                }
++                loaded = True
++            except Exception:
++                _TRANSLATIONS[lang] = {}
++        else:
++            _TRANSLATIONS[lang] = {}
+     _CURRENT_LANG = lang
++    if previous != lang or lang != "zh":
++        _emit_language_change(previous, lang, loaded=loaded)
+ 
+ 
+ def t(key: str, default: Optional[str] = None) -> str:
+diff --git a/src/ui/main_window.py b/src/ui/main_window.py
+index dcf9ca5..330b41f 100644
+--- a/src/ui/main_window.py
++++ b/src/ui/main_window.py
+@@ -22,7 +22,7 @@ from app.config import (
+     normalize_mode_key,
+     normalize_style_key,
+ )
+-from app.i18n import get_language, load_language, set_language, t
++from app.i18n import LanguageChangeEvent, get_language, load_language, subscribe_language_changes, t
+ from app.build_features import is_feature_enabled
+ from app.system_info import collect_system_info, render_system_info
+ from app.config_normalization import normalize_runtime_config_in_place
+@@ -151,6 +151,7 @@ class _SharedShangBackgroundWindow(QMainWindow):
+         self._init_icon()
+         self._apply_theme()
+         self._build_ui()
++        self._i18n_unsubscribe = subscribe_language_changes(self._on_i18n_language_changed)
+         # 配置已在 core.engine 导入时加载；这里在首帧显示前同步填充控件，
+         # 避免先显示默认值/空白值再跳变，引发用户感知上的“首帧卡顿”。
+         self.refresh_from_config()
+@@ -3050,7 +3051,6 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
+                     core.log(f"factory reset could not remove {_failed_logs} log item(s)", level="WARNING")
+             except Exception as exc:
+                 core.log(f"factory reset log cleanup failed: {exc}", level="WARNING")
+-            set_language(core.config.get("language", "zh"))
+             load_language(core.config.get("language", "zh"))
+             self._theme_color = core.config.get("theme_color", DEFAULT_THEME_COLOR)
+             self._icon_pixmap_cache = OrderedDict()
+@@ -3221,12 +3221,20 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
+         previous_lang = core.config.get("language", "zh")
+         core.config["language"] = lang_data
+         core.save_config()
+-        set_language(lang_data)
+         load_language(lang_data)
+-        self._refresh_header_language_buttons(lang_data)
+-        if lang_data != previous_lang:
+-            self._rebuild_ui_for_language_change()
+-            self._schedule_preview_refresh(0)
++        if lang_data == previous_lang:
++            self._refresh_header_language_buttons(lang_data)
++
++    def _on_i18n_language_changed(self, event: LanguageChangeEvent) -> None:
++        """Re-render visible Qt surfaces after the JSON dictionary changes."""
++        self._refresh_header_language_buttons(event.current)
++        if event.current == event.previous:
++            return
++        self._rebuild_ui_for_language_change()
++        self._schedule_preview_refresh(0)
++        if not event.translations_loaded and event.current != "zh":
++            self.set_status(t("语言资源加载失败，界面已回退到中文键值。"))
++        else:
+             self.set_status(t("界面语言已切换。少数系统菜单和后台组件会在重启程序后完全生效。"))
+ 
+     def _rebuild_ui_for_language_change(self) -> None:
+@@ -7186,6 +7194,13 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
+ 
+     def _disconnect_own_signals(self):
+         """Best-effort cleanup for self-owned Qt signal connections before exit."""
++        unsubscribe = getattr(self, "_i18n_unsubscribe", None)
++        self._i18n_unsubscribe = None
++        if unsubscribe is not None:
++            try:
++                unsubscribe()
++            except Exception:
++                pass
+         for signal, slot in (
+             (self.bing_result_signal, self._on_bing_finished),
+             (self.core_result_signal, self._on_core_finished),
+diff --git a/tests/test_build_feature_matrix.py b/tests/test_build_feature_matrix.py
+new file mode 100644
+index 0000000..ba83748
+--- /dev/null
++++ b/tests/test_build_feature_matrix.py
+@@ -0,0 +1,58 @@
++from __future__ import annotations
++
++from itertools import combinations
++
++from build_tools.buildlib.bundle import dynamic_modules, excluded_modules
++from build_tools.buildlib.features import FEATURE_KEYS, manifest_payload
++from build_tools.buildlib.mpv_runtime import MpvBuildSelection
++from build_tools.buildlib.plan import BuildPlan
++
++
++def _feature_sets():
++    for count in range(len(FEATURE_KEYS) + 1):
++        yield from (frozenset(values) for values in combinations(FEATURE_KEYS, count))
++
++
++def _plan(features: frozenset[str]) -> BuildPlan:
++    mpv = MpvBuildSelection(
++        requested_mode="system",
++        mode="system" if "video" in features else "disabled",
++        target="linux",
++        arch="x86_64",
++        runtime_id="",
++        payload_dir=None,
++        metadata={},
++    )
++    from pathlib import Path
++    return BuildPlan(
++        tool="pyinstaller",
++        target="linux",
++        profile="full",
++        mode="standalone",
++        jobs=2,
++        arch="x86_64",
++        features=features,
++        mpv=mpv,
++        variant="matrix",
++        generated_dir=Path("build-generated/test"),
++        manifest_path=Path("build-generated/test/build-features.json"),
++        staged_mpv_dir=None,
++    )
++
++
++def test_all_feature_combinations_have_consistent_manifest_and_modules():
++    checked = 0
++    for features in _feature_sets():
++        plan = _plan(features)
++        payload = manifest_payload(
++            "linux", "full", features, tool="pyinstaller", arch="x86_64", video_runtime=plan.mpv.manifest()
++        )
++        included = set(dynamic_modules(plan))
++        excluded = set(excluded_modules(plan))
++        for key in FEATURE_KEYS:
++            assert payload["enabled"][key] is (key in features)
++        assert ("app.mpv_backend" in included) is ("video" in features)
++        assert ("platform_adapters.backends.linux.portal_hotkeys" in included) is ("hotkeys" in features)
++        assert not included.intersection(excluded)
++        checked += 1
++    assert checked == 64
+diff --git a/tests/test_bundle_resources.py b/tests/test_bundle_resources.py
+new file mode 100644
+index 0000000..2a6634d
+--- /dev/null
++++ b/tests/test_bundle_resources.py
+@@ -0,0 +1,18 @@
++from __future__ import annotations
++
++import gzip
++
++import pytest
++
++from build_tools.buildlib.bundle import assert_plain_json_resources
++
++
++def test_plain_json_resources_are_accepted(tmp_path):
++    (tmp_path / "en.json").write_text('{"设置":"Settings"}', encoding="utf-8")
++    assert_plain_json_resources(tmp_path)
++
++
++def test_disguised_gzip_json_is_rejected(tmp_path):
++    (tmp_path / "en.json").write_bytes(gzip.compress(b'{}'))
++    with pytest.raises(RuntimeError, match="gzip-compressed resource"):
++        assert_plain_json_resources(tmp_path)
+diff --git a/tests/test_i18n_runtime.py b/tests/test_i18n_runtime.py
+new file mode 100644
+index 0000000..c019ff1
+--- /dev/null
++++ b/tests/test_i18n_runtime.py
+@@ -0,0 +1,60 @@
++from __future__ import annotations
++
++import gzip
++import json
++
++import pytest
++
++from app import i18n
++
++
++@pytest.fixture(autouse=True)
++def reset_i18n(monkeypatch: pytest.MonkeyPatch, tmp_path):
++    monkeypatch.setattr(i18n, "LANG_DIR", str(tmp_path))
++    monkeypatch.setattr(i18n, "_CURRENT_LANG", "zh")
++    monkeypatch.setattr(i18n, "_TRANSLATIONS", {})
++    monkeypatch.setattr(i18n, "_LISTENERS", {})
++    yield
++
++
++def test_runtime_language_switch_updates_t_and_emits_event(tmp_path):
++    (tmp_path / "en.json").write_text(
++        json.dumps({"设置": "Settings"}, ensure_ascii=False), encoding="utf-8"
++    )
++    events = []
++    unsubscribe = i18n.subscribe_language_changes(events.append)
++
++    assert i18n.t("设置") == "设置"
++    i18n.load_language("en")
++
++    assert i18n.get_language() == "en"
++    assert i18n.t("设置") == "Settings"
++    assert events[-1] == i18n.LanguageChangeEvent("zh", "en", True)
++    unsubscribe()
++
++
++def test_gzip_payload_with_json_suffix_is_recovered(tmp_path):
++    raw = json.dumps({"设置": "Settings"}, ensure_ascii=False).encode("utf-8")
++    (tmp_path / "en.json").write_bytes(gzip.compress(raw))
++
++    i18n.load_language("en")
++
++    assert i18n.t("设置") == "Settings"
++
++
++def test_failed_translation_load_falls_back_to_key_and_reports_state(tmp_path):
++    (tmp_path / "en.json").write_bytes(b"not-json")
++    events = []
++    unsubscribe = i18n.subscribe_language_changes(events.append)
++
++    i18n.load_language("en")
++
++    assert i18n.t("设置") == "设置"
++    assert events[-1].translations_loaded is False
++    unsubscribe()
++
++
++def test_set_language_preserves_public_signature_and_changes_state():
++    i18n.set_language("en")
++    assert i18n.get_language() == "en"
++    assert i18n.t("missing", default="fallback") == "fallback"
+-- 
+2.47.3
+

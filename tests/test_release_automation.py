@@ -147,10 +147,14 @@ def test_release_workflow_installs_upx():
 
 def test_release_workflow_installs_libmpv_on_linux():
     """``release.yml`` must install libmpv on Linux so the full video feature
-    can link against the system MPV runtime during the frozen-runtime check."""
+    can link against the system MPV runtime during the frozen-runtime check.
+    libmpv2 is included in the main apt-get install step (not a separate
+    redundant step)."""
     release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
-    assert "Install libmpv" in release_workflow
     assert "libmpv2" in release_workflow
+    # The redundant "Install libmpv" step was removed; libmpv2 is now
+    # installed in the main Linux packaging prerequisites step.
+    assert "Install libmpv (Linux, full video feature)" not in release_workflow
 
 
 def test_release_workflow_publishes_as_prerelease():
@@ -158,6 +162,32 @@ def test_release_workflow_publishes_as_prerelease():
     GitHub Release is marked as a pre-release (not a stable release)."""
     release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
     assert "--prerelease" in release_workflow
+
+
+def test_release_workflow_smoke_tests_frozen_binary():
+    """``release.yml`` must run the frozen binary with --version after the
+    build to verify it actually starts and reports the correct version.
+    This catches broken Nuitka builds that compile but fail at startup."""
+    release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "Smoke-test frozen binary" in release_workflow
+    assert "--version" in release_workflow
+
+
+def test_release_workflow_uses_ldconfig_for_libxcb_cursor():
+    """``release.yml`` must use ldconfig to locate libxcb-cursor.so.0
+    (not a hard-coded /usr/lib/x86_64-linux-gnu/ path) so the post-build
+    copy works on both amd64 and arm64."""
+    release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "ldconfig -p" in release_workflow
+    # The old hard-coded path must NOT be present.
+    assert "cp -v /usr/lib/x86_64-linux-gnu/libxcb-cursor.so.0" not in release_workflow
+
+
+def test_release_workflow_installs_xdg_desktop_portal():
+    """``release.yml`` must install xdg-desktop-portal on Linux so the
+    Wayland GlobalShortcuts portal backend is available for testing."""
+    release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "xdg-desktop-portal" in release_workflow
 
 
 def test_release_workflow_installs_linux_qt_xcb_prerequisites():

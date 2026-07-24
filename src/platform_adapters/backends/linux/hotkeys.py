@@ -5,21 +5,37 @@ from collections.abc import Callable, Mapping
 import os
 
 from platform_adapters.hotkey_bindings import parse_hotkey, to_pynput
+from platform_adapters.backends.linux.session import is_wayland_session
 
 _LISTENER = None
 _KEYBOARD_OVERRIDE = None
+_PORTAL_OVERRIDE = None
 
 
 def _is_wayland_session() -> bool:
-    session_type = (os.environ.get("XDG_SESSION_TYPE") or "").strip().lower()
-    return session_type == "wayland" or (not session_type and bool(os.environ.get("WAYLAND_DISPLAY")))
+    return is_wayland_session()
 
 
 def refresh(bindings: Mapping[str, str], dispatch: Callable[[str], None]) -> bool:
     global _LISTENER
     stop()
     if _is_wayland_session():
-        return False
+        portal = _PORTAL_OVERRIDE
+        if portal is None:
+            try:
+                from platform_adapters.backends.linux.portal_hotkeys import PortalGlobalShortcuts
+
+                portal = PortalGlobalShortcuts()
+            except Exception:
+                return False
+        if not portal.start(bindings, dispatch):
+            try:
+                portal.stop()
+            except Exception:
+                pass
+            return False
+        _LISTENER = portal
+        return True
     keyboard = _KEYBOARD_OVERRIDE
     if keyboard is None:
         try:
@@ -53,7 +69,9 @@ def focus_block_reason(_action: str, binding: str) -> str:
     if parsed is None or not parsed.is_focus_sensitive:
         return ""
     if _is_wayland_session():
-        return "Wayland 会话未提供可验证的前台窗口上下文"
+        # Portal activations are explicitly approved and delivered by the
+        # compositor; unlike X11 hooks they do not expose arbitrary key input.
+        return ""
     context = _x11_active_window_context()
     if context is None:
         return ""
