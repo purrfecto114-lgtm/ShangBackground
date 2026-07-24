@@ -36,7 +36,7 @@ from app.support import (
     apply_application_font,
     _open_path_in_linux_file_manager,
 )
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QIcon, QImageReader, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -94,6 +94,59 @@ else:
 from ui.control_setup import configure_text_input, describe_control, make_buddy_label
 from ui.dialog_style import show_info, show_warning
 QWIDGETSIZE_MAX = 16777215
+
+
+class _TouchScrollFilter(QObject):
+    """Event filter that prevents touch-scroll misfires on QListWidget items.
+
+    When QScroller grabs a touch gesture, Qt may still synthesize a mouse
+    click event on finger release. If the finger moved during the scroll,
+    this filter suppresses the ``itemClicked`` signal so the wallpaper is
+    not accidentally switched.
+
+    The filter tracks press position on MousePress and checks movement
+    distance on MouseRelease. If the movement exceeds 10 pixels OR the
+    QScroller is in Dragging/Scrolling state, the release is treated as
+    a scroll gesture and the click is consumed.
+    """
+
+    _SCROLL_THRESHOLD_PX = 10
+
+    def __init__(self, parent, widget):
+        super().__init__(parent)
+        self._widget = widget
+
+    def eventFilter(self, obj, event):
+        try:
+            etype = event.type()
+            if etype == QEvent.Type.MouseButtonPress:
+                pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+                self._widget._touch_press_pos = pos
+                if hasattr(self._widget, "indexAt"):
+                    self._widget._touch_press_item = self._widget.indexAt(pos)
+            elif etype == QEvent.Type.MouseButtonRelease:
+                pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+                press_pos = getattr(self._widget, "_touch_press_pos", None)
+                if press_pos is not None:
+                    moved = (pos - press_pos).manhattanLength()
+                    # Check QScroller state — if dragging/scrolling, suppress click
+                    viewport = self._widget.viewport() if hasattr(self._widget, "viewport") else self._widget
+                    try:
+                        scroller = QScroller.scroller(viewport)
+                        dragging = scroller.state() in (QScroller.State.Dragging, QScroller.State.Scrolling)
+                    except Exception:
+                        dragging = False
+                    if moved > self._SCROLL_THRESHOLD_PX or dragging:
+                        # Consume the release so itemClicked doesn't fire
+                        self._widget._touch_press_pos = None
+                        self._widget._touch_press_item = None
+                        return True
+                self._widget._touch_press_pos = None
+        except Exception:
+            pass
+        return False
+
+
 class _SharedShangBackgroundWindow(QMainWindow):
     bing_result_signal = Signal(bool, str, str)
     core_result_signal = Signal(bool, str, object)
@@ -1660,7 +1713,12 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         return
 
     def _enable_touch_scrolling(self, widget, *, horizontal: bool = False):
-        """为可滚动控件启用单指惯性滑动；只触及 viewport，避免影响按钮点击。"""
+        """为可滚动控件启用单指惯性滑动；只触及 viewport，避免影响按钮点击。
+
+        v1.4.3: 将 DragStartDistance 从 0.008 (8mm) 提高到 0.012 (12mm)，
+        减少短距离滑动被误判为点击的概率。同时安装事件过滤器在释放时
+        检查移动距离和 QScroller 状态，防止触摸滑动误触壁纸切换。
+        """
         try:
             target = widget.viewport() if hasattr(widget, "viewport") else widget
             target.setAttribute(Qt.WidgetAttribute.WA_AcceptTouchEvents, True)
@@ -1671,7 +1729,8 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             props.setScrollMetric(QScrollerProperties.ScrollMetric.OvershootScrollDistanceFactor, 0.10)
             props.setScrollMetric(QScrollerProperties.ScrollMetric.DecelerationFactor, 0.10)
             try:
-                props.setScrollMetric(QScrollerProperties.ScrollMetric.DragStartDistance, 0.008)
+                # v1.4.3: 12mm threshold — 平衡滚动灵敏度和误触防护
+                props.setScrollMetric(QScrollerProperties.ScrollMetric.DragStartDistance, 0.012)
                 props.setScrollMetric(QScrollerProperties.ScrollMetric.FrameRate, QScrollerProperties.FrameRates.Fps60)
             except Exception:
                 pass
@@ -1679,6 +1738,11 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                 props.setScrollMetric(QScrollerProperties.ScrollMetric.HorizontalOvershootPolicy, QScrollerProperties.OvershootPolicy.OvershootAlwaysOff)
             props.setScrollMetric(QScrollerProperties.ScrollMetric.VerticalOvershootPolicy, QScrollerProperties.OvershootPolicy.OvershootWhenScrollable)
             scroller.setScrollerProperties(props)
+            # Install event filter to track press/release positions for scroll-vs-click discrimination
+            if not hasattr(widget, "_touch_press_pos"):
+                widget._touch_press_pos = None
+                widget._touch_press_item = None
+                widget.installEventFilter(_TouchScrollFilter(self, widget))
         except Exception:
             pass
 
@@ -6181,6 +6245,22 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         self.tray.setToolTip(APP_DISPLAY_NAME)
         self.tray.show()
         self._refresh_shell_ui_later()
+        # v1.4.3: Pre-warm the menu's sizeHint and force icon decoding so the
+        # first right-click is not slow. Qt lazily resolves style, stylesheet,
+        # and icon metrics on the first popup; calling sizeHint() here forces
+        # that work to happen at startup instead of on the user's first
+        # interaction. (Source: Qt Forum topic 123225)
+        QTimer.singleShot(0, lambda: self._prewarm_tray_menu(menu))
+
+    def _prewarm_tray_menu(self, menu):
+        """Force Qt to resolve menu layout, style, and icons at startup."""
+        try:
+            menu.sizeHint()
+            for action in menu.actions():
+                if action.icon():
+                    action.icon().availableSizes()
+        except Exception:
+            pass
 
     def on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.Trigger:
@@ -6382,23 +6462,37 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             self._prepare_popup_menu(menu)
             act_remove = menu.addAction(t("移除收藏"))
             act_open = menu.addAction(t("打开文件位置"))
-            action = menu.exec(self.favorites_list.viewport().mapToGlobal(pos))
-            if action == act_remove:
-                try:
-                    if core.remove_favorite(path):
-                        self._refresh_favorites_list()
-                        self._update_favorite_button_state()
-                        self.set_status(t("已从收藏夹移除"))
-                except Exception as exc:
-                    core.log(f"移除收藏失败: {exc}", level="WARNING", exc_info=True)
-                    QMessageBox.warning(self, t("收藏夹"), t("移除收藏失败：") + str(exc))
-            elif action == act_open:
-                self._open_file_location(path)
+            # v1.4.3: Use popup() instead of exec() to avoid blocking the event
+            # loop. exec() opens a nested modal event loop that can freeze the
+            # UI if a touch event swallows the release. popup() is async and
+            # lets the event loop continue running. We track the selected action
+            # via the triggered signal.
+            global_pos = self.favorites_list.viewport().mapToGlobal(pos)
+            _selected = {"action": None}
+            def _on_triggered(action):
+                _selected["action"] = action
+            menu.triggered.connect(_on_triggered)
+            menu.aboutToHide.connect(lambda: self._handle_favorite_context_result(_selected["action"], act_remove, act_open, path))
+            menu.popup(global_pos)
         except Exception as exc:
             try:
                 core.log(f"收藏右键菜单失败: {exc}", level="WARNING")
             except Exception:
                 pass
+
+    def _handle_favorite_context_result(self, action, act_remove, act_open, path):
+        """Handle the result of the async favorite context menu (v1.4.3)."""
+        try:
+            if action == act_remove:
+                if core.remove_favorite(path):
+                    self._refresh_favorites_list()
+                    self._update_favorite_button_state()
+                    self.set_status(t("已从收藏夹移除"))
+            elif action == act_open:
+                self._open_file_location(path)
+        except Exception as exc:
+            core.log(f"移除收藏失败: {exc}", level="WARNING", exc_info=True)
+            QMessageBox.warning(self, t("收藏夹"), t("移除收藏失败：") + str(exc))
 
     def _clear_all_favorites(self) -> None:
         try:

@@ -1,7 +1,7 @@
 """Single source of truth for ShangBackground version metadata."""
 from __future__ import annotations
 
-APP_VERSION = "1.4.2"
+APP_VERSION = "1.4.3"
 
 _version_parts = tuple(int(part) for part in APP_VERSION.split("."))
 if len(_version_parts) != 3:
