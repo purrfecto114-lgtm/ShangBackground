@@ -2,6 +2,17 @@
 
 本文件记录 ShangBackground 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.4.4] - 2026-07-24
+
+### Fixed
+
+- **托盘右键菜单1秒延迟（根因修复）** — 不再每次右键重建 QMenu，改为持久化 `QMenu` 实例 + `menu.clear()` 重填。预热改为 `show()`+`hide()` 强制创建原生窗口（`sizeHint()` 只触发布局计算，不创建原生窗口）。
+- **sidebar 点击外侧不缩回（Windows）** — `_OutsideClickShield` 移除 `WindowDoesNotAcceptFocus` 标志（在部分 Windows 版本上导致鼠标事件不投递），提高 `windowOpacity` 从 0.001 到 0.01 改善命中测试。`qApp` 事件过滤器新增 `MouseButtonRelease` 和 `NonClientAreaMouseButtonPress` 监听。
+
+### Changed
+
+- v1.4.3 已发布为 prerelease。
+
 ## [1.4.3] - 2026-07-24
 
 ### Fixed

@@ -222,7 +222,14 @@ class ThumbnailItem(QFrame):
 
 
 class _OutsideClickShield(QWidget):
-    """全屏透明点击层：触屏/鼠标点到侧边栏外部时负责收起侧边栏。"""
+    """全屏透明点击层：触屏/鼠标点到侧边栏外部时负责收起侧边栏。
+
+    v1.4.4: 修复 Windows 上点击外侧不收起的问题。根因是
+    WindowDoesNotAcceptFocus + WA_ShowWithoutActivating 在部分
+    Windows 版本上导致鼠标事件不被投递到 shield 窗口。
+    改用更可靠的属性组合：WA_TranslucentBackground + Tool +
+    WindowStaysOnTopHint，不加 WindowDoesNotAcceptFocus。
+    """
 
     def __init__(self, sidebar: "WallpaperSidebar"):
         super().__init__(None)
@@ -230,16 +237,16 @@ class _OutsideClickShield(QWidget):
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool |
-            Qt.WindowType.WindowDoesNotAcceptFocus
+            Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_AcceptTouchEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoMousePropagation, False)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setStyleSheet("background: transparent;")
-        self.setWindowOpacity(0.001)
+        self.setWindowOpacity(0.01)  # v1.4.4: 0.01 instead of 0.001 for better hit-testing
         geo = getattr(sidebar, "_screen_geo", None) or _available_geometry_for_sidebar(sidebar)
         if geo is not None:
             self.setGeometry(geo)
@@ -627,13 +634,22 @@ class WallpaperSidebar(QWidget):
         """
         应用级事件过滤器：点击侧边栏外部时自动收起。
 
+        v1.4.4: 增强 Windows 兼容性。除了 MouseButtonPress，也检查
+        MouseButtonRelease 和 NonClientAreaMouseButtonPress（标题栏点击），
+        确保无论用户点击哪个窗口的哪个区域都能触发收起。
+
         逻辑：
           1. 动画播放中（is_animating=True）或已在关闭流程中，不响应。
-          2. 确认是 MouseButtonPress 且是真实的 QMouseEvent。
+          2. 确认是鼠标按键事件且是真实的 QMouseEvent。
           3. 全局坐标不在侧边栏矩形内 → 触发 close_sidebar。
         """
         if not self._is_closing and not self.is_animating:
-            if event.type() == QEvent.Type.MouseButtonPress:
+            etype = event.type()
+            if etype in (
+                QEvent.Type.MouseButtonPress,
+                QEvent.Type.MouseButtonRelease,
+                QEvent.Type.NonClientAreaMouseButtonPress,
+            ):
                 if isinstance(event, QMouseEvent):
                     try:
                         pos = event.globalPosition().toPoint()

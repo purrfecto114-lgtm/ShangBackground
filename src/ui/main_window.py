@@ -6227,8 +6227,18 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             actions.insert(insert_at, "refresh_html")
         if not actions:
             actions = defaults
-        menu = QMenu()
-        self._prepare_popup_menu(menu)
+
+        # v1.4.4: Reuse a persistent QMenu instead of rebuilding on every call.
+        # Rebuilding forces Qt to re-resolve style/layout/icon metrics each time,
+        # which is the primary cause of ~1s delay on right-click.
+        # We only clear and repopulate actions; the QMenu object itself persists.
+        if not hasattr(self, "_tray_menu") or self._tray_menu is None:
+            self._tray_menu = QMenu()
+            self._prepare_popup_menu(self._tray_menu)
+            self._tray_menu.aboutToShow.connect(self._refresh_tray_action_states)
+        menu = self._tray_menu
+        # Clear existing actions and rebuild (cheaper than creating a new QMenu)
+        menu.clear()
         self._tray_mode_actions = {}
         for index, name in enumerate(actions):
             if index and name in {"about", "exit"}:
@@ -6239,26 +6249,40 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             )
             if name in {"previous", "next", "random", "refresh_html"}:
                 self._tray_mode_actions[name] = action
-        menu.aboutToShow.connect(self._refresh_tray_action_states)
         self._refresh_tray_action_states()
         self.tray.setContextMenu(menu)
         self.tray.setToolTip(APP_DISPLAY_NAME)
         self.tray.show()
         self._refresh_shell_ui_later()
-        # v1.4.3: Pre-warm the menu's sizeHint and force icon decoding so the
-        # first right-click is not slow. Qt lazily resolves style, stylesheet,
-        # and icon metrics on the first popup; calling sizeHint() here forces
-        # that work to happen at startup instead of on the user's first
-        # interaction. (Source: Qt Forum topic 123225)
-        QTimer.singleShot(0, lambda: self._prewarm_tray_menu(menu))
+        # v1.4.4: Pre-warm by actually showing+hiding the menu, not just sizeHint().
+        # sizeHint() forces layout but not native window creation; show/hide
+        # forces the platform window to be created, which is the real bottleneck.
+        # Only do this once per menu instance.
+        if not getattr(self, "_tray_menu_prewarmed", False):
+            QTimer.singleShot(500, lambda: self._prewarm_tray_menu(menu))
 
     def _prewarm_tray_menu(self, menu):
-        """Force Qt to resolve menu layout, style, and icons at startup."""
+        """Force Qt to create the native menu window at startup.
+
+        v1.4.4: The previous sizeHint() approach was insufficient because it
+        only forces layout calculation, not native window creation. By actually
+        showing the menu off-screen and immediately hiding it, we force the
+        platform plugin to create the native popup window, resolve the style,
+        and decode all icons. The first user-facing right-click then reuses
+        this pre-created window for instant popup.
+        """
         try:
             menu.sizeHint()
+            # Show the menu at an off-screen position, then immediately hide.
+            # This forces native window creation + style resolution.
+            menu.move(-10000, -10000)
+            menu.show()
+            menu.hide()
+            menu.move(0, 0)
             for action in menu.actions():
                 if action.icon():
                     action.icon().availableSizes()
+            self._tray_menu_prewarmed = True
         except Exception:
             pass
 
