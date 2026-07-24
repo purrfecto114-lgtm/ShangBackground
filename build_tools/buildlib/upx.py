@@ -24,6 +24,15 @@ Security and reliability notes
   ``--enable-plugin=upx``. The ``--upx-binary=PATH`` sub-option only
   becomes a recognized flag AFTER the plugin is enabled, so the build
   driver always passes both flags together.
+- **LZMA avoidance**: Nuitka's UPX plugin hard-codes ``--best --lzma``.
+  LZMA decompression is ~10x slower than NRV at runtime, which directly
+  slows down every frozen-binary load (especially the video wallpaper
+  player spawn). We use a wrapper script that strips ``--lzma`` from the
+  UPX invocation, keeping ``--best`` (NRV2E) for good compression ratio
+  with fast decompression (>500 MB/s).
+- **vcruntime exclusion**: ``vcruntime140.dll`` / ``vcruntime140_1.dll``
+  must NOT be UPX-compressed (known to cause crashes and startup
+  failures). The wrapper script detects and skips them.
 - **Trusted source**: CI installs UPX from the official Chocolatey
   package (Windows) or apt-get (Linux distro package). Local developers
   can override the path via ``SHANGBACKGROUND_UPX_BINARY``.
@@ -36,11 +45,27 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import textwrap
 
 from .constants import UPX_MIN_VERSION, UPX_TARGETS
 
 
 _UPX_VERSION_RE = re.compile(r"upx\s+(\d+\.\d+\.\d+)", re.IGNORECASE)
+
+# DLLs that must NOT be UPX-compressed because they cause crashes or
+# startup failures when packed. Nuitka's own UPX plugin already skips
+# some of these, but we enforce it in our wrapper for belt-and-suspenders
+# safety.
+_UPX_EXCLUDE_PATTERNS = (
+    "vcruntime",
+    "msvcp",
+    "ucrtbase",
+    "api-ms-win-crt",
+    "python3",
+    "python3.dll",
+    "shiboken",
+)
 
 
 def upx_supported_for_target(target: str) -> bool:
@@ -129,9 +154,94 @@ def upx_meets_minimum(binary: str, *, minimum: str = UPX_MIN_VERSION) -> bool:
     return actual_padded >= required_padded
 
 
+def _create_upx_wrapper(real_upx: str, output_dir: Path) -> str:
+    """Create a wrapper script that strips ``--lzma`` from UPX invocations.
+
+    Nuitka's UPX plugin hard-codes ``upx -q --no-progress --best --lzma``.
+    LZMA decompression is ~10x slower than NRV2E at runtime, directly
+    slowing every frozen-binary load. The wrapper:
+
+    1. Removes ``--lzma`` from the argument list (keeps ``--best``).
+    2. Skips files matching ``_UPX_EXCLUDE_PATTERNS`` (vcruntime, etc.)
+       by exiting 0 without calling the real UPX.
+
+    Returns the path to the wrapper script. On Windows it's a .bat file;
+    on Linux/macOS it's a shell script.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    is_windows = sys.platform == "win32" or os.name == "nt"
+    if is_windows:
+        wrapper_path = output_dir / "upx-wrapper.bat"
+        # Windows .bat wrapper: check filename for excluded patterns,
+        # then strip --lzma and call the real upx.
+        exclude_checks = " ".join(
+            f'(echo %~nx1 | findstr /i "{pattern}" >nul && exit /b 0)'
+            for pattern in _UPX_EXCLUDE_PATTERNS
+        )
+        wrapper_path.write_text(
+            textwrap.dedent(f"""\
+            @echo off
+            REM UPX wrapper: strip --lzma (10x slower decompression) and skip
+            REM fragile runtime DLLs (vcruntime, ucrtbase, etc.).
+            setlocal enabledelayedexpansion
+            REM Check if the input file matches excluded patterns
+            {exclude_checks}
+            REM Rebuild args without --lzma
+            set "NEW_ARGS="
+            :argloop
+            if "%~1"=="" goto run
+            if /i "%~1"=="--lzma" shift /1 & goto argloop
+            set "NEW_ARGS=!NEW_ARGS! %~1"
+            shift /1
+            goto argloop
+            :run
+            "{real_upx}" !NEW_ARGS!
+            exit /b %errorlevel%
+            """),
+            encoding="utf-8",
+        )
+    else:
+        wrapper_path = output_dir / "upx-wrapper.sh"
+        exclude_pattern = "|".join(_UPX_EXCLUDE_PATTERNS)
+        wrapper_path.write_text(
+            textwrap.dedent(f"""\
+            #!/bin/bash
+            # UPX wrapper: strip --lzma (10x slower decompression) and skip
+            # fragile runtime DLLs (vcruntime, ucrtbase, etc.).
+            set -e
+            # Find the file argument (last non-flag argument) and check exclusions
+            for arg in "$@"; do
+                case "$arg" in
+                    -*) continue ;;
+                esac
+                basename=$(basename "$arg" 2>/dev/null || true)
+                if echo "$basename" | grep -qiE '^({exclude_pattern})'; then
+                    exit 0
+                fi
+            done
+            # Strip --lzma from args
+            args=()
+            for arg in "$@"; do
+                if [ "$arg" != "--lzma" ]; then
+                    args+=("$arg")
+                fi
+            done
+            exec "{real_upx}" "${{args[@]}}"
+            """),
+            encoding="utf-8",
+        )
+        wrapper_path.chmod(0o755)
+    return os.fspath(wrapper_path)
+
+
 def resolve_upx_for_build(target: str, *, enabled: bool) -> str | None:
     """Resolve the UPX binary path for a build, or ``None`` if UPX should
     not be used for this build.
+
+    Returns the path to a *wrapper script* that strips ``--lzma`` and
+    skips fragile DLLs, NOT the raw UPX binary. This is because Nuitka's
+    UPX plugin hard-codes ``--best --lzma`` and LZMA decompression is
+    ~10x slower at runtime.
 
     - If ``enabled`` is False, returns ``None`` (caller explicitly disabled UPX).
     - If ``target`` is not in :data:`UPX_TARGETS` (e.g. macOS), returns ``None``
@@ -168,4 +278,9 @@ def resolve_upx_for_build(target: str, *, enabled: bool) -> str | None:
             f"but ShangBackground requires >= {UPX_MIN_VERSION}. "
             "Upgrade UPX or set SHANGBACKGROUND_UPX_BINARY to a newer binary."
         )
-    return binary
+    # Create a wrapper that strips --lzma and skips fragile DLLs.
+    # The wrapper lives in a temp directory that persists for the build
+    # session; Nuitka invokes it as the "upx binary" via --upx-binary.
+    wrapper_dir = Path(tempfile.gettempdir()) / "shangbackground-upx-wrapper"
+    wrapper = _create_upx_wrapper(binary, wrapper_dir)
+    return wrapper

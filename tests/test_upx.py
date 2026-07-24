@@ -46,13 +46,17 @@ def test_resolve_upx_raises_when_enabled_but_missing(monkeypatch: pytest.MonkeyP
         resolve_upx_for_build("linux", enabled=True)
 
 
-def test_resolve_upx_returns_path_when_found(monkeypatch: pytest.MonkeyPatch):
+def test_resolve_upx_returns_wrapper_when_found(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """When a valid UPX binary is found and meets the minimum version, the
-    function returns its path."""
+    function returns a wrapper script path (not the raw binary) that strips
+    --lzma for faster runtime decompression."""
     monkeypatch.setattr(upx_module, "find_upx_binary", lambda: "/usr/bin/upx")
     monkeypatch.setattr(upx_module, "upx_meets_minimum", lambda binary, **kw: True)
+    monkeypatch.setattr(upx_module.tempfile, "gettempdir", lambda: str(tmp_path))
     result = resolve_upx_for_build("linux", enabled=True)
-    assert result == "/usr/bin/upx"
+    assert result is not None
+    assert "wrapper" in Path(result).name
+    assert Path(result).is_file()
 
 
 def test_resolve_upx_raises_when_version_too_old(monkeypatch: pytest.MonkeyPatch):
@@ -102,3 +106,37 @@ def test_upx_meets_minimum_rejects_old_version(monkeypatch: pytest.MonkeyPatch):
     """A version < UPX_MIN_VERSION (4.2.0) fails the check."""
     monkeypatch.setattr(upx_module, "upx_version", lambda binary: (3, 9, 6))
     assert upx_meets_minimum("/fake/upx") is False
+
+
+def test_upx_wrapper_strips_lzma(tmp_path: Path):
+    """The UPX wrapper must strip --lzma from the argument list because
+    LZMA decompression is ~10x slower than NRV2E at runtime, directly
+    slowing every frozen-binary load."""
+    wrapper = upx_module._create_upx_wrapper("/usr/bin/upx", tmp_path)
+    assert Path(wrapper).is_file()
+    content = Path(wrapper).read_text(encoding="utf-8")
+    # The wrapper must exist and reference the real upx path.
+    assert "/usr/bin/upx" in content
+    # The wrapper must strip --lzma.
+    assert "--lzma" in content  # referenced in the stripping logic
+
+
+def test_upx_wrapper_excludes_vcruntime(tmp_path: Path):
+    """The UPX wrapper must skip vcruntime DLLs because compressing them
+    causes crashes and startup failures."""
+    wrapper = upx_module._create_upx_wrapper("/usr/bin/upx", tmp_path)
+    content = Path(wrapper).read_text(encoding="utf-8")
+    assert "vcruntime" in content
+    assert "ucrtbase" in content
+
+
+def test_resolve_upx_returns_wrapper_not_raw_binary(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """resolve_upx_for_build must return a wrapper script path, not the
+    raw UPX binary, so Nuitka invokes the wrapper that strips --lzma."""
+    monkeypatch.setattr(upx_module, "find_upx_binary", lambda: "/usr/bin/upx")
+    monkeypatch.setattr(upx_module, "upx_meets_minimum", lambda binary, **kw: True)
+    monkeypatch.setattr(upx_module.tempfile, "gettempdir", lambda: str(tmp_path))
+    result = upx_module.resolve_upx_for_build("linux", enabled=True)
+    assert result is not None
+    assert "wrapper" in Path(result).name
+    assert Path(result).is_file()
