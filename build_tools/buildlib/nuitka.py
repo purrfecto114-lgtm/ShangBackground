@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import subprocess
 
 from .bundle import data_directories, dynamic_modules, excluded_modules
 from .cli import create_build_parser, print_plan, print_section
@@ -101,6 +102,55 @@ def _runtime_package(plan: BuildPlan, *, materialize: bool) -> tuple[Path | None
     return package_root, config
 
 
+def _find_linux_libxcb_cursor() -> str | None:
+    """Locate ``libxcb-cursor.so.0`` on a Linux build host.
+
+    Tries (in order):
+    1. ``ctypes.util.find_library("xcb-cursor")`` (respects ``LD_LIBRARY_PATH``).
+    2. Common Debian/Ubuntu paths under ``/usr/lib*/**``.
+    3. ``ldconfig -p`` grep (catches distros with non-standard lib dirs).
+
+    Returns the absolute path, or ``None`` if the library cannot be found
+    (in which case the frozen-runtime validator will fail with a clear error
+    telling the user to install ``libxcb-cursor0``).
+    """
+    import ctypes.util
+    candidate = ctypes.util.find_library("xcb-cursor")
+    if candidate and Path(candidate).is_file():
+        return candidate
+    # Common Debian/Ubuntu multiarch paths.
+    for pattern in (
+        "/usr/lib/x86_64-linux-gnu/libxcb-cursor.so.0",
+        "/usr/lib/aarch64-linux-gnu/libxcb-cursor.so.0",
+        "/usr/lib/libxcb-cursor.so.0",
+        "/lib/x86_64-linux-gnu/libxcb-cursor.so.0",
+        "/lib/aarch64-linux-gnu/libxcb-cursor.so.0",
+    ):
+        if Path(pattern).is_file():
+            return pattern
+    # Last resort: query ldconfig.
+    try:
+        result = subprocess.run(
+            ["ldconfig", "-p"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                if "libxcb-cursor.so.0" in line and "=>" in line:
+                    path = line.split("=>", 1)[1].strip()
+                    if path and Path(path).is_file():
+                        return path
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
 def build_args(
     plan: BuildPlan,
     *,
@@ -171,6 +221,17 @@ def build_args(
         command.append(f"--include-module={module}")
     for module in excluded_modules(plan):
         command.append(f"--nofollow-import-to={module}")
+
+    # On Linux, Qt 6's XCB platform plugin dynamically loads libxcb-cursor.so.0
+    # at runtime. Nuitka's dependency scanner does not detect this (it's a
+    # dlopen, not an ELF NEEDED entry), so the library is NOT collected
+    # automatically. Our frozen-runtime validator rejects bundles without it
+    # because the resulting app would crash on any X11 desktop. Force-include
+    # the system copy via --include-data-files so the bundle is self-contained.
+    if plan.target == "linux":
+        cursor_lib = _find_linux_libxcb_cursor()
+        if cursor_lib is not None:
+            command.append(f"--include-data-files={cursor_lib}=libxcb-cursor.so.0")
 
     env: dict[str, str] = {}
     package_root, config = _runtime_package(plan, materialize=materialize_runtime)
