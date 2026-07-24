@@ -185,23 +185,46 @@ jobs:
           --upx
 
       - name: Create release archive
-        run: >-
-          python .github/scripts/release.py package
-          --target ${{ matrix.target }}
-          --arch ${{ matrix.arch }}
-          --input dist-nuitka/${{ matrix.target }}/full-${{ matrix.arch }}/standalone
-          --output-dir release-assets
+        # The variant directory name includes "-html-native" when the html
+        # feature is enabled (full profile enables it). We glob-match the
+        # actual directory so the workflow does not hard-code the variant.
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Find the actual standalone output directory produced by Nuitka.
+          # The variant name includes feature suffixes (e.g. full-html-native-x86_64),
+          # so we glob-match rather than hard-coding the path.
+          standalone_dir=$(find "dist-nuitka/${{ matrix.target }}" -type d -name standalone | head -1)
+          if [ -z "$standalone_dir" ]; then
+            echo "ERROR: no standalone directory found under dist-nuitka/${{ matrix.target }}"
+            ls -la "dist-nuitka/${{ matrix.target }}" || true
+            exit 1
+          fi
+          echo "Using standalone dir: $standalone_dir"
+          python .github/scripts/release.py package \
+            --target ${{ matrix.target }} \
+            --arch ${{ matrix.arch }} \
+            --input "$standalone_dir" \
+            --output-dir release-assets
 
       - name: Build Windows setup.exe (Inno Setup, from Nuitka output)
         if: runner.os == 'Windows'
-        run: >-
-          python build_tools/build.py installer
-          --target windows
-          --tool nuitka
-          --profile full
-          --arch ${{ matrix.arch }}
-          --input dist-nuitka/windows/full-${{ matrix.arch }}/standalone
-          --output-dir release-assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          standalone_dir=$(find "dist-nuitka/windows" -type d -name standalone | head -1)
+          if [ -z "$standalone_dir" ]; then
+            echo "ERROR: no standalone directory found under dist-nuitka/windows"
+            exit 1
+          fi
+          echo "Using standalone dir: $standalone_dir"
+          python build_tools/build.py installer \
+            --target windows \
+            --tool nuitka \
+            --profile full \
+            --arch ${{ matrix.arch }} \
+            --input "$standalone_dir" \
+            --output-dir release-assets
 
       - name: Upload native archive
         uses: actions/upload-artifact@v7
