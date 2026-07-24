@@ -109,17 +109,22 @@ def build_args(
     upx_binary: str | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     report = plan.build_output_dir / "compilation-report.xml"
-    # Nuitka 4.1.3 introduced --mode= as the unified way to select standalone /
-    # onefile. The --macos-create-app-bundle flag is the macOS-specific way to
-    # produce a .app bundle; it does NOT conflict with --mode=standalone
-    # (only with --mode=app). For macOS standalone, use --mode=standalone +
-    # --macos-create-app-bundle to get a .app bundle with the correct
-    # Contents/MacOS/ShangBackground layout that our validator expects.
+    # Nuitka 4.1.3 unifed mode selection under --mode=. The --macos-create-app-bundle
+    # flag is DEPRECATED and conflicts with --mode= (Nuitka aborts with
+    # "Cannot use both '--mode=' and deprecated options that specify mode").
+    # For macOS standalone .app bundles, use --mode=app-dist which natively
+    # produces a standalone .app bundle. For Windows/Linux, use --mode=standalone.
+    # We also pass --output-folder-name so the .app bundle is named
+    # ShangBackground.app (not main.app), matching what our validator expects.
+    if plan.target == "macos" and plan.mode == "standalone":
+        nuitka_mode = "app-dist"
+    else:
+        nuitka_mode = plan.mode
     command = [
         python_executable(),
         "-m",
         "nuitka",
-        f"--mode={plan.mode}",
+        f"--mode={nuitka_mode}",
         "--assume-yes-for-downloads",
         f"--output-dir={relative(plan.build_output_dir)}",
         f"--output-filename={APP_NAME}{'.exe' if plan.target == 'windows' else ''}",
@@ -131,6 +136,11 @@ def build_args(
         "--noinclude-setuptools-mode=nofollow",
         "--noinclude-pytest-mode=nofollow",
     ]
+    # On macOS, --mode=app-dist creates <output-folder-name>.app; without this
+    # flag the bundle would be named main.app (after the entry script), which
+    # our frozen-runtime validator cannot find.
+    if plan.target == "macos" and plan.mode == "standalone":
+        command.append(f"--output-folder-name={APP_NAME}")
     # UPX post-build compression. In Nuitka 4.1.3, UPX is a standard plugin
     # activated via --enable-plugin=upx. The optional --upx-binary=PATH
     # sub-option only becomes a recognized flag AFTER the plugin is enabled,
@@ -188,12 +198,14 @@ def build_args(
             )
         )
     elif plan.target == "macos":
-        # --macos-create-app-bundle produces a .app bundle with the correct
-        # Contents/MacOS/ShangBackground layout. It works with --mode=standalone
-        # (only conflicts with --mode=app, which we don't use).
+        # --mode=app-dist (set above) already creates the .app bundle.
+        # --macos-app-name sets the CFBundleName/CFBundleDisplayName plist keys
+        # (NOT the folder name - that's controlled by --output-folder-name).
+        # --macos-app-version sets CFBundleShortVersionString.
+        # We do NOT pass --macos-create-app-bundle: it's deprecated and
+        # conflicts with --mode= on Nuitka 4.1.3+.
         command.extend(
             (
-                "--macos-create-app-bundle",
                 f"--macos-app-name={APP_NAME}",
                 f"--macos-app-version={read_version()}",
             )
