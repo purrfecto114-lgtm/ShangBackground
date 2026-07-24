@@ -1,5 +1,0 @@
-+------------------------------------------------------------+
-| PLACEHOLDER — NOT A RUNTIME SCREENSHOT                    |
-| KDE Wayland video wallpaper                               |
-| mpvpaper/layer-shell behind desktop icons.                |
-+------------------------------------------------------------+
