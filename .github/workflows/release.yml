@@ -184,6 +184,24 @@ jobs:
           --arch ${{ matrix.arch }}
           --upx
 
+      - name: Copy libxcb-cursor.so.0 into Linux bundle (post-build fixup)
+        # Nuitka's --include-data-files does not reliably place .so files in
+        # the dist root where the frozen-runtime validator expects them.
+        # This is a belt-and-suspenders post-build copy that guarantees the
+        # library is present so Qt XCB can dlopen it at runtime.
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          standalone_dir=$(find "dist-nuitka/linux" -type d -name standalone | head -1)
+          dist_dir="$standalone_dir/ShangBackground.dist"
+          if [ -d "$dist_dir" ]; then
+            cp -v /usr/lib/x86_64-linux-gnu/libxcb-cursor.so.0 "$dist_dir/"
+            echo "Copied libxcb-cursor.so.0 into $dist_dir"
+          else
+            echo "WARNING: $dist_dir not found, skipping libxcb-cursor copy"
+          fi
+
       - name: Create release archive
         # The variant directory name includes "-html-native" when the html
         # feature is enabled (full profile enables it). We glob-match the

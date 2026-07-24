@@ -236,15 +236,33 @@ def _tar_directory(source: Path, destination: Path, top_level: str) -> None:
 
 
 def _expected_bundle_root(source: Path, target: str) -> Path:
+    """Validate that the standalone build output contains the expected executable.
+
+    Supports both PyInstaller (``ShangBackground/ShangBackground.exe``) and
+    Nuitka (``ShangBackground.dist/ShangBackground.exe``) layouts. On macOS,
+    Nuitka's ``--mode=app-dist`` produces ``ShangBackground.app/Contents/MacOS/ShangBackground``.
+    """
+    exe_name = f"{APP_NAME}.exe" if target == "windows" else APP_NAME
+    candidates: list[Path] = []
     if target == "windows":
-        executable = source / APP_NAME / f"{APP_NAME}.exe"
+        # PyInstaller: source/ShangBackground/ShangBackground.exe
+        candidates.append(source / APP_NAME / exe_name)
+        # Nuitka: source/ShangBackground.dist/ShangBackground.exe
+        candidates.append(source / f"{APP_NAME}.dist" / exe_name)
     elif target == "macos":
-        executable = source / f"{APP_NAME}.app" / "Contents" / "MacOS" / APP_NAME
+        # Both PyInstaller and Nuitka produce .app bundles with the same layout.
+        candidates.append(source / f"{APP_NAME}.app" / "Contents" / "MacOS" / APP_NAME)
     else:
-        executable = source / APP_NAME / APP_NAME
-    if not executable.is_file():
-        raise ReleaseError(f"Expected packaged executable is missing: {executable}")
-    return source
+        # Linux: PyInstaller source/ShangBackground/ShangBackground
+        candidates.append(source / APP_NAME / APP_NAME)
+        # Nuitka: source/ShangBackground.dist/ShangBackground
+        candidates.append(source / f"{APP_NAME}.dist" / APP_NAME)
+    for candidate in candidates:
+        if candidate.is_file():
+            return source
+    raise ReleaseError(
+        f"Expected packaged executable is missing. Checked: {', '.join(str(c) for c in candidates)}"
+    )
 
 
 def package_binary(source: Path, output_dir: Path, target: str, arch: str) -> Path:
