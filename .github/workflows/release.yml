@@ -185,10 +185,9 @@ jobs:
           --upx
 
       - name: Copy libxcb-cursor.so.0 into Linux bundle (post-build fixup)
-        # Nuitka's --include-data-files does not reliably place .so files in
-        # the dist root where the frozen-runtime validator expects them.
-        # This is a belt-and-suspenders post-build copy that guarantees the
-        # library is present so Qt XCB can dlopen it at runtime.
+        # Nuitka's --include-data-files creates a dangling symlink for .so
+        # files because the source path is absolute and Nuitka tries to
+        # symlink rather than copy. Remove the symlink and copy the real file.
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -196,6 +195,8 @@ jobs:
           standalone_dir=$(find "dist-nuitka/linux" -type d -name standalone | head -1)
           dist_dir="$standalone_dir/ShangBackground.dist"
           if [ -d "$dist_dir" ]; then
+            # Remove any existing symlink/file first, then copy the real .so
+            rm -f "$dist_dir/libxcb-cursor.so.0"
             cp -v /usr/lib/x86_64-linux-gnu/libxcb-cursor.so.0 "$dist_dir/"
             echo "Copied libxcb-cursor.so.0 into $dist_dir"
           else

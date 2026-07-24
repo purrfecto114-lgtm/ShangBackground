@@ -129,12 +129,11 @@ Name: "startup"; Description: "开机自启动 {#APP_NAME}"; GroupDescription: "
 ; Pull in the entire validated standalone layout. The build pipeline produces
 ; either a PyInstaller layout (ShangBackground\ShangBackground.exe +
 ; ShangBackground\_internal\) or a Nuitka layout (ShangBackground.dist\*).
-; Both are emitted under {#SOURCE_ROOT}; we use Check: directives to select
-; the right Source glob at compile time so a single .iss works with either
-; backend. ``recursesubdirs`` keeps the on-disk tree intact, while
-; ``createallsubdirs`` ensures empty dirs survive.
-Source: "{#SOURCE_ROOT}\ShangBackground\*"; DestDir: "{app}"; Check: DirExists(ExpandConstant('{#SOURCE_ROOT}\ShangBackground')); Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#SOURCE_ROOT}\ShangBackground.dist\*"; DestDir: "{app}"; Check: DirExists(ExpandConstant('{#SOURCE_ROOT}\ShangBackground.dist')); Flags: ignoreversion recursesubdirs createallsubdirs
+; Both are emitted under {#SOURCE_ROOT}. We use skipifsourcedoesntexist so
+; ISCC does not abort when one of the two globs matches nothing (only one
+; layout is ever present at a time).
+Source: "{#SOURCE_ROOT}\ShangBackground\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+Source: "{#SOURCE_ROOT}\ShangBackground.dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\{#APP_NAME}"; Filename: "{app}\ShangBackground.exe"; WorkingDir: "{app}"; Comment: "{#PRODUCT_NAME}"
