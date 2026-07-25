@@ -342,8 +342,8 @@ def _execute(args: argparse.Namespace) -> int:
         else:
             print("  INFO: UPX not found locally; CI installs it automatically.")
     if upx_binary is not None:
-        print_section("UPX compression enabled (LZMA stripped for faster startup)")
-        print(f"  wrapper: {upx_binary}")
+        print_section("UPX compression enabled")
+        print(f"  binary: {upx_binary}")
 
     print_section("Compile with Nuitka")
     command, env = build_args(

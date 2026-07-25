@@ -6,8 +6,11 @@
 
 ### Fixed
 
-- **托盘右键菜单1秒延迟（根因修复）** — 不再每次右键重建 QMenu，改为持久化 `QMenu` 实例 + `menu.clear()` 重填。预热改为 `show()`+`hide()` 强制创建原生窗口（`sizeHint()` 只触发布局计算，不创建原生窗口）。
-- **sidebar 点击外侧不缩回（Windows）** — `_OutsideClickShield` 移除 `WindowDoesNotAcceptFocus` 标志（在部分 Windows 版本上导致鼠标事件不投递），提高 `windowOpacity` 从 0.001 到 0.01 改善命中测试。`qApp` 事件过滤器新增 `MouseButtonRelease` 和 `NonClientAreaMouseButtonPress` 监听。
+- **UPX回归修复（v1.4.3引入的回归）** — v1.4.3添加的UPX wrapper脚本（`upx-wrapper.bat`）导致Nuitka找不到`upx.exe`，静默跳过所有UPX压缩。产物未压缩→体积大→启动慢→占用高。移除wrapper，恢复v1.4.2的UPX配置（`--best --lzma`，直接传原始UPX二进制路径）。根因：Nuitka Issue #1517，`--upx-binary`期望目录或exe路径，不接受.bat wrapper。
+- **托盘右键菜单1秒延迟（根因修复）** — 不再每次右键重建 QMenu，改为持久化 `QMenu` 实例 + `menu.clear()` 重填。预热改为 `show()`+`hide()` 强制创建原生窗口。
+- **sidebar 点击外侧不缩回（Windows）** — `_OutsideClickShield` 移除 `WindowDoesNotAcceptFocus` 标志，提高 `windowOpacity` 从 0.001 到 0.01。`qApp` 事件过滤器新增 `MouseButtonRelease` 和 `NonClientAreaMouseButtonPress` 监听。
+- **触摸滑动误触壁纸切换** — 新增 `_TouchScrollFilter` 事件过滤器，检查移动距离和 `QScroller` 状态。
+- **收藏夹右键菜单阻塞事件循环** — `menu.exec()` 改为 `menu.popup()`（异步）。
 
 ### Changed
 
