@@ -4984,11 +4984,24 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         if getattr(self, "_refreshing_from_config", False):
             return
         core.config["slide_seconds"] = int(value)
+        # v1.4.4: Debounce the config save + slideshow restart. QSpinBox emits
+        # valueChanged on every click/keystroke, which previously caused
+        # save_config() + restart_slideshow() to fire on every increment while
+        # the user was still adjusting the value. This caused visible stutter.
+        # Use a 500ms debounce timer so the restart only happens after the user
+        # stops changing the value for half a second.
+        if not hasattr(self, "_slide_interval_timer"):
+            from PySide6.QtCore import QTimer as _QTimer
+            self._slide_interval_timer = _QTimer(self)
+            self._slide_interval_timer.setSingleShot(True)
+            self._slide_interval_timer.setInterval(500)
+            self._slide_interval_timer.timeout.connect(self._apply_slide_interval)
+        self._slide_interval_timer.start()
+
+    def _apply_slide_interval(self):
+        """Actually save config and restart slideshow after debounce."""
         core.save_config()
         if normalize_mode_key(core.config.get("mode")) == "幻灯片放映":
-            # Restart the slideshow only when a folder has been configured; otherwise
-            # avoid surfacing an unnecessary "操作失败" error when merely changing
-            # the interval without having chosen a slide directory yet.
             if core.config.get("slide_folder"):
                 self.run_core(core.restart_slideshow)
 

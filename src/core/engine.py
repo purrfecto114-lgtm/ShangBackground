@@ -1241,6 +1241,17 @@ def initialize_application(*, load_user_config: bool = True, force: bool = False
         reset_application_services()
         _get_application_services()
         _SERVICE_REGISTRY.initialized = True
+        # v1.4.4: Prime Explorer's desktop host on Windows so the first
+        # static wallpaper change has a transition animation. This replicates
+        # the side effect that HTML mode used to provide (0x052C to Progman).
+        # Called once at init, not per wallpaper change, to avoid interfering
+        # with IDesktopWallpaper's own transition policy.
+        if IS_WINDOWS:
+            try:
+                from platform_adapters.backends.windows.integration import _prime_explorer_wallpaper_host
+                _prime_explorer_wallpaper_host()
+            except Exception as exc:
+                log(f"Explorer desktop host prime failed: {exc}")
         return config
 
 
