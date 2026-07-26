@@ -2264,23 +2264,24 @@ def _context_command_target_error() -> str:
 
 
 def _build_context_action_command(*args):
-    """Build a detached desktop-context command.
+    """Build a desktop-context command that launches without a visible window.
 
-    Explorer otherwise keeps the shell invocation associated with the launched
-    process long enough to show a busy cursor during Python/frozen start-up.
-    ``start`` returns immediately while the application performs authenticated
-    IPC or cold-start handling in the detached child.  All arguments are fixed
-    application values and are quoted with ``list2cmdline``.
+    v1.4.4: Previous implementation used ``cmd.exe /c start "" /b`` to detach
+    the process from Explorer's shell invocation. This caused two problems:
+    1. A cmd.exe window flashed briefly on every right-click action
+    2. cmd.exe added ~200ms overhead on top of the already-slow cold start
+
+    The fix: register the executable directly without cmd.exe wrapper. In
+    packaged (frozen) builds, the Nuitka standalone executable already has
+    ``--windows-console-mode=disable`` which prevents any console window.
+    In source mode, pythonw.exe is used (no console).
+
+    Explorer's ShellExecute spawns the process and returns immediately for
+    .exe files — no busy cursor is shown because Explorer does not wait
+    for GUI applications to exit (unlike console applications).
     """
     parts = [str(part) for part in _context_command_parts(*args)]
-    direct = subprocess.list2cmdline(parts)
-    if not IS_WINDOWS:
-        return direct
-    comspec = os.environ.get("COMSPEC") or os.path.join(
-        os.environ.get("SystemRoot", r"C:\Windows"), "System32", "cmd.exe"
-    )
-    launcher = subprocess.list2cmdline([comspec, "/d", "/s", "/c", "start", "", "/b"])
-    return launcher + " " + direct
+    return subprocess.list2cmdline(parts)
 
 
 def _context_hotkey_suffix(key_name):

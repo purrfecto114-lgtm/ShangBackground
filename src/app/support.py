@@ -185,24 +185,25 @@ def _dispatch_action_to_existing_instance(args: argparse.Namespace) -> bool:
 
     command = _context_command_from_args(args) or "show"
     payload = _context_payload_from_args(args)
-    # A desktop context-menu process must not keep Explorer in its busy
-    # cursor while waiting several seconds for a half-started GUI.  The local
-    # socket normally answers in a few milliseconds, so use short retries and
-    # then fall back to the legacy message channel.
-    for _attempt in range(3):
-        if local_ipc.send_command(command, payload, timeout_ms=140):
+    # v1.4.4: Reduced from 3×140ms to 2×100ms. The local socket normally
+    # answers in <5ms. If the main instance is running, it will respond
+    # immediately. The previous 3×140ms=420ms + 500ms WM_COPYDATA fallback
+    # = ~920ms was a significant contributor to the 3s perceived delay.
+    for _attempt in range(2):
+        if local_ipc.send_command(command, payload, timeout_ms=100):
             origin = "桌面右键菜单" if getattr(args, "from_context_menu", False) else "命令行"
             core.log(f"{origin}动作已转发到现有实例: {command}")
             return True
         time.sleep(0.04)
 
     # Backward compatibility with a pre-refactor Windows instance.
+    # v1.4.4: Reduced timeout from 0.5s to 0.2s.
     if core.IS_WINDOWS:
         try:
             legacy = command
             if command == "set_wallpaper" and payload:
                 legacy = "set_wallpaper|" + str(payload)
-            existing = core.find_existing_main_window(timeout=0.5)
+            existing = core.find_existing_main_window(timeout=0.2)
             return bool(existing and core.send_command_to_hwnd(existing, legacy))
         except Exception as exc:
             core.log(f"转发现有实例动作失败: {exc}")
