@@ -202,6 +202,12 @@ def runtime_available() -> bool:
     Loading is deferred to the dedicated player subprocess so a broken native
     runtime cannot pollute or crash the main GUI process.  The platform backend
     waits for mpv's IPC endpoint before accepting the child as ready.
+
+    v1.4.4: In system mode, the internal libmpv player is not used (the
+    external mpv.exe handles playback). However, we still return True if
+    libmpv is discoverable so diagnostics can report its presence. The
+    actual gating happens in _internal_libmpv_command() which checks
+    video_runtime_mode() before spawning the internal player.
     """
     return bool(resolve_libmpv_path())
 

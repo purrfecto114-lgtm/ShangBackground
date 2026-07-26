@@ -57,18 +57,24 @@ def _desktop_session() -> str:
 
 def _mpv_summary(*, probe: bool) -> str:
     try:
-        from app.libmpv_runtime import probe_libmpv, resolve_libmpv_path
+        from app.libmpv_runtime import resolve_libmpv_path
+        from app.build_features import video_runtime_mode
 
-        library = resolve_libmpv_path()
-        if library:
-            label = "libmpv (direct): " + _private_path(library)
-            if probe:
-                ok, detail = probe_libmpv(library)
-                if ok and "|" in detail:
-                    label += " | " + detail.rsplit("|", 1)[-1].strip()
-                elif not ok:
-                    label += " | load failed: " + detail
-            return label
+        _video_mode = video_runtime_mode()
+        # v1.4.4: Skip libmpv probe in system mode — loading the DLL into
+        # the GUI process is wasteful and can cause DLL conflicts.
+        if _video_mode not in ("system", "disabled"):
+            library = resolve_libmpv_path()
+            if library:
+                label = "libmpv (direct): " + _private_path(library)
+                if probe:
+                    from app.libmpv_runtime import probe_libmpv
+                    ok, detail = probe_libmpv(library)
+                    if ok and "|" in detail:
+                        label += " | " + detail.rsplit("|", 1)[-1].strip()
+                    elif not ok:
+                        label += " | load failed: " + detail
+                return label
     except Exception:
         pass
     executable = resolve_mpv_path()

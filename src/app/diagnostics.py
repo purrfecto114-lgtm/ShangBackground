@@ -171,10 +171,20 @@ def collect_diagnostics() -> DiagnosticReport:
         )
 
     try:
-        from app.libmpv_runtime import probe_libmpv, resolve_libmpv_path
+        from app.libmpv_runtime import resolve_libmpv_path
+        from app.build_features import video_runtime_mode
 
+        _video_mode = video_runtime_mode()
         libmpv_path = resolve_libmpv_path()
-        libmpv_ok, libmpv_detail = probe_libmpv(libmpv_path) if libmpv_path else (False, "libmpv not found")
+        # v1.4.4: Only probe (load) libmpv in bundled mode. In system mode,
+        # loading libmpv into the GUI process is wasteful and can cause
+        # DLL conflicts; the external mpv.exe handles playback.
+        if libmpv_path and _video_mode not in ("system", "disabled"):
+            from app.libmpv_runtime import probe_libmpv
+            libmpv_ok, libmpv_detail = probe_libmpv(libmpv_path)
+        else:
+            libmpv_ok = False
+            libmpv_detail = f"skipped (mode={_video_mode})" if _video_mode in ("system", "disabled") else "libmpv not found"
     except Exception as exc:
         libmpv_path = None
         libmpv_ok, libmpv_detail = False, str(exc)
