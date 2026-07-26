@@ -388,4 +388,3 @@ jobs:
           --verify-tag
           --title "$TITLE"
           --generate-notes
-          --prerelease
