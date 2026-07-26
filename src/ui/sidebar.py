@@ -59,14 +59,41 @@ def generate_thumbnail_fast(
     img_path: str,
     size: tuple = (THUMB_WIDTH, THUMB_HEIGHT),
 ) -> Image.Image:
+    """Generate a thumbnail with decompression-bomb protection and EXIF support.
+
+    v1.4.4 security hardening:
+    - Use draft() for JPEG low-res decode (reduces memory for large images)
+    - Apply EXIF orientation before resizing
+    - Catch DecompressionBombWarning/Error and return placeholder
+    - Source: pillow.readthedocs.io/en/stable/reference/Image.html
+    """
+    import warnings
     try:
         with Image.open(img_path) as src:
+            # v1.4.4: Use draft mode for JPEG to reduce memory
+            if src.format == "JPEG":
+                try:
+                    src.draft("RGB", (size[0] * 2, size[1] * 2))
+                except Exception:
+                    pass
+            # v1.4.4: Apply EXIF orientation
+            try:
+                from PIL import ImageOps
+                src = ImageOps.exif_transpose(src)
+            except Exception:
+                pass
             img = src.copy()
-        img.thumbnail(
-            (size[0] * 2, size[1] * 2),
-            Image.Resampling.BILINEAR,
-        )
-        return img.resize(size, Image.Resampling.BILINEAR)
+        # v1.4.4: Escalate DecompressionBombWarning to error
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            img.thumbnail(
+                (size[0] * 2, size[1] * 2),
+                Image.Resampling.BILINEAR,
+            )
+            return img.resize(size, Image.Resampling.BILINEAR)
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+        _log_sidebar(f"图片过大，已跳过（解压炸弹保护）: {img_path}: {exc}")
+        return Image.new("RGB", size, (200, 200, 200))
     except Exception as exc:
         _log_sidebar(f"生成缩略图失败 {img_path}: {exc}")
         return Image.new("RGB", size, (200, 200, 200))

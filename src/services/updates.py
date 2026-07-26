@@ -27,8 +27,30 @@ PLATFORM_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
     "linux": ("linux", "ubuntu", "debian", "appimage", "x86_64", "amd64", ".tar.gz", ".deb", ".rpm"),
     "macos": ("macos", "mac", "darwin", "osx", "x64", "arm64", ".dmg", ".pkg", ".app", ".zip"),
 }
+
+# v1.4.4: Architecture-specific markers for fine-grained asset selection.
+# Prevents x64 users from downloading ARM64 builds and vice versa.
+ARCH_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
+    "x86_64": ("x86_64", "x64", "amd64", "win64"),
+    "arm64": ("arm64", "aarch64", "arm"),
+    "x86": ("x86", "i386", "i686", "win32"),
+    "universal": ("universal", "noarch", "all"),
+}
 PACKAGE_EXTENSIONS = (".exe", ".msi", ".zip", ".7z", ".tar.gz", ".tar.xz", ".tgz", ".appimage", ".deb", ".rpm", ".dmg", ".pkg")
 SOURCE_MARKERS = ("source", "src", "源码", "source code")
+
+
+def _detect_host_arch() -> str:
+    """Detect the host CPU architecture for asset matching."""
+    import platform as _platform
+    machine = _platform.machine().lower().replace("-", "_")
+    if machine in ("amd64", "x64", "x86_64"):
+        return "x86_64"
+    if machine in ("aarch64", "arm64"):
+        return "arm64"
+    if machine in ("i386", "i486", "i586", "i686", "x86"):
+        return "x86"
+    return "x86_64"  # safe default
 
 
 def _is_repository_github_url(value: str | None) -> bool:
@@ -153,13 +175,29 @@ def _asset_score(asset: dict[str, Any], platform_id: str = PLATFORM_ID) -> int:
         for marker in markers
     )
 
+    # v1.4.4: Architecture matching — boost assets matching the host arch,
+    # penalize assets matching a different arch.
+    host_arch = _detect_host_arch()
+    arch_markers = ARCH_ASSET_MARKERS.get(host_arch, ())
+    arch_hit = sum(_has_asset_marker(text, marker) for marker in arch_markers)
+    foreign_arch_hits = sum(
+        _has_asset_marker(text, marker)
+        for other_arch, markers in ARCH_ASSET_MARKERS.items()
+        if other_arch != host_arch and other_arch != "universal"
+        for marker in markers
+    )
+
     # A generic ShangBackground archive is still useful when the release only
     # publishes platform-neutral ZIP packages. It is not allowed to outrank an
     # explicitly platform-matched executable/archive.
     generic_project_hit = 1 if "shangbackground" in text and foreign_hits == 0 else 0
     if own_hits == 0 and not generic_project_hit:
         return 0
-    return own_hits * 30 + generic_project_hit * 8 + _asset_ext_rank(text) - foreign_hits * 35
+    score = own_hits * 30 + generic_project_hit * 8 + _asset_ext_rank(text) - foreign_hits * 35
+    # v1.4.4: Architecture bonus/penalty
+    score += arch_hit * 15
+    score -= foreign_arch_hits * 20
+    return score
 
 
 def _annotate_asset(asset: dict[str, Any], platform_id: str = PLATFORM_ID) -> dict[str, Any]:

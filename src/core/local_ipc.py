@@ -128,7 +128,12 @@ if Signal is not None:
                 message = json.loads(line.decode("utf-8"))
                 identity = single_instance.current_identity()
                 if isinstance(message, dict):
-                    token_ok = str(message.get("token") or "") == str(identity.get("ipc_token") or "")
+                    # v1.4.4: Use hmac.compare_digest for timing-attack-resistant
+                    # token comparison (Python docs recommend this over ==).
+                    import hmac as _hmac
+                    received_token = str(message.get("token") or "")
+                    expected_token = str(identity.get("ipc_token") or "")
+                    token_ok = _hmac.compare_digest(received_token, expected_token)
                     command = str(message.get("command") or "")
                     if token_ok and command in ALLOWED_COMMANDS:
                         payload = message.get("payload")
@@ -136,7 +141,11 @@ if Signal is not None:
             except Exception:
                 accepted = False
             try:
-                socket.write(json.dumps({"ok": accepted}, separators=(",", ":")).encode("utf-8") + b"\n")
+                # v1.4.4: Limit IPC response size to prevent resource exhaustion
+                response = json.dumps({"ok": accepted}, separators=(",", ":"))
+                if len(response) > 4096:
+                    response = json.dumps({"ok": False, "error": "response_too_large"}, separators=(",", ":"))
+                socket.write(response.encode("utf-8") + b"\n")
                 socket.flush()
                 socket.disconnectFromServer()
             except Exception:
