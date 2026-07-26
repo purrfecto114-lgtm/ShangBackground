@@ -375,11 +375,34 @@ def _mpv_ipc_path(pid: int | None = None) -> str:
 def _internal_libmpv_command(
     video_path: str, muted: bool, volume: int, workerw: int
 ) -> tuple[str, list[str], str] | None:
-    """Use the direct ctypes/libmpv child before an external executable."""
+    """Use the direct ctypes/libmpv child before an external executable.
+
+    v1.4.4 regression fix: Only use the internal ctypes/libmpv player when the
+    build manifest explicitly bundled libmpv (mode == "bundled"). When the
+    manifest says "system" (as in our --mpv-runtime system builds), spawning
+    the full packaged executable as a child process just to play a video
+    causes massive memory/CPU overhead — the child loads ALL Qt DLLs, Python
+    modules, and resources before even reaching the libmpv ctypes call.
+
+    The fix: if video_runtime_mode() is "system" or "disabled", skip the
+    internal libmpv path and fall through to the external mpv.exe path,
+    which spawns a lightweight mpv process (~30MB) instead of the full
+    ShangBackground executable (~300MB+).
+    """
     if not libmpv_runtime_available():
         return None
     if not workerw:
         return None
+    # v1.4.4: Don't spawn the full packaged app as a child process when the
+    # build didn't bundle libmpv. The "system" mode means we should use the
+    # external mpv.exe, not the internal ctypes player.
+    try:
+        from app.build_features import video_runtime_mode
+        mode = video_runtime_mode()
+        if mode in ("system", "disabled"):
+            return None
+    except Exception:
+        pass
     ipc_path = _mpv_ipc_path()
     if is_packaged_runtime():
         cmd = [app_executable_path()]

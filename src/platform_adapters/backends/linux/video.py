@@ -275,6 +275,15 @@ def _internal_libmpv_x11_command(
 ) -> list[str] | None:
     if not libmpv_runtime_available():
         return None
+    # v1.4.4: Don't spawn the full packaged app as a child process when the
+    # build didn't bundle libmpv. Same fix as Windows video backend.
+    try:
+        from app.build_features import video_runtime_mode
+        mode = video_runtime_mode()
+        if mode in ("system", "disabled"):
+            return None
+    except Exception:
+        pass
     if is_packaged_runtime():
         player = [app_executable_path()]
     else:

@@ -6,7 +6,7 @@
 
 ### Fixed
 
-- **UPX回归修复（v1.4.3引入的回归）** — v1.4.3添加的UPX wrapper脚本（`upx-wrapper.bat`）导致Nuitka找不到`upx.exe`，静默跳过所有UPX压缩。产物未压缩→体积大→启动慢→占用高。移除wrapper，恢复v1.4.2的UPX配置（`--best --lzma`，直接传原始UPX二进制路径）。根因：Nuitka Issue #1517，`--upx-binary`期望目录或exe路径，不接受.bat wrapper。
+- **视频壁纸切换内存飙升/启动慢（根因修复）** — `--mpv-runtime system` 构建中，`_internal_libmpv_command` 仍尝试用内部 ctypes/libmpv 路径，导致**生成完整的打包可执行文件子进程**（~300MB+）仅为了播放视频。修复：当 `video_runtime_mode()` 为 `system` 或 `disabled` 时跳过内部 libmpv 路径，直接使用外部 mpv.exe（~30MB）。同时修复 Linux X11 后端相同问题。
 - **托盘右键菜单1秒延迟（根因修复）** — 不再每次右键重建 QMenu，改为持久化 `QMenu` 实例 + `menu.clear()` 重填。预热改为 `show()`+`hide()` 强制创建原生窗口。
 - **sidebar 点击外侧不缩回（Windows）** — `_OutsideClickShield` 移除 `WindowDoesNotAcceptFocus` 标志，提高 `windowOpacity` 从 0.001 到 0.01。`qApp` 事件过滤器新增 `MouseButtonRelease` 和 `NonClientAreaMouseButtonPress` 监听。
 - **触摸滑动误触壁纸切换** — 新增 `_TouchScrollFilter` 事件过滤器，检查移动距离和 `QScroller` 状态。
