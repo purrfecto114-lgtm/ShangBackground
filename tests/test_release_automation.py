@@ -157,11 +157,10 @@ def test_release_workflow_installs_libmpv_on_linux():
     assert "Install libmpv (Linux, full video feature)" not in release_workflow
 
 
-def test_release_workflow_publishes_as_prerelease():
-    """``release.yml`` must pass --prerelease to gh release create so the
-    GitHub Release is marked as a pre-release (not a stable release)."""
+def test_release_workflow_does_not_force_prerelease():
+    """``release.yml`` must NOT pass --prerelease so releases are full by default."""
     release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
-    assert "--prerelease" in release_workflow
+    assert "--prerelease" not in release_workflow
 
 
 def test_release_workflow_smoke_tests_frozen_binary():

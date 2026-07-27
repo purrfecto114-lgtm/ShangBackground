@@ -159,7 +159,7 @@ Filename: "{app}\ShangBackground.exe"; Description: "{cm:LaunchProgram,{#APP_NAM
 Filename: "{app}\ShangBackground.exe"; Parameters: "--quit"; RunOnceId: "StopAppBeforeUninstall"; Flags: runhidden
 
 [UninstallDelete]
-; Remove per-user logs and config only when the user explicitly uninstalls.
+; v1.4.4: Remove per-user logs and config (same as before).
 ; We deliberately do NOT touch %AppData%\ShangBackground\wallpapers (the
 ; user's actual wallpaper library) so an accidental uninstall does not wipe
 ; personal data.
@@ -177,6 +177,74 @@ Type: filesandordirs; Name: "{localappdata}\{#APP_NAME}"
 function InitializeSetup(): Boolean;
 begin
   Result := True;
+end;
+
+// v1.4.4: Custom uninstall page with optional "Delete user config" checkbox.
+// The startup VBS removal is mandatory (not optional) — see CurUninstallStepChanged.
+var
+  DeleteConfigPage: TOutputMsgWizardPage;
+  DeleteConfigCheckbox: TNewCheckbox;
+
+procedure InitializeWizard();
+begin
+  DeleteConfigPage := CreateOutputMsgPage(wpSelectProgramGroup, '卸载选项', '选择卸载时要清理的项目',
+    '卸载程序将自动移除开机启动项（包括 VBS 脚本和注册表条目）。' #13#10 #13#10 +
+    '您可以选择是否同时删除用户配置文件和日志。壁纸库不会被删除。');
+  
+  DeleteConfigCheckbox := TNewCheckbox.Create(DeleteConfigPage);
+  DeleteConfigCheckbox.Parent := DeleteConfigPage.Surface;
+  DeleteConfigCheckbox.Caption := '同时删除用户配置和日志（%LOCALAPPDATA%\ShangBackground）';
+  DeleteConfigCheckbox.Checked := False;
+  DeleteConfigCheckbox.Top := 40;
+  DeleteConfigCheckbox.Width := DeleteConfigPage.SurfaceWidth;
+end;
+
+function ShouldDeleteConfig(): Boolean;
+begin
+  Result := DeleteConfigCheckbox.Checked;
+end;
+
+// CurUninstallStepChanged: perform mandatory startup VBS cleanup + optional config deletion
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  StartupFolder: String;
+  VbsPath: String;
+  LegacyVbsPath: String;
+  LocalAppData: String;
+  ConfigDir: String;
+begin
+  if CurUninstallStep = usUninstall then
+  begin
+    // MANDATORY: Remove startup VBS files (the app creates these at runtime,
+    // not via [Icons] in the installer, so Inno Setup's built-in uninstall
+    // does not know about them).
+    StartupFolder := ExpandConstant('{userstartup}');
+    VbsPath := StartupFolder + '\ShangBackground.vbs';
+    LegacyVbsPath := StartupFolder + '\PowerOn.vbs';
+    
+    if FileExists(VbsPath) then
+    begin
+      DeleteFile(VbsPath);
+    end;
+    if FileExists(LegacyVbsPath) then
+    begin
+      DeleteFile(LegacyVbsPath);
+    end;
+    
+    // Also remove the {commonstartup} shortcut created by [Icons] if it exists
+    // (Inno Setup should handle this automatically, but belt-and-suspenders).
+    
+    // OPTIONAL: Delete user config and logs if the user checked the box.
+    if ShouldDeleteConfig() then
+    begin
+      LocalAppData := ExpandConstant('{localappdata}');
+      ConfigDir := LocalAppData + '\ShangBackground';
+      if DirExists(ConfigDir) then
+      begin
+        DelTree(ConfigDir, True, True, True);
+      end;
+    end;
+  end;
 end;
 
 // CurStepChanged runs AFTER file installation. Use it as a post-install
