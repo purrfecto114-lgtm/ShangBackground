@@ -111,6 +111,7 @@ DefaultGroupName={#APP_NAME}
 InternalCompressLevel=ultra64
 ShowLanguageDialog=no
 LanguageDetectionMethod=none
+DisableWelcomePage=no
 
 [Languages]
 ; ChineseSimplified.isl ships with Inno Setup 6.5.0+ only. To stay compatible
@@ -124,6 +125,18 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "startup"; Description: "开机自启动 {#APP_NAME}"; GroupDescription: "其他选项:"
+
+[Registry]
+; v1.4.5: Register HKCU Run key for autostart when the "startup" task is selected.
+; This is cleaner than VBS in the Startup folder: no extra wscript.exe process hop,
+; auto-cleaned by Inno Setup on uninstall (uninsdeletevalue flag), and visible in
+; Task Manager > Startup tab for user transparency.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "ShangBackground"; ValueData: """{app}\ShangBackground.exe"" --hide"; Flags: uninsdeletevalue; Tasks: startup
+
+[Messages]
+; v1.4.5: Custom welcome page text.
+WelcomeLabel1=欢迎使用 ShangBackground 安装向导
+WelcomeLabel2=这将安装 ShangBackground {#APP_VERSION} 到您的计算机。%n%nShangBackground 是一个跨平台桌面壁纸管理器，支持静态壁纸、幻灯片、Bing 每日壁纸、视频壁纸和交互式 HTML 壁纸。%n%n建议在继续前关闭所有其他应用程序。%n%n点击"下一步"继续。
 
 [Files]
 ; Pull in the entire validated standalone layout. The build pipeline produces

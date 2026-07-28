@@ -8734,7 +8734,18 @@ QWidget[settingsSearchMatch="true"] { border: 2px solid %%visible_accent%%; }
             return f'"{launcher}" "{entry_script_path()}" --hide'
 
     def set_auto_start(self, enable: bool):
-            """Windows branch only writes the Windows Startup-folder VBS launcher."""
+            """v1.4.5: Use HKCU\\...\\Run registry key instead of VBS in Startup folder.
+
+            Benefits over VBS:
+            - No extra wscript.exe process hop (faster startup)
+            - No VBS file to clean up on uninstall (registry value is self-contained)
+            - Inno Setup can auto-clean with uninsdeletevalue flag
+            - Still visible in Task Manager > Startup tab for user transparency
+            """
+            import winreg as _winreg
+            run_key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            app_key_name = "ShangBackground"
+            # Clean up legacy VBS files regardless of enable/disable
             startup_folder = self.get_pyqt_startup_folder_path()
             vbs_path = os.path.join(startup_folder, core.STARTUP_VBS_NAME)
             legacy_vbs_paths = [
@@ -8742,43 +8753,45 @@ QWidget[settingsSearchMatch="true"] { border: 2px solid %%visible_accent%%; }
                 for name in getattr(core, "LEGACY_STARTUP_VBS_NAMES", ["PowerOn.vbs"])
                 if name != core.STARTUP_VBS_NAME
             ]
-            if enable:
-                os.makedirs(startup_folder, exist_ok=True)
-                command = self._startup_launch_command().replace('"', '""')
-                vbs_lines = [
-                    "' 此文件仅用于开机自启动 ShangBackground。",
-                    "' ShangBackground.vbs - 开机自启动时创建标志文件，然后隐藏启动主程序。",
-                    "Dim flagFile",
-                    'flagFile = CreateObject("WScript.Shell").ExpandEnvironmentStrings("%TEMP%") & "\\WallpaperHideFlag.tmp"',
-                    "Dim objFSO",
-                    "Set objFSO = CreateObject(\"Scripting.FileSystemObject\")",
-                    "Dim objFile",
-                    "Set objFile = objFSO.CreateTextFile(flagFile, True)",
-                    "objFile.Write \"T\"",
-                    "objFile.Close",
-                    "Dim shell",
-                    "Set shell = CreateObject(\"WScript.Shell\")",
-                    f'shell.Run "{command}", 0, False',
-                    "Set shell = Nothing",
-                    "Set objFile = Nothing",
-                    "Set objFSO = Nothing",
-                ]
-                with open(vbs_path, "w", encoding="gb2312", errors="ignore") as f:
-                    f.write("\r\n".join(vbs_lines))
-                for legacy_path in legacy_vbs_paths:
-                    if os.path.exists(legacy_path):
-                        try:
-                            os.remove(legacy_path)
-                            core.log(f"已删除旧启动 VBS: {legacy_path}")
-                        except Exception as cleanup_error:
-                            core.log(f"删除旧启动 VBS 失败: {cleanup_error}")
-                core.log(f"开机自启动已启用：{vbs_path}")
-            else:
-                for path_to_remove in [vbs_path] + legacy_vbs_paths:
-                    if path_to_remove and os.path.exists(path_to_remove):
+            for path_to_remove in [vbs_path] + legacy_vbs_paths:
+                if path_to_remove and os.path.exists(path_to_remove):
+                    try:
                         os.remove(path_to_remove)
-                        core.log(f"已删除启动文件夹中的 VBS: {path_to_remove}")
-                core.log("开机自启动已禁用")
+                        core.log(f"已清理旧启动 VBS: {path_to_remove}")
+                    except Exception:
+                        pass
+            if enable:
+                command = self._startup_launch_command()
+                try:
+                    key = _winreg.OpenKey(_winreg.HKEY_CURRENT_USER, run_key_path, 0, _winreg.KEY_SET_VALUE)
+                    _winreg.SetValueEx(key, app_key_name, 0, _winreg.REG_SZ, command)
+                    _winreg.CloseKey(key)
+                    core.log(f"开机自启动已启用（注册表 Run 键）: {command}")
+                except Exception as exc:
+                    core.log(f"写入注册表 Run 键失败: {exc}")
+                    # Fallback: try VBS if registry write fails
+                    try:
+                        os.makedirs(startup_folder, exist_ok=True)
+                        vbs_command = command.replace('"', '""')
+                        vbs_lines = [
+                            "' ShangBackground.vbs - 开机自启动",
+                            f'CreateObject("WScript.Shell").Run "{vbs_command}", 0, False',
+                        ]
+                        with open(vbs_path, "w", encoding="gb2312", errors="ignore") as f:
+                            f.write("\r\n".join(vbs_lines))
+                        core.log(f"注册表写入失败，回退到 VBS: {vbs_path}")
+                    except Exception:
+                        pass
+            else:
+                try:
+                    key = _winreg.OpenKey(_winreg.HKEY_CURRENT_USER, run_key_path, 0, _winreg.KEY_SET_VALUE)
+                    _winreg.DeleteValue(key, app_key_name)
+                    _winreg.CloseKey(key)
+                    core.log("开机自启动已禁用（注册表 Run 键已删除）")
+                except FileNotFoundError:
+                    pass
+                except Exception as exc:
+                    core.log(f"删除注册表 Run 键失败: {exc}")
 
     def _schedule_preview_refresh(self, initial_delay: int = 0):
             """分批刷新预览；性能模式下只做必要刷新，避免连续切换时堆积解码任务。

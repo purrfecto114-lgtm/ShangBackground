@@ -1337,6 +1337,9 @@ def queue_ipc_wallpaper_command(command: str) -> None:
     Repeated Next/Previous/Random requests keep only the latest pending command while
     the current OS wallpaper call is running. This keeps Explorer/taskbar messages and
     the PySide UI responsive under rapid clicks.
+
+    v1.4.5: When the command fails (e.g. no previous/next wallpaper), show a tray
+    notification so the user gets feedback instead of silent failure.
     """
     generation = RUNTIME_STATE.ipc_commands.submit(command)
     if generation is None:
@@ -1351,6 +1354,9 @@ def queue_ipc_wallpaper_command(command: str) -> None:
                 _execute_ipc_wallpaper_command(current)
             except Exception as exc:
                 log(f"IPC 壁纸命令执行失败: {exc}")
+                # v1.4.5: Show tray notification for user-visible failures
+                # (e.g. "没有上一张壁纸", "没有下一张壁纸")
+                _notify_ipc_failure(current, str(exc))
             current = RUNTIME_STATE.ipc_commands.next_or_finish(worker_generation)
 
     worker = threading.Thread(
@@ -1365,6 +1371,43 @@ def queue_ipc_wallpaper_command(command: str) -> None:
         # Do not leave the queue permanently busy when thread creation fails.
         RUNTIME_STATE.ipc_commands.abort_worker(generation)
         raise
+
+
+def _notify_ipc_failure(command: str, error: str) -> None:
+    """Show a tray notification when an IPC wallpaper command fails.
+
+    This runs on the IPC worker thread, so it must not touch Qt widgets
+    directly. Use the root shim's after() to schedule on the GUI thread.
+    """
+    try:
+        msg = str(error)
+        # Only show notification for user-meaningful errors, not internal failures
+        if any(keyword in msg for keyword in ("没有", "无", "不存在", "未找到", "empty", "not found")):
+            if root is not None and hasattr(root, "after"):
+                root.after(0, lambda: _show_tray_notification(msg))
+            else:
+                log(f"IPC 失败（无 GUI 通知通道）: {msg}")
+    except Exception:
+        pass
+
+
+def _show_tray_notification(message: str) -> None:
+    """Show a tray balloon notification (called on GUI thread)."""
+    try:
+        from PySide6.QtWidgets import QSystemTrayIcon
+        tray = globals().get("tray_icon_obj", None)
+        if tray is not None and isinstance(tray, QSystemTrayIcon):
+            tray.showMessage(
+                APP_NAME,
+                message,
+                QSystemTrayIcon.MessageIcon.Information,
+                2500,
+            )
+        # Also update the status bar
+        if root is not None and hasattr(root, "set_status"):
+            root.set_status(message)
+    except Exception:
+        pass
 
 
 def log_time_diff(operation_name, new_wallpaper):

@@ -2,6 +2,23 @@
 
 本文件记录 ShangBackground 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.4.5] - 2026-07-26
+
+### Fixed
+
+- **卸载后VBS开机启动残留** — 改用 HKCU 注册表 Run 键替代 VBS 文件，Inno Setup 自动清理（`uninsdeletevalue`）
+- **右键菜单/托盘无壁纸时无提示** — IPC 壁纸命令失败时显示托盘通知（"没有上一张壁纸"等）
+
+### Added
+
+- **Inno Setup 欢迎页** — 自定义中文欢迎文字，介绍应用功能
+- **卸载界面可选删除用户配置** — 复选框默认不勾选，保护用户数据
+- **注册表 Run 键开机启动** — 替代 VBS，启动更快（无 wscript.exe 中间进程），卸载自动清理
+
+### Changed
+
+- v1.4.4 已发布为正式 Release
+
 ## [1.4.4] - 2026-07-24
 
 ### Fixed
