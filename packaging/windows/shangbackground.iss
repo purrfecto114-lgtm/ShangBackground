@@ -179,29 +179,29 @@ Filename: "{app}\ShangBackground.exe"; Parameters: "--quit"; RunOnceId: "StopApp
 Type: filesandordirs; Name: "{localappdata}\{#APP_NAME}"
 
 [Code]
-// InitializeSetup runs before any file operations. We use it only for
-// environment checks that do NOT depend on installed files - the actual
-// "is ShangBackground.exe present in the source bundle" check is done at
-// build time by build_tools/buildlib/installer.py:_validate_source_layout,
-// and ISCC itself fails compilation if the [Files] Source glob matches
-// nothing. There is intentionally no PrepareToInstall check here because
-// PrepareToInstall fires BEFORE [Files] copies anything, so checking
-// {app}\ShangBackground.exe at that point would always fail.
+// InitializeSetup runs before any file operations.
 function InitializeSetup(): Boolean;
 begin
   Result := True;
 end;
 
-// v1.4.4: Custom uninstall page with optional "Delete user config" checkbox.
-// The startup VBS removal is mandatory (not optional) — see CurUninstallStepChanged.
+// v1.4.5: Custom UNINSTALL-only page with optional "Delete user config" checkbox.
+// This page is created lazily during uninstallation (not during install) so it
+// does not interfere with the install wizard flow.
 var
   DeleteConfigPage: TOutputMsgWizardPage;
   DeleteConfigCheckbox: TNewCheckbox;
+  UninstallPageCreated: Boolean;
 
-procedure InitializeWizard();
+procedure CreateUninstallConfigPage();
 begin
-  DeleteConfigPage := CreateOutputMsgPage(wpSelectProgramGroup, '卸载选项', '选择卸载时要清理的项目',
-    '卸载程序将自动移除开机启动项（包括 VBS 脚本和注册表条目）。' #13#10 #13#10 +
+  if UninstallPageCreated then Exit;
+  UninstallPageCreated := True;
+  
+  DeleteConfigPage := CreateOutputMsgPage(wpSelectProgramGroup,
+    '卸载选项',
+    '选择卸载时要清理的项目',
+    '卸载程序将自动移除开机启动项（包括注册表条目和 VBS 脚本）。' #13#10 #13#10 +
     '您可以选择是否同时删除用户配置文件和日志。壁纸库不会被删除。');
   
   DeleteConfigCheckbox := TNewCheckbox.Create(DeleteConfigPage);
@@ -214,10 +214,12 @@ end;
 
 function ShouldDeleteConfig(): Boolean;
 begin
-  Result := DeleteConfigCheckbox.Checked;
+  Result := False;
+  if UninstallPageCreated and (DeleteConfigCheckbox <> nil) then
+    Result := DeleteConfigCheckbox.Checked;
 end;
 
-// CurUninstallStepChanged: perform mandatory startup VBS cleanup + optional config deletion
+// CurUninstallStepChanged: mandatory VBS/registry cleanup + optional config deletion
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   StartupFolder: String;
@@ -228,43 +230,34 @@ var
 begin
   if CurUninstallStep = usUninstall then
   begin
-    // MANDATORY: Remove startup VBS files (the app creates these at runtime,
-    // not via [Icons] in the installer, so Inno Setup's built-in uninstall
-    // does not know about them).
+    // MANDATORY: Remove legacy VBS startup files
     StartupFolder := ExpandConstant('{userstartup}');
     VbsPath := StartupFolder + '\ShangBackground.vbs';
     LegacyVbsPath := StartupFolder + '\PowerOn.vbs';
     
     if FileExists(VbsPath) then
-    begin
       DeleteFile(VbsPath);
-    end;
     if FileExists(LegacyVbsPath) then
-    begin
       DeleteFile(LegacyVbsPath);
-    end;
     
-    // Also remove the {commonstartup} shortcut created by [Icons] if it exists
-    // (Inno Setup should handle this automatically, but belt-and-suspenders).
-    
-    // OPTIONAL: Delete user config and logs if the user checked the box.
+    // OPTIONAL: Delete user config if checkbox was checked
     if ShouldDeleteConfig() then
     begin
       LocalAppData := ExpandConstant('{localappdata}');
       ConfigDir := LocalAppData + '\ShangBackground';
       if DirExists(ConfigDir) then
-      begin
         DelTree(ConfigDir, True, True, True);
-      end;
     end;
   end;
 end;
 
-// CurStepChanged runs AFTER file installation. Use it as a post-install
-// sanity check: if the executable is missing at this point, something
-// went wrong with the [Files] copy (disk full, AV interference, etc.)
-// and we should abort with a clear message instead of letting the
-// [Run] section try to launch a non-existent file.
+// InitializeUninstallProgressForm: create the config-deletion page during uninstall
+procedure InitializeUninstallProgressForm();
+begin
+  CreateUninstallConfigPage();
+end;
+
+// CurStepChanged: post-install sanity check
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ExecutablePath: String;
