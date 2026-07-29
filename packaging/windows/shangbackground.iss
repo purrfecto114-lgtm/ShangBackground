@@ -82,7 +82,7 @@ LicenseFile={#PROJECT_ROOT}\packaging\windows\license.rtf
 ; Single self-extracting setup.exe, no external payload.
 OutputDir={#OUTPUT_DIR}
 OutputBaseFilename={#OUTPUT_BASENAME}
-SetupIconFile={#PROJECT_ROOT}\src\img\LOGO.ico
+SetupIconFile={#PROJECT_ROOT}\src\img\installer_icon.ico
 UninstallDisplayIcon={app}\ShangBackground.exe
 UninstallDisplayName={#APP_NAME}
 
