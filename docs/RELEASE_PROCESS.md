@@ -33,19 +33,20 @@
 
 ## 自动发布配置
 
-正式自动产物使用 PyInstaller `lite + standalone`：
+正式自动产物使用 Nuitka `full + standalone`，Windows/Linux 强制启用 UPX：
 
 ```bash
 python build_tools/build.py \
-  --tool pyinstaller \
+  --tool nuitka \
   --target <host> \
-  --profile lite \
+  --profile full \
   --mode standalone \
   --mpv-runtime system \
-  --arch <host-arch>
+  --arch <host-arch> \
+  --upx
 ```
 
-`lite` 保留核心图片/幻灯片/颜色壁纸、Bing、全局热键、更新和字体功能；不默认包含视频与 HTML。原因是这两类功能依赖 MPV、系统 WebView、桌面嵌入、权限或目标系统图形会话，不能只靠托管 Runner 证明可发布。需要完整功能时，应在对应操作系统准备并验证原生运行时，再手动构建 `full` 产物。
+`full` 包含视频、HTML、Bing、全局热键、更新和字体。UPX 在 Windows/Linux 是发布门禁，macOS 因签名和 ABI 约束自动禁用。动态壁纸仍必须在对应桌面真机验收。
 
 自动发布的架构：
 
@@ -68,7 +69,7 @@ ShangBackground-vX.Y.Z-source.zip
 SHA256SUMS.txt
 ```
 
-Windows 在二进制归档之外，还额外提供一个 Inno Setup 安装包（`-setup.exe`）。安装包内嵌用户许可协议（`packaging/windows/license.rtf`），用户必须在向导首页勾选"我接受协议"才能继续安装；安装包同时提供开始菜单、桌面（可选）与开机自启（可选）快捷方式，并写入 Add/Remove Programs 卸载入口。CI 在 Windows runner 上自动安装 Inno Setup 6 后调用 `python build_tools/build.py installer` 生成 `setup.exe`，与本机命令一致。
+Windows 在二进制归档之外，还提供 Inno Setup 安装包（`-setup.exe`）。CI 在 Windows runner 安装 UPX 5.2.0 和 Inno Setup 7 x64，将已验证的 Nuitka full standalone 封装为安装包。
 
 二进制归档保留 standalone 目录结构与 Unix 可执行权限。源码 ZIP 只含一个顶层目录，并排除 `.github/`、`tests/`、缓存、构建目录、站点资源和验证产物。工作流会重新解压源码包，然后执行：
 
@@ -104,21 +105,21 @@ python .github/scripts/release.py package \
 
 CI 之外，开发者也可以在本机生成 `setup.exe`：
 
-1. 先用 PyInstaller 产出已验证的 standalone 目录：
+1. 先用 Nuitka + UPX 产出已验证的 full standalone 目录：
 
    ```bash
-   python build_tools/build.py --tool pyinstaller --target windows \
-     --profile lite --mode standalone --mpv-runtime system --arch x86_64
+   python build_tools/build.py --tool nuitka --target windows \
+     --profile full --mode standalone --mpv-runtime system --arch x86_64 --upx
    ```
 
-2. 安装 [Inno Setup 6](https://jrsoftware.org/isdl.php)，或设置 `SHANGBACKGROUND_ISCC` 环境变量指向 `ISCC.exe` 的绝对路径。
+2. 安装 [Inno Setup 7 x64](https://jrsoftware.org/isdl.php)，或设置 `SHANGBACKGROUND_ISCC` 指向其 `ISCC.exe`。
 
 3. 调用 `installer` 子命令：
 
    ```bash
-   python build_tools/build.py installer \
-     --target windows --profile lite --arch x86_64 \
-     --input dist-pyinstaller/windows/lite-x86_64/standalone \
+   python build_tools/build.py installer --tool nuitka \
+     --target windows --profile full --arch x86_64 \
+     --input dist-nuitka/windows/full-html-native-x86_64-mpv-system/standalone \
      --output-dir dist-release
    ```
 

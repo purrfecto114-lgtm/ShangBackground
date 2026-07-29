@@ -115,8 +115,7 @@ DisableWelcomePage=no
 
 [Languages]
 ; ChineseSimplified.isl ships with Inno Setup 6.5.0+ only. To stay compatible
-; with older Inno Setup 6.x installs (e.g. the Chocolatey innosetup package
-; currently ships 6.4.x), we bundle the official language file from
+; across Inno Setup compiler versions, we bundle the official language file from
 ; https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/ChineseSimplified.isl
 ; and reference it via a relative path rooted at PROJECT_ROOT.
 Name: "chinesesimp"; MessagesFile: "{#PROJECT_ROOT}\packaging\windows\ChineseSimplified.isl"
@@ -129,9 +128,31 @@ Name: "startup"; Description: "开机自启动 {#APP_NAME}"; GroupDescription: "
 [Registry]
 ; v1.4.5: Register HKCU Run key for autostart when the "startup" task is selected.
 ; This is cleaner than VBS in the Startup folder: no extra wscript.exe process hop,
-; auto-cleaned by Inno Setup on uninstall (uninsdeletevalue flag), and visible in
+; cleaned by the unconditional uninstall entry below, and visible in
 ; Task Manager > Startup tab for user transparency.
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "ShangBackground"; ValueData: """{app}\ShangBackground.exe"" --hide"; Flags: uninsdeletevalue; Tasks: startup
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "ShangBackground"; ValueData: """{app}\ShangBackground.exe"" --hide"; Tasks: startup
+; Always remove startup values, including values enabled later from inside the
+; application and the product-specific value used by older releases.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "ShangBackground"; Flags: dontcreatekey uninsdeletevalue
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "xxdz_WallpaperController"; Flags: dontcreatekey uninsdeletevalue
+; The application creates these per-user shell entries at runtime. Record
+; uninstall-only cleanup without creating disabled entries during installation.
+Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\LastWallpaper"; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\NextWallpaper"; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\RandomWallpaper"; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\ZJumpToWallpaper"; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\JumpToWallpaper"; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\~~PersonalizeBackground"; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\image\shell\ShangBackgroundSetWallpaper"; Flags: dontcreatekey uninsdeletekey
+; Older elevated releases wrote the same product-owned keys through HKCR,
+; which resolves to the machine Classes hive when no per-user override exists.
+Root: HKLM; Subkey: "Software\Classes\DesktopBackground\Shell\LastWallpaper"; Flags: dontcreatekey uninsdeletekey
+Root: HKLM; Subkey: "Software\Classes\DesktopBackground\Shell\NextWallpaper"; Flags: dontcreatekey uninsdeletekey
+Root: HKLM; Subkey: "Software\Classes\DesktopBackground\Shell\RandomWallpaper"; Flags: dontcreatekey uninsdeletekey
+Root: HKLM; Subkey: "Software\Classes\DesktopBackground\Shell\ZJumpToWallpaper"; Flags: dontcreatekey uninsdeletekey
+Root: HKLM; Subkey: "Software\Classes\DesktopBackground\Shell\JumpToWallpaper"; Flags: dontcreatekey uninsdeletekey
+Root: HKLM; Subkey: "Software\Classes\DesktopBackground\Shell\~~PersonalizeBackground"; Flags: dontcreatekey uninsdeletekey
+Root: HKLM; Subkey: "Software\Classes\SystemFileAssociations\image\shell\ShangBackgroundSetWallpaper"; Flags: dontcreatekey uninsdeletekey
 
 [Messages]
 ; v1.4.5: Custom welcome page text.
@@ -154,29 +175,23 @@ Name: "{group}\卸载 {#APP_NAME}"; Filename: "{uninstallexe}"; Comment: "卸载
 Name: "{group}\{#APP_NAME} 官方仓库"; Filename: "https://github.com/purrfecto114-lgtm/ShangBackground"
 Name: "{autodesktop}\{#APP_NAME}"; Filename: "{app}\ShangBackground.exe"; WorkingDir: "{app}"; Tasks: desktopicon; Comment: "{#PRODUCT_NAME}"
 
-; Auto-launch entry: written only when the user keeps the "startup" task
-; selected. The checkbox defaults to checked so a normal install enables
-; autostart; power users can opt out explicitly.
-Name: "{commonstartup}\{#APP_NAME}"; Filename: "{app}\ShangBackground.exe"; WorkingDir: "{app}"; Tasks: startup; Comment: "开机自启动 {#APP_NAME}"
+; Autostart is provided only by the HKCU Run value above. A second common
+; Startup shortcut would launch another process and cannot be disabled from
+; the application's per-user startup setting.
+
+[InstallDelete]
+; Remove the duplicate all-users Startup shortcut created by v1.4.5.
+Type: files; Name: "{commonstartup}\{#APP_NAME}.lnk"
 
 [Run]
-; Offer to launch the app after a successful install. ``postinstall`` keeps
-; the wizard open until the user closes the app, ``nowait`` lets the wizard
-; finish without waiting for the app to exit.
+; Offer to launch the app after a successful install. ``postinstall`` adds the
+; final-page checkbox, while ``nowait`` lets the wizard finish immediately.
 Filename: "{app}\ShangBackground.exe"; Description: "{cm:LaunchProgram,{#APP_NAME}}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
 
-[UninstallRun]
-; Make sure we do not leave a stale tray process holding files we are about
-; to delete. ``--quit`` is the silent-quit IPC shipped by the application's
-; single-instance guard.
-Filename: "{app}\ShangBackground.exe"; Parameters: "--quit"; RunOnceId: "StopAppBeforeUninstall"; Flags: runhidden
-
 [UninstallDelete]
-; v1.4.4: Remove per-user logs and config (same as before).
-; We deliberately do NOT touch %AppData%\ShangBackground\wallpapers (the
-; user's actual wallpaper library) so an accidental uninstall does not wipe
-; personal data.
-Type: filesandordirs; Name: "{localappdata}\{#APP_NAME}"
+; Delete settings and logs only after explicit confirmation. This directory
+; can also contain user-managed runtime files, so the default is to preserve it.
+Type: filesandordirs; Name: "{localappdata}\{#APP_NAME}"; Check: ShouldDeleteConfig
 
 [Code]
 // InitializeSetup runs before any file operations.
@@ -185,38 +200,33 @@ begin
   Result := True;
 end;
 
-// v1.4.5: Custom UNINSTALL-only page with optional "Delete user config" checkbox.
-// This page is created lazily during uninstallation (not during install) so it
-// does not interfere with the install wizard flow.
+function InitializeUninstall(): Boolean;
 var
-  DeleteConfigPage: TOutputMsgWizardPage;
-  DeleteConfigCheckbox: TNewCheckbox;
-  UninstallPageCreated: Boolean;
-
-procedure CreateUninstallConfigPage();
+  ExecutablePath: String;
+  ResultCode: Integer;
 begin
-  if UninstallPageCreated then Exit;
-  UninstallPageCreated := True;
-  
-  DeleteConfigPage := CreateOutputMsgPage(wpSelectProgramGroup,
-    '卸载选项',
-    '选择卸载时要清理的项目',
-    '卸载程序将自动移除开机启动项（包括注册表条目和 VBS 脚本）。' #13#10 #13#10 +
-    '您可以选择是否同时删除用户配置文件和日志。壁纸库不会被删除。');
-  
-  DeleteConfigCheckbox := TNewCheckbox.Create(DeleteConfigPage);
-  DeleteConfigCheckbox.Parent := DeleteConfigPage.Surface;
-  DeleteConfigCheckbox.Caption := '同时删除用户配置和日志（%LOCALAPPDATA%\ShangBackground）';
-  DeleteConfigCheckbox.Checked := False;
-  DeleteConfigCheckbox.Top := 40;
-  DeleteConfigCheckbox.Width := DeleteConfigPage.SurfaceWidth;
+  Result := True;
+  ExecutablePath := ExpandConstant('{app}\ShangBackground.exe');
+  if not FileExists(ExecutablePath) then
+    Exit;
+
+  if (not Exec(ExecutablePath, '--quit --wait-for-exit', ExpandConstant('{app}'),
+    SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
+  begin
+    SuppressibleMsgBox(
+      '无法安全停止正在运行的 {#APP_NAME}。' #13#10 #13#10 +
+      '请从托盘菜单退出程序后重试卸载。',
+      mbError, MB_OK, IDOK);
+    Result := False;
+  end;
 end;
+
+var
+  DeleteConfigSelected: Boolean;
 
 function ShouldDeleteConfig(): Boolean;
 begin
-  Result := False;
-  if UninstallPageCreated and (DeleteConfigCheckbox <> nil) then
-    Result := DeleteConfigCheckbox.Checked;
+  Result := DeleteConfigSelected;
 end;
 
 // CurUninstallStepChanged: mandatory VBS/registry cleanup + optional config deletion
@@ -224,37 +234,28 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   StartupFolder: String;
   VbsPath: String;
-  LegacyVbsPath: String;
-  LocalAppData: String;
-  ConfigDir: String;
 begin
   if CurUninstallStep = usUninstall then
   begin
     // MANDATORY: Remove legacy VBS startup files
     StartupFolder := ExpandConstant('{userstartup}');
     VbsPath := StartupFolder + '\ShangBackground.vbs';
-    LegacyVbsPath := StartupFolder + '\PowerOn.vbs';
     
     if FileExists(VbsPath) then
       DeleteFile(VbsPath);
-    if FileExists(LegacyVbsPath) then
-      DeleteFile(LegacyVbsPath);
-    
-    // OPTIONAL: Delete user config if checkbox was checked
-    if ShouldDeleteConfig() then
-    begin
-      LocalAppData := ExpandConstant('{localappdata}');
-      ConfigDir := LocalAppData + '\ShangBackground';
-      if DirExists(ConfigDir) then
-        DelTree(ConfigDir, True, True, True);
-    end;
   end;
 end;
 
-// InitializeUninstallProgressForm: create the config-deletion page during uninstall
+// Custom setup wizard pages cannot be created by the separate uninstaller.
+// SuppressibleMsgBox is supported there and safely defaults to preserving data
+// for /SILENT and /VERYSILENT runs.
 procedure InitializeUninstallProgressForm();
 begin
-  CreateUninstallConfigPage();
+  DeleteConfigSelected := SuppressibleMsgBox(
+    '是否同时删除用户配置和日志？' #13#10 #13#10 +
+    '位置：' + ExpandConstant('{localappdata}\{#APP_NAME}') + #13#10 +
+    '选择“否”将保留这些数据，便于以后重新安装。',
+    mbConfirmation, MB_YESNO, IDNO) = IDYES;
 end;
 
 // CurStepChanged: post-install sanity check

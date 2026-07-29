@@ -661,6 +661,16 @@ def get_startup_vbs_path(name=STARTUP_VBS_NAME):
     return os.path.join(folder, name) if folder else name
 
 
+def is_owned_startup_vbs(path):
+    """Return whether a legacy, generically named VBS belongs to this app."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+            content = handle.read(8192).lower()
+        return "shangbackground" in content or "xxdz" in content
+    except Exception:
+        return False
+
+
 remote_version = "1"
 remote_release_notes = ""
 remote_download_urls = {"GitHub Release": "", t("发布页"): "https://github.com/purrfecto114-lgtm/ShangBackground/releases/latest"}
@@ -2598,4 +2608,3 @@ def register_context(show_admin_prompt=False):
         if show_admin_prompt:
             show_message(t("错误"), t("右键菜单注册失败。") + f"\n\n{t('原因')}：{e}")
         return False
-

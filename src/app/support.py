@@ -88,6 +88,7 @@ def _parse_early_args() -> argparse.Namespace:
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--hide", action="store_true")
     parser.add_argument("--quit", action="store_true", help="Request a clean shutdown of the running instance")
+    parser.add_argument("--wait-for-exit", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--jump-to-wallpaper", action="store_true")
     parser.add_argument("--set-wallpaper", dest="set_wallpaper")
     parser.add_argument("--from-context-menu", action="store_true", help=argparse.SUPPRESS)
@@ -185,16 +186,26 @@ def _dispatch_action_to_existing_instance(args: argparse.Namespace) -> bool:
 
     command = _context_command_from_args(args) or "show"
     payload = _context_payload_from_args(args)
+    wait_for_exit = command == "quit" and getattr(args, "wait_for_exit", False)
     # v1.4.4: Reduced from 3×140ms to 2×100ms. The local socket normally
     # answers in <5ms. If the main instance is running, it will respond
     # immediately. The previous 3×140ms=420ms + 500ms WM_COPYDATA fallback
     # = ~920ms was a significant contributor to the 3s perceived delay.
-    for _attempt in range(2):
-        if local_ipc.send_command(command, payload, timeout_ms=100):
+    attempts = 40 if wait_for_exit else 2
+    for _attempt in range(attempts):
+        existing_identity = single_instance.read_identity()
+        if local_ipc.send_command(
+            command,
+            payload,
+            timeout_ms=250 if wait_for_exit else 100,
+            identity=existing_identity,
+        ):
             origin = "桌面右键菜单" if getattr(args, "from_context_menu", False) else "命令行"
             core.log(f"{origin}动作已转发到现有实例: {command}")
+            if wait_for_exit:
+                return _wait_for_process_exit(existing_identity)
             return True
-        time.sleep(0.04)
+        time.sleep(0.1 if wait_for_exit else 0.04)
 
     # Backward compatibility with a pre-refactor Windows instance.
     # v1.4.4: Reduced timeout from 0.5s to 0.2s.
@@ -208,6 +219,34 @@ def _dispatch_action_to_existing_instance(args: argparse.Namespace) -> bool:
         except Exception as exc:
             core.log(f"转发现有实例动作失败: {exc}")
     return False
+
+
+def _wait_for_process_exit(identity: dict, timeout: float = 20.0) -> bool:
+    """Wait for the exact primary process to terminate after accepting quit."""
+    try:
+        import psutil
+    except Exception as exc:
+        core.log(f"等待现有实例退出失败: psutil 不可用: {exc}")
+        return False
+    try:
+        pid = int(identity.get("pid") or 0)
+        created_at = float(identity.get("created_at") or 0.0)
+        if pid <= 0:
+            return False
+        process = psutil.Process(pid)
+        if created_at and abs(float(process.create_time()) - created_at) > 1.0:
+            return True
+        try:
+            process.wait(timeout=max(0.1, float(timeout)))
+            return True
+        except psutil.TimeoutExpired:
+            core.log(f"等待现有实例退出超时: pid={pid}")
+            return False
+    except psutil.NoSuchProcess:
+        return True
+    except Exception as exc:
+        core.log(f"等待现有实例退出失败: {exc}")
+        return False
 
 
 def _handle_action_args(args: argparse.Namespace) -> bool:
@@ -450,4 +489,3 @@ def apply_application_font(app) -> str:
             app.setFont(font)
             return family
     return app.font().family()
-

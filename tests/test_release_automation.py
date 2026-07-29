@@ -112,11 +112,10 @@ def test_release_workflow_builds_windows_installer():
     assert "python build_tools/build.py installer" in release_workflow
     assert "Install Inno Setup" in release_workflow
     assert "SHANGBACKGROUND_ISCC" in release_workflow
-    # The installer step must NOT pin a hard-coded Inno Setup download URL,
-    # which 404s whenever JR Software ships a new version. Use Chocolatey
-    # (pre-installed on GitHub Actions Windows runners) instead.
+    # Use winget's stable package ID rather than a versioned vendor URL.
     assert "files.jrsoftware.org/is/6/innosetup-" not in release_workflow
-    assert "choco install innosetup" in release_workflow
+    assert "JRSoftware.InnoSetup.7" in release_workflow
+    assert "Inno Setup 7" in release_workflow
 
 
 def test_release_workflow_uses_nuitka_full_with_upx():
@@ -138,8 +137,8 @@ def test_release_workflow_installs_upx():
     """``release.yml`` must install UPX on both Windows (via Chocolatey) and
     Linux (via apt) so the Nuitka --upx flag has a binary to invoke."""
     release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
-    # Windows: Chocolatey installs upx alongside innosetup.
-    assert "choco install innosetup upx" in release_workflow
+    # Windows: Chocolatey installs the release-pinned UPX version.
+    assert "choco install upx --version=5.2.0" in release_workflow
     assert "SHANGBACKGROUND_UPX_BINARY" in release_workflow
     # Linux: apt installs upx-ucl (the Debian/Ubuntu package name for UPX).
     assert "upx-ucl" in release_workflow

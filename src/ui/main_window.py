@@ -8755,6 +8755,8 @@ QWidget[settingsSearchMatch="true"] { border: 2px solid %%visible_accent%%; }
             ]
             for path_to_remove in [vbs_path] + legacy_vbs_paths:
                 if path_to_remove and os.path.exists(path_to_remove):
+                    if path_to_remove in legacy_vbs_paths and not core.is_owned_startup_vbs(path_to_remove):
+                        continue
                     try:
                         os.remove(path_to_remove)
                         core.log(f"已清理旧启动 VBS: {path_to_remove}")

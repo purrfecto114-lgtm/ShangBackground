@@ -129,6 +129,14 @@ def test_installer_script_does_not_check_destination_in_prepare_to_install():
     assert "ssPostInstall" in text, ".iss CurStepChanged must check ssPostInstall step"
 
 
+def test_uninstaller_does_not_create_setup_wizard_pages():
+    text = installer_module.ISS_PATH.read_text(encoding="utf-8")
+    assert "CreateOutputMsgPage" not in text
+    assert "--quit --wait-for-exit" in text
+    assert "SuppressibleMsgBox" in text
+    assert "Check: ShouldDeleteConfig" in text
+
+
 def test_installer_plan_resolves_for_windows_x86_64():
     plan = create_installer_plan(
         target="windows",
@@ -247,6 +255,14 @@ def test_validate_source_layout_accepts_full_bundle_nuitka(tmp_path: Path):
     assert errors == ()
 
 
+def test_validate_source_layout_rejects_ambiguous_bundles(tmp_path: Path):
+    source = tmp_path / "standalone"
+    (source / "ShangBackground").mkdir(parents=True)
+    (source / "ShangBackground.dist").mkdir()
+    errors = _validate_source_layout(source)
+    assert any("Ambiguous" in error for error in errors)
+
+
 def test_installer_cli_parser_accepts_expected_flags():
     parser = create_installer_parser()
     args = parser.parse_args(["--profile", "lite", "--arch", "x86_64", "--dry-run"])
@@ -274,7 +290,9 @@ def test_installer_cli_parser_rejects_non_windows_targets():
 
 
 def test_installer_main_dry_run_returns_zero(capsys: pytest.CaptureFixture[str]):
-    rc = installer_module.main(["--dry-run", "--tool", "pyinstaller", "--profile", "lite"])
+    rc = installer_module.main([
+        "--dry-run", "--skip-validate", "--tool", "pyinstaller", "--profile", "lite"
+    ])
     assert rc == 0
     out = capsys.readouterr().out
     assert "Inno Setup command" in out

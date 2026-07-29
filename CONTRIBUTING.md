@@ -66,8 +66,8 @@ docs: update RELEASE_PROCESS with manual installer build instructions
 
 将变更合入 `main` 后，`release.yml` 工作流会自动：
 - 校验四处版本一致性；
-- 在 Windows/Linux/macOS 原生 runner 上构建 lite standalone 包；
-- 生成 Windows `setup.exe`（Inno Setup）；
+- 在 Windows/Linux/macOS 原生 runner 上构建 Nuitka full standalone，Windows/Linux 强制使用 UPX；
+- 使用 Inno Setup 7 x64 生成 Windows `setup.exe`；
 - 创建 `v<major.minor.patch>` Tag 和 GitHub Release；
 - 生成 `SHA256SUMS.txt` 校验和文件。
 

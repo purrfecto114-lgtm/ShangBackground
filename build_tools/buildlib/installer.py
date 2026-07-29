@@ -41,7 +41,6 @@ from .constants import (
     COMPANY_NAME,
     PRODUCT_NAME,
     PROJECT_ROOT,
-    ARCHES,
     PROFILES,
     TOOLS,
     normalize_arch,
@@ -110,12 +109,6 @@ def _detect_source_layout(source: Path) -> str | None:
     nui_dist = source / "ShangBackground.dist"
     if nui_dist.is_dir():
         return "nuitka"
-    # Some Nuitka versions emit the .dist directory directly without an
-    # intermediate ShangBackground.dist parent. Fall back to scanning for any
-    # *.dist directory.
-    for candidate in sorted(source.glob("*.dist")):
-        if candidate.is_dir():
-            return "nuitka"
     return None
 
 
@@ -131,6 +124,11 @@ def _validate_source_layout(source: Path) -> tuple[str, ...]:
     errors: list[str] = []
     if not source.is_dir():
         return (f"Standalone build output is missing: {source}",)
+    if (source / "ShangBackground").is_dir() and (source / "ShangBackground.dist").is_dir():
+        return (
+            f"Ambiguous standalone layout under {source}: both ShangBackground/ "
+            "and ShangBackground.dist/ exist. Keep exactly one build layout.",
+        )
     layout = _detect_source_layout(source)
     if layout == "pyinstaller":
         app_root = source / "ShangBackground"
@@ -144,14 +142,7 @@ def _validate_source_layout(source: Path) -> tuple[str, ...]:
         if not manifest.is_file():
             errors.append(f"build-features.json manifest is missing: {manifest}")
     elif layout == "nuitka":
-        # The .dist directory name is deterministic for our build, but the
-        # validator should still pass if a future Nuitka rename lands.
         dist_dir = source / "ShangBackground.dist"
-        if not dist_dir.is_dir():
-            for candidate in sorted(source.glob("*.dist")):
-                if (candidate / "ShangBackground.exe").is_file():
-                    dist_dir = candidate
-                    break
         executable = dist_dir / "ShangBackground.exe"
         if not executable.is_file():
             errors.append(f"ShangBackground.exe is missing: {executable}")
@@ -200,6 +191,10 @@ def create_installer_plan(
         raise RuntimeError(f"License agreement file is missing: {LICENSE_PATH}")
 
     arch = normalize_arch(arch)
+    if arch != "x86_64":
+        raise RuntimeError(
+            f"The current Inno Setup script supports only x86_64 bundles; got arch={arch!r}."
+        )
     build_plan = create_plan(
         tool=tool,
         target=target,
@@ -233,7 +228,7 @@ def _find_iscc() -> str | None:
     Order:
     1. ``SHANGBACKGROUND_ISCC`` env var (explicit override).
     2. ``PATH`` lookup.
-    3. Well-known install paths under ``%ProgramFiles%`` / ``%ProgramFiles(x86)%``.
+    3. Well-known Inno Setup 7/6 install paths.
     """
     if sys.platform != "win32" and os.name != "nt":
         return None
@@ -249,13 +244,14 @@ def _find_iscc() -> str | None:
         return found
 
     candidate_roots = [
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs"),
         os.environ.get("PROGRAMFILES", r"C:\Program Files"),
         os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"),
     ]
     for root in candidate_roots:
         if not root:
             continue
-        for sub in ("Inno Setup 6", "Inno Setup 5"):
+        for sub in ("Inno Setup 7", "Inno Setup 6"):
             candidate = Path(root) / sub / "ISCC.exe"
             if candidate.is_file():
                 return os.fspath(candidate)
@@ -329,7 +325,7 @@ def create_installer_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile", choices=PROFILES, default="full")
     parser.add_argument(
         "--arch",
-        choices=("auto", *ARCHES),
+        choices=("auto", "x86_64"),
         default="auto",
         help="Must match the standalone build arch that produced --input.",
     )
@@ -394,7 +390,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     _print_plan(plan)
 
-    if not args.skip_validate and not args.dry_run:
+    if not args.skip_validate:
         errors = _validate_source_layout(plan.source_root)
         if errors:
             print("Installer source layout is invalid:", file=sys.stderr)
@@ -413,7 +409,7 @@ def main(argv: list[str] | None = None) -> int:
     compiler = _find_iscc()
     if compiler is None:
         print(
-            "\nISCC.exe was not found. Install Inno Setup 6 from https://jrsoftware.org/isdl.php "
+            "\nISCC.exe was not found. Install Inno Setup 7 from https://jrsoftware.org/isdl.php "
             "or set SHANGBACKGROUND_ISCC to the absolute path of ISCC.exe.",
             file=sys.stderr,
         )

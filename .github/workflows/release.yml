@@ -137,25 +137,23 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Use Chocolatey (pre-installed on GitHub Actions Windows runners) so
-          # we always get the latest stable Inno Setup 6.x and UPX without
-          # hard-coding version-specific URLs that 404 when vendors ship new
-          # releases.
-          choco install innosetup upx -y --no-progress --limit-output
-          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-          if (Test-Path $iscc) {
-            echo "SHANGBACKGROUND_ISCC=$iscc" >> $env:GITHUB_ENV
-          } else {
-            throw "ISCC.exe not found at $iscc after Chocolatey install"
-          }
-          # UPX ships as upx.exe under Chocolatey's bin path, which is on PATH.
-          $upx = Get-Command upx.exe -ErrorAction SilentlyContinue
-          if (-not $upx) {
-            throw "upx.exe not found on PATH after Chocolatey install"
-          }
-          echo "SHANGBACKGROUND_UPX_BINARY=$($upx.Source)" >> $env:GITHUB_ENV
-          Write-Host "UPX at: $($upx.Source)"
-          & $upx.Source --version | Select-Object -First 2
+          choco install upx --version=5.2.0 -y --no-progress --limit-output
+          if ($LASTEXITCODE -ne 0) { throw "UPX installation failed" }
+          winget install --id JRSoftware.InnoSetup.7 -e -s winget --silent `
+            --accept-package-agreements --accept-source-agreements --disable-interactivity
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup 7 installation failed" }
+
+          $upx = (Get-Command upx.exe -ErrorAction Stop).Source
+          $iscc = @(
+            "$env:LOCALAPPDATA\Programs\Inno Setup 7\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 7\ISCC.exe"
+          ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $iscc) { throw "Inno Setup 7 x64 ISCC.exe was not found" }
+
+          "SHANGBACKGROUND_UPX_BINARY=$upx" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "SHANGBACKGROUND_ISCC=$iscc" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          & $upx --version | Select-Object -First 2
+          & $iscc /? | Select-Object -First 2
 
       - name: Run tests on native runner
         run: |

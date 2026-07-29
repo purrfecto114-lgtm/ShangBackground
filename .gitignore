@@ -16,6 +16,7 @@ build-generated/
 VALIDATION_ARTIFACTS/
 .DS_Store
 Thumbs.db
+/屏幕截图*.png
 
 build-logs/
 

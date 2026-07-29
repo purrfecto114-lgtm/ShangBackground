@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.4.5-0ea5e9?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-v1.4.6-0ea5e9?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/PySide6-6.11-41cd52?style=flat-square&logo=qt&logoColor=white" alt="PySide6">
   <img src="https://img.shields.io/badge/License-GPLv3-blue?style=flat-square" alt="GPLv3">
@@ -108,17 +108,17 @@ python build_tools/build.py mpv list --target windows --arch x86_64
 
 下载内容按平台/架构/版本保存到 `src/bin/mpv/`，构建时只携带选中的一个版本。普通构建不会隐式联网下载原生代码。Linux 可使用本地或目标系统 libmpv，macOS 使用 AVFoundation。
 
-Windows 还提供 Inno Setup 安装包（`setup.exe`），内嵌用户许可协议，必须勾选"我接受协议"才能继续安装。本地构建需先安装 [Inno Setup 6](https://jrsoftware.org/isdl.php)，或设置 `SHANGBACKGROUND_ISCC` 环境变量指向 `ISCC.exe`：
+Windows 安装包使用 Nuitka full standalone + UPX，再由 [Inno Setup 7 x64](https://jrsoftware.org/isdl.php) 封装。UPX 4.2.0+ 应位于 `PATH`，也可通过 `SHANGBACKGROUND_UPX_BINARY` 指定：
 
 ```bash
-# 先构建 PyInstaller standalone 产物
-python build_tools/build.py --tool pyinstaller --target windows --profile lite --mode standalone --mpv-runtime system --arch x86_64
+# 构建并验证 Nuitka full standalone；缺少 UPX 时直接失败
+python build_tools/build.py --tool nuitka --target windows --profile full --mode standalone --mpv-runtime system --arch x86_64 --upx
 
 # 用同一份产物生成 setup.exe（输出在 dist-installer/windows/<variant>/）
-python build_tools/build.py installer --target windows --profile lite --arch x86_64
+python build_tools/build.py installer --tool nuitka --target windows --profile full --arch x86_64
 
 # 仅查看 ISCC 命令，不真正调用编译器
-python build_tools/build.py installer --dry-run
+python build_tools/build.py installer --tool nuitka --profile full --arch x86_64 --dry-run --skip-validate
 ```
 
 CI 在 `release.yml` 中会自动在 Windows runner 上安装 Inno Setup、调用 `installer` 子命令，并把 `ShangBackground-v<version>-windows-x86_64-setup.exe` 作为 Release 资产发布。
@@ -153,7 +153,7 @@ python build_tools/build.py --tool pyinstaller --target windows --profile full \
 - `CodeQL`：在推送、Pull Request 和每周计划任务中执行 Python 安全分析；
 - `Dependency review`：阻止 Pull Request 引入已知高危依赖，并由 Dependabot 每周维护 Python 与 Action 版本。
 
-自动发布默认生成 Windows x86_64、Linux x86_64、macOS x86_64、macOS arm64 四个运行包、一个经重新解压验证的源码包和 `SHA256SUMS.txt`。稳定自动产物使用 `lite` 配置，保留 Bing、更新、字体与热键，暂不包含需要额外原生运行时或目标桌面真机验收的视频和 HTML 模块。完整流程见 [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md)。
+自动发布生成 Windows x86_64、Linux x86_64、macOS x86_64、macOS arm64 的 Nuitka full standalone、Windows Inno Setup 7 安装包、源码包和 `SHA256SUMS.txt`。Windows/Linux 强制使用 UPX，macOS 按平台约束禁用 UPX。完整流程见 [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md)。
 
 ## 文档
 

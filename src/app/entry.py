@@ -107,6 +107,8 @@ def main() -> int:
             core.log("现有实例尚未接受本地 IPC 命令；未在第二进程执行破坏性动作")
             if not direct_action_launch and not is_action_launch:
                 core.show_message(t("不要重复运行"), t("不要重复运行，已有主界面正在运行。"))
+        if getattr(args, "quit", False) and getattr(args, "wait_for_exit", False):
+            return 0 if forwarded else 1
         return 0
 
     if _handle_action_args(args):

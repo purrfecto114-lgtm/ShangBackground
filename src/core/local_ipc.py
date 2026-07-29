@@ -10,8 +10,8 @@ ALLOWED_COMMANDS = frozenset({"show", "previous", "next", "random", "jump", "set
 MAX_MESSAGE_BYTES = 64 * 1024
 
 
-def _message(command: str, payload: Any = None) -> bytes:
-    identity = single_instance.read_identity()
+def _message(command: str, payload: Any = None, *, identity: dict[str, Any] | None = None) -> bytes:
+    identity = identity or single_instance.read_identity()
     token = str(identity.get("ipc_token") or "")
     if not token:
         raise RuntimeError("The running instance has not published an IPC token")
@@ -27,18 +27,24 @@ def _message(command: str, payload: Any = None) -> bytes:
     return raw
 
 
-def send_command(command: str, payload: Any = None, *, timeout_ms: int = 1200) -> bool:
+def send_command(
+    command: str,
+    payload: Any = None,
+    *,
+    timeout_ms: int = 1200,
+    identity: dict[str, Any] | None = None,
+) -> bool:
     """Send a command to the primary process using blocking QLocalSocket APIs."""
     try:
         from PySide6.QtNetwork import QLocalSocket
 
-        identity = single_instance.read_identity()
+        identity = identity or single_instance.read_identity()
         endpoint = str(identity.get("endpoint") or single_instance.endpoint_name())
         socket = QLocalSocket()
         socket.connectToServer(endpoint)
         if not socket.waitForConnected(max(1, int(timeout_ms))):
             return False
-        data = _message(command, payload)
+        data = _message(command, payload, identity=identity)
         if socket.write(data) < 0:
             socket.abort()
             return False

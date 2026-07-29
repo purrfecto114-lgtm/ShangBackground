@@ -67,7 +67,7 @@ startup therefore cannot masquerade as a successful desktop GUI build.
 
 ```bash
 python build_tools/build.py --tool pyinstaller --profile full --mode standalone
-python build_tools/build.py --tool nuitka --profile full --mode standalone
+python build_tools/build.py --tool nuitka --profile full --mode standalone --upx
 python build_tools/build.py --tool pyinstaller --target windows --skip-install --dry-run
 python build_tools/build.py --tool nuitka --target windows --skip-install --dry-run
 python build_tools/build.py self-test
