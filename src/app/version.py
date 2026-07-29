@@ -1,4 +1,4 @@
-"""Single source of truth for ShangBackground version metadata."""
+"""Version metadata; changes intentionally trigger the release workflow."""
 from __future__ import annotations
 
 APP_VERSION = "1.4.6"

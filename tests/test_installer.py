@@ -157,6 +157,18 @@ def test_installer_plan_resolves_for_windows_x86_64():
     assert plan.plan.variant == "lite-x86_64", plan.plan.variant
 
 
+def test_installer_auto_arch_is_windows_x86_64(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(installer_module, "normalize_arch", lambda _arch: "arm64")
+    plan = create_installer_plan(
+        target="windows",
+        profile="full",
+        arch="auto",
+        features=frozenset(),
+        dry_run=True,
+    )
+    assert plan.arch == "x86_64"
+
+
 def test_installer_plan_rejects_non_windows_targets():
     for target in ("linux", "macos"):
         with pytest.raises(RuntimeError, match="Windows-only"):

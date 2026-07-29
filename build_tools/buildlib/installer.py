@@ -190,7 +190,9 @@ def create_installer_plan(
     if not LICENSE_PATH.is_file():
         raise RuntimeError(f"License agreement file is missing: {LICENSE_PATH}")
 
-    arch = normalize_arch(arch)
+    # This builder emits a Windows x86_64 installer even when its dry-run is
+    # planned on a macOS/Linux ARM host.
+    arch = "x86_64" if arch == "auto" else normalize_arch(arch)
     if arch != "x86_64":
         raise RuntimeError(
             f"The current Inno Setup script supports only x86_64 bundles; got arch={arch!r}."
