@@ -145,14 +145,21 @@ def _start_process(cmd: list[str], fail_name: str, ipc_path: str = "") -> tuple[
     try:
         process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         _CURRENT_PROC = process
+        try:
+            ownership = process_state.write_state(
+                PID_FILE, process.pid, kind=PROCESS_KIND,
+                extra={"ipc_path": ipc_path or "", "command": list(cmd)},
+            )
+            if isinstance(ownership, dict) and ownership.get("identity_unavailable"):
+                raise OSError("无法确认新播放器进程身份")
+        except Exception as exc:
+            _terminate_failed_process(process)
+            process_state.remove_state(PID_FILE)
+            return False, f"{fail_name} 无法记录进程所有权，已终止新进程：{exc}"
         if not _wait_for_ipc(process, ipc_path):
             _terminate_failed_process(process)
             process_state.remove_state(PID_FILE)
             return False, f"{fail_name} 未在限定时间内建立控制通道，已自动回退。"
-        process_state.write_state(
-            PID_FILE, process.pid, kind=PROCESS_KIND,
-            extra={"ipc_path": ipc_path or "", "command": list(cmd)},
-        )
         try:
             with open(IPC_FILE, "w", encoding="utf-8") as fh:
                 fh.write(ipc_path or "")

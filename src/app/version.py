@@ -1,7 +1,7 @@
 """Version metadata; changes intentionally trigger the release workflow."""
 from __future__ import annotations
 
-APP_VERSION = "1.4.6"
+APP_VERSION = "1.5.0"
 
 _version_parts = tuple(int(part) for part in APP_VERSION.split("."))
 if len(_version_parts) != 3:

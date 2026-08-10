@@ -163,12 +163,14 @@ def test_release_workflow_does_not_force_prerelease():
 
 
 def test_release_workflow_smoke_tests_frozen_binary():
-    """``release.yml`` must run the frozen binary with --version after the
-    build to verify it actually starts and reports the correct version.
-    This catches broken Nuitka builds that compile but fail at startup."""
+    """The frozen --version probe is a release gate, not a best-effort warning."""
     release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
-    assert "Smoke-test frozen binary" in release_workflow
-    assert "--version" in release_workflow
+    step = release_workflow.split("- name: Smoke-test frozen binary", 1)[1].split("- name: Build Windows setup.exe", 1)[0]
+    assert "--version" in step
+    assert "PYTHONPATH=src" in step
+    assert "|| true" not in step
+    assert "exit 1" in step
+    assert "this may be normal if the binary requires a display" not in step
 
 
 def test_release_workflow_uses_ldconfig_for_libxcb_cursor():

@@ -17,9 +17,14 @@ class RelaunchService:
     _SKIP_FLAGS = {
         "--previous", "--next", "--random", "--show", "--hide",
         "--jump-to-wallpaper", "--from-context-menu", "--sync-context-on-start",
-        "--inherit-session-wallpaper",
+        "--inherit-session-wallpaper", "--context-menu-dispatched-child",
+        "--quit", "--wait-for-exit", "--internal-video-player", "--muted",
     }
-    _SKIP_VALUE_FLAGS = {"--set-wallpaper"}
+    _SKIP_VALUE_FLAGS = {
+        "--set-wallpaper",
+        "--relaunch-wait-pid",
+        "--relaunch-wait-created-at",
+    }
 
     def __init__(
         self,
@@ -62,7 +67,6 @@ class RelaunchService:
             return False
 
     def restart(self, extra_args: Sequence[str] | None = None) -> bool:
-        guard_released = False
         try:
             if self._is_windows:
                 executable, base_args = self._windows_command_parts()
@@ -70,26 +74,27 @@ class RelaunchService:
                 workdir = os.path.dirname(executable) or os.getcwd()
             else:
                 executable, base_args = self._command_parts()
-                relaunch_args = [*base_args, *(str(arg) for arg in (extra_args or ()))]
-                workdir = os.getcwd()
+                relaunch_args = [*base_args, *self.filtered_restart_args(extra_args)]
+                workdir = os.path.abspath(str(self._base_dir() or os.getcwd()))
             self._capture_session()
             self._persist_session()
-            self._release_guard()
-            guard_released = True
-            self._cleanup_tray()
+            relaunch_args.extend(self._handoff_wait_args())
+            # Launch the replacement *before* irreversible cleanup.  The child
+            # waits for this exact parent process to exit before attempting the
+            # singleton lock, so a spawn/UAC failure leaves the current GUI fully
+            # alive instead of trying to reconstruct an already-finalized exit.
             self._popen([executable, *relaunch_args], cwd=workdir, close_fds=True)
+            self._release_guard()
+            self._cleanup_tray()
             self._log(f"已请求普通重启: exe={executable}; args={relaunch_args}; cwd={workdir}")
             return True
         except Exception as exc:
-            if guard_released:
-                self._safe_recover()
             self._log(f"普通重启失败: {exc}", level="ERROR", exc_info=exc)
             return False
 
     def restart_as_admin(self, extra_args: Sequence[str] | None = None) -> bool:
         if not self._is_windows or self.is_windows_admin():
             return self.restart(extra_args)
-        guard_released = False
         try:
             executable, base_args = self._windows_command_parts()
             relaunch_args = [*base_args, *self.filtered_restart_args(extra_args)]
@@ -97,39 +102,55 @@ class RelaunchService:
             self._log(f"准备管理员重启: exe={executable}; args={relaunch_args}; cwd={workdir}")
             self._capture_session()
             self._persist_session()
-            self._release_guard()
-            guard_released = True
-            self._cleanup_tray()
+            relaunch_args.extend(self._handoff_wait_args())
             ok, detail = self._shell_execute_runas(executable, relaunch_args, workdir)
             if not ok:
+                # Nothing irreversible has happened yet.  UAC cancellation or
+                # ShellExecute failure simply returns control to the live GUI.
                 self._log(f"提权重启失败: {detail}", level="ERROR")
-                self._safe_recover()
                 return False
+            self._release_guard()
+            self._cleanup_tray()
             self._log(f"已请求管理员权限重启: {detail}")
             return True
         except Exception as exc:
-            if guard_released:
-                self._safe_recover()
             self._log(f"提权重启异常: {exc}", level="ERROR", exc_info=exc)
             return False
 
+    def _handoff_wait_args(self) -> list[str]:
+        """Arguments that make the replacement wait for this process to exit."""
+        pid = int(os.getpid())
+        args = ["--relaunch-wait-pid", str(pid)]
+        try:
+            import psutil
+            created_at = float(psutil.Process(pid).create_time())
+        except Exception:
+            created_at = 0.0
+        if created_at > 0:
+            args.extend(["--relaunch-wait-created-at", f"{created_at:.6f}"])
+        return args
+
     def filtered_restart_args(self, extra_args: Sequence[str] | None = None) -> list[str]:
-        requested = [str(arg) for arg in (extra_args or ())]
-        current: list[str] = []
-        skip_next = False
-        for raw in list(self._argv())[1:]:
-            arg = str(raw)
-            if skip_next:
-                skip_next = False
-                continue
-            if arg in self._SKIP_FLAGS:
-                continue
-            if arg in self._SKIP_VALUE_FLAGS:
-                skip_next = True
-                continue
-            if any(arg.startswith(flag + "=") for flag in self._SKIP_VALUE_FLAGS):
-                continue
-            current.append(arg)
+        def _filter(raw_args: Sequence[str]) -> list[str]:
+            result: list[str] = []
+            skip_next = False
+            for raw in raw_args:
+                arg = str(raw)
+                if skip_next:
+                    skip_next = False
+                    continue
+                if arg in self._SKIP_FLAGS:
+                    continue
+                if arg in self._SKIP_VALUE_FLAGS:
+                    skip_next = True
+                    continue
+                if any(arg.startswith(flag + "=") for flag in self._SKIP_VALUE_FLAGS):
+                    continue
+                result.append(arg)
+            return result
+
+        current = _filter(list(self._argv())[1:])
+        requested = _filter([str(arg) for arg in (extra_args or ())])
         for arg in requested:
             if arg not in current:
                 current.append(arg)

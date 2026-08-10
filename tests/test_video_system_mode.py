@@ -51,3 +51,19 @@ def test_resolve_libmpv_path_returns_none_or_path():
     from app.libmpv_runtime import resolve_libmpv_path
     result = resolve_libmpv_path()
     assert result is None or isinstance(result, str)
+
+
+def test_video_runtime_option_fallback_does_not_destructively_restart_renderer():
+    from pathlib import Path
+
+    text = Path("src/ui/main_window.py").read_text(encoding="utf-8")
+    mute_block = text.split("def on_video_muted_changed", 1)[1].split(
+        "def on_video_volume_changed", 1
+    )[0]
+    volume_block = text.split("def _apply_video_volume_live", 1)[1].split(
+        "def choose_solid_color", 1
+    )[0]
+    assert "core.start_video_wallpaper" not in mute_block
+    assert "core.start_video_wallpaper" not in volume_block
+    assert "下次视频启动时生效" in mute_block
+    assert "下次视频启动时生效" in volume_block

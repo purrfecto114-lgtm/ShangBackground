@@ -66,6 +66,16 @@ def _dispatch_internal_mode() -> int | None:
 
 
 def main() -> int:
+    # Desktop context-menu actions have an Explorer-facing latency budget.  Do
+    # this before importing app.entry/core/PySide6: forward to the already
+    # running message-only window when possible, otherwise detach a normal
+    # cold-start child and let Explorer return immediately.
+    from app.context_menu_fastpath import handle_context_menu_fastpath
+
+    context_result = handle_context_menu_fastpath()
+    if context_result is not None:
+        return context_result
+
     # Keep version and diagnostics available even when Qt is not installed, and
     # avoid importing the large runtime engine for these headless operations.
     if "--version" in sys.argv:

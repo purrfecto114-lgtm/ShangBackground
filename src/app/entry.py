@@ -24,6 +24,7 @@ from app.support import (
     _is_already_running,
     _parse_early_args,
     _release_singleton_mutex,
+    _wait_for_relaunch_parent,
     _set_windows_app_identity,
 )
 from app.startup import schedule_startup_tasks
@@ -61,6 +62,12 @@ def _read_log_enabled_from_config() -> bool:
 
 def main() -> int:
     args = _parse_early_args()
+    # A replacement process is created before the old instance performs its
+    # irreversible exit transaction.  Wait here, before config/bootstrap or the
+    # singleton check, until that exact parent has actually exited.
+    if not _wait_for_relaunch_parent(args):
+        sys.stderr.write("[entry] relaunch handoff timed out waiting for parent exit\n")
+        return 3
     # Initialize structured logging as early as possible.
     try:
         _log_level = "DEBUG" if (getattr(args, "verbose", False) or getattr(args, "debug", False)) else "INFO"
@@ -84,15 +91,6 @@ def main() -> int:
 
     # Shared source tree: platform selection follows the current host.
 
-    if not PYSIDE_AVAILABLE:
-        print(f"PySide6 不可用：{PYSIDE_IMPORT_ERROR}")
-        try:
-            from app.dependencies import prompt_install_dependencies
-            prompt_install_dependencies(None, _dependency_availability_for_pyside())
-        except Exception as exc:
-            print(f"依赖提示不可用：{exc}")
-        return 2
-
     is_action_launch = _is_action_launch(args)
     direct_action_launch = any((
         args.previous, args.next, args.random, bool(args.set_wallpaper),
@@ -109,12 +107,27 @@ def main() -> int:
                 core.show_message(t("不要重复运行"), t("不要重复运行，已有主界面正在运行。"))
         if getattr(args, "quit", False) and getattr(args, "wait_for_exit", False):
             return 0 if forwarded else 1
+        if direct_action_launch and not forwarded:
+            return 1
         return 0
 
-    if _handle_action_args(args):
+    action_exit_code = _handle_action_args(args)
+    if action_exit_code is not None:
         core.release_single_instance_mutex()
         _release_singleton_mutex()
-        return 0
+        return action_exit_code
+
+    # Pure command-line actions and IPC forwarding do not need Qt. Only gate
+    # actual GUI startup on PySide6 so headless/source automation can still
+    # receive truthful action exit codes.
+    if not PYSIDE_AVAILABLE:
+        print(f"PySide6 不可用：{PYSIDE_IMPORT_ERROR}")
+        try:
+            from app.dependencies import prompt_install_dependencies
+            prompt_install_dependencies(None, _dependency_availability_for_pyside())
+        except Exception as exc:
+            print(f"依赖提示不可用：{exc}")
+        return 2
 
     # 在窗口显示前同步记录启动前壁纸，避免幻灯片/Bing/视频启动任务抢先改变当前壁纸。
     startup_inherit_wallpaper = bool(getattr(args, "inherit_session_wallpaper", False))
@@ -214,7 +227,13 @@ def main() -> int:
                 elif command == "set_wallpaper":
                     target = os.path.abspath(os.path.expanduser(str(payload or "")))
                     if os.path.isfile(target):
-                        core.set_wallpaper(target, t("命令行设置"))
+                        if not core.switch_wallpaper_mode(
+                            "图片", updates={"single_image": target}
+                        ):
+                            core.log(
+                                "IPC 切换图片模式失败: "
+                                + (getattr(core, "last_operation_error", "") or target)
+                            )
                     else:
                         core.log(f"拒绝不存在的 IPC 壁纸路径: {target}")
                 elif command in {"previous", "next", "random"}:
@@ -308,33 +327,39 @@ def main() -> int:
             QTimer.singleShot(500, lambda: core.refresh_global_hotkeys())
         _startup_mode = normalize_mode_key(core.config.get("mode"))
         if _startup_mode == "幻灯片放映" and core.config.get("slide_folder"):
-            def _startup_slideshow():
-                core.stop_video_wallpaper()
-                return core.start_slideshow(True)
-            QTimer.singleShot(600, lambda: window._run_mode_transition(t("正在启动幻灯片放映…"), _startup_slideshow))
+            QTimer.singleShot(
+                600,
+                lambda: window._run_mode_transition(
+                    t("正在启动幻灯片放映…"),
+                    lambda: core.restore_configured_wallpaper_mode(
+                        "幻灯片放映", is_startup=True
+                    ),
+                ),
+            )
         elif is_feature_enabled("video") and _startup_mode == "视频" and core.config.get("video_file"):
             # 上次退出时是视频模式 → 重启后自动恢复视频壁纸。
             # 启动前先做轻量校验，避免无效路径/扩展名在首屏阶段弹错并打断 GUI。
             _video_path = str(core.config.get("video_file") or "")
             if is_supported_video_path(_video_path):
-                def _startup_video():
-                    if core.is_video_wallpaper_running():
-                        core.stop_video_wallpaper()
-                    return core.start_video_wallpaper(core.config.get("video_file"))
-                QTimer.singleShot(600, lambda: window._run_mode_transition(t("正在启动视频壁纸…"), _startup_video))
+                QTimer.singleShot(
+                    600,
+                    lambda: window._run_mode_transition(
+                        t("正在启动视频壁纸…"),
+                        lambda: core.restore_configured_wallpaper_mode("视频"),
+                    ),
+                )
             else:
                 core.log("跳过启动恢复视频壁纸：视频文件无效或格式不支持")
-        elif is_feature_enabled("html") and _startup_mode == "HTML" and core.config.get("html_file"):
-            # 上次退出时是 HTML 模式 → 重启后自动恢复 HTML 壁纸。
-            # 同样先清理可能残留的旧子进程，再启动新的渲染进程。
-            def _startup_html():
-                try:
-                    if core.is_html_wallpaper_running():
-                        core.stop_html_wallpaper()
-                except Exception as exc:
-                    core.log(f"清理残留 HTML 壁纸进程失败: {exc}")
-                return core.start_html_wallpaper(core.config.get("html_file"))
-            QTimer.singleShot(600, lambda: window._run_mode_transition(t("正在启动 HTML 壁纸…"), _startup_html))
+        elif is_feature_enabled("html") and _startup_mode == "HTML" and (
+            core.config.get("html_file") or core.config.get("html_url")
+        ):
+            QTimer.singleShot(
+                600,
+                lambda: window._run_mode_transition(
+                    t("正在启动 HTML 壁纸…"),
+                    lambda: core.restore_configured_wallpaper_mode("HTML"),
+                ),
+            )
 
     # v1.4.6: 三档性能模式 → 启动任务延迟
     _perf_level = str(core.config.get("performance_level", "")).lower()

@@ -26,7 +26,7 @@ MPV_CHANNELS = ("stable", "development")
 MPV_RUNTIME_MODES = ("auto", "bundled", "system")
 MPV_ARCHES = ("x86_64", "arm64", "x86")
 MPV_REPOSITORY = "mpv-player/mpv"
-MPV_API_LATEST = f"https://api.github.com/repos/{MPV_REPOSITORY}/releases/latest"
+MPV_API_STABLE = f"https://api.github.com/repos/{MPV_REPOSITORY}/releases/latest"
 MPV_API_DEVELOPMENT = f"https://api.github.com/repos/{MPV_REPOSITORY}/releases/tags/git-release"
 _ALLOWED_DOWNLOAD_HOSTS = {
     "github.com",
@@ -184,7 +184,7 @@ def _runtime_has_payload(path: Path, target: str) -> bool:
         return False
     names = {item.name.lower() for item in path.rglob("*") if item.is_file()}
     if target == "windows":
-        return bool({"libmpv-2.dll", "mpv-2.dll", "libmpv.dll"} & names or "mpv.exe" in names)
+        return "mpv.exe" in names
     if target == "linux":
         return any(name.startswith("libmpv.so") for name in names) or "mpv" in names
     return any(name.startswith("libmpv") and name.endswith(".dylib") for name in names) or "mpv" in names
@@ -239,7 +239,7 @@ def _direct_runtime_binary(path: Path, target: str) -> bool:
         return False
     names = {item.name.lower() for item in path.iterdir() if item.is_file()}
     if target == "windows":
-        return bool({"libmpv-2.dll", "mpv-2.dll", "libmpv.dll"} & names)
+        return "mpv.exe" in names
     if target == "linux":
         return any(name.startswith("libmpv.so") for name in names)
     return any(name.startswith("libmpv") and name.endswith(".dylib") for name in names)
@@ -426,7 +426,8 @@ def resolve_build_runtime(
         raise RuntimeError(
             f"Bundled mpv runtime was requested but no valid matching payload is installed under {root} "
             f"or {project / 'src' / 'bin' / 'mpv'}. Run: python build_tools/build.py mpv download "
-            f"--target {target} --arch {normalized_arch} --channel stable." + detail
+            f"--target {target} --arch {normalized_arch} --channel stable, "
+            "or provide a locally verified runtime payload." + detail
         )
     if requested == "auto" and require_bundled and effective_profile(profile) == "full":
         root = runtime_arch_root(project, target, normalized_arch)
@@ -471,7 +472,10 @@ def build_output_profile_name(base_name: str, selection: MpvBuildSelection) -> s
 
 def _api_url(channel: str) -> str:
     if channel == "stable":
-        return MPV_API_LATEST
+        # GitHub's /releases/latest endpoint excludes prereleases and points at
+        # mpv's current stable release, whose release page publishes CI-built
+        # binary assets alongside the signed source tag.
+        return MPV_API_STABLE
     if channel == "development":
         return MPV_API_DEVELOPMENT
     raise ValueError(f"Unsupported mpv channel: {channel}")
@@ -521,12 +525,10 @@ def _asset_patterns(target: str, arch: str) -> tuple[re.Pattern[str], ...]:
             "Automatic mpv binary download is currently supported for Windows only. "
             "Linux builds should use a system package or a locally built libmpv; macOS uses AVFoundation."
         )
-    # The official release workflow publishes Clang/MSVC archives for modern
-    # 64-bit Windows targets.  The 32-bit i686 build is produced by the GCC
-    # MinGW job and therefore has a different filename.  Keep the patterns
-    # ordered so the direct ctypes runtime prefers the MSVC layout when both
-    # x86_64 variants are present, while still tolerating a future GCC-only
-    # release.
+    # mpv publishes Windows CI-built archives on both stable release pages and
+    # the ``git-release`` development prerelease. Keep filename matching
+    # isolated here so a workflow naming change fails clearly instead of
+    # silently selecting an unrelated release asset.
     names: dict[str, tuple[str, ...]] = {
         "x86_64": (
             r"x86_64-pc-windows-msvc\.zip",
@@ -713,9 +715,12 @@ def verify_runtime_directory(
     if total_size > _MAX_RUNTIME_BYTES:
         errors.append(f"runtime is unexpectedly large: {total_size} bytes")
     if target == "windows":
-        libraries = [item for item in files if item.name.lower() in {"libmpv-2.dll", "mpv-2.dll", "libmpv.dll"}]
-        if not libraries:
-            errors.append("libmpv DLL is missing")
+        executables = [item for item in files if item.name.lower() == "mpv.exe"]
+        if not executables:
+            errors.append(
+                "mpv.exe is missing; v1.5.0 Windows bundles require the executable + JSON IPC runtime "
+                "instead of generating a new full-application libmpv child bundle"
+            )
         expected_machine = {"x86_64": 0x8664, "arm64": 0xAA64, "x86": 0x014C}[arch]
         native_files = [item for item in files if item.suffix.lower() in {".dll", ".exe"}]
         for binary in native_files:
@@ -792,13 +797,18 @@ def _runtime_id(release: Mapping[str, object], asset_name: str, channel: str) ->
 def _copy_runtime_payload(extracted: Path, destination: Path, target: str) -> None:
     if target != "windows":
         raise RuntimeError("Automatic payload reduction is implemented for Windows archives only")
-    lib_candidates = [
+    _ = [
         item
         for item in extracted.rglob("*")
         if item.is_file() and item.name.lower() in {"libmpv-2.dll", "mpv-2.dll", "libmpv.dll"}
     ]
-    if not lib_candidates:
-        raise RuntimeError("Downloaded archive does not contain libmpv-2.dll")
+    exe_candidates = [
+        item for item in extracted.rglob("*") if item.is_file() and item.name.lower() == "mpv.exe"
+    ]
+    if not exe_candidates:
+        raise RuntimeError(
+            "Downloaded Windows archive does not contain mpv.exe; refusing to create a libmpv-only v1.5.0 bundle"
+        )
     # Preserve only runtime binaries.  Archives normally keep these beside
     # libmpv, but recursive discovery also handles a future nested ``bin``
     # folder.  Files are flattened because Windows resolves sibling DLLs most
@@ -1030,7 +1040,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     download_parser = subparsers.add_parser(
         "download",
-        help="Download and install an official first-party MPV CI runtime.",
+        help="Download and install an mpv first-party Windows runtime from an official release.",
         formatter_class=BuildHelpFormatter,
     )
     add_location(download_parser)
@@ -1093,7 +1103,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "download":
             print_banner("Prepare MPV runtime", f"{target} · {arch} · {args.channel}")
-            print(f"Resolving official MPV {args.channel} release...")
+            print(f"Resolving mpv {args.channel} runtime channel...")
             installed = download_runtime(
                 project,
                 target=target,

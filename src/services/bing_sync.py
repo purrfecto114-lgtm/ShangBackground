@@ -44,7 +44,12 @@ class BingSyncWorker(QObject):
                 reason_text = f"：{reason}" if reason else ""
                 self.finished.emit(False, t("下载必应壁纸失败") + reason_text, "")
                 return
-            core.set_wallpaper(path, t("必应今日壁纸"))
+            if not core.switch_wallpaper_mode(
+                "图片", updates={"single_image": path}
+            ):
+                reason = getattr(core, "last_operation_error", "") or t("设置必应壁纸失败")
+                self.finished.emit(False, reason, "")
+                return
             success_msg = t("已设置必应壁纸")
             self.finished.emit(True, f"{success_msg}：{info.title} / {info.resolution}（{_resolution_source_label(info.resolution_source)}）", path)
         except Exception as e:

@@ -42,6 +42,7 @@ except ImportError:  # pragma: no cover - psutil optional
 _DATA_DIR = os.fspath(APP_DATA_DIR)
 os.makedirs(_DATA_DIR, exist_ok=True)
 from platform_adapters import process_state
+from platform_adapters.windows_job import attach_process_kill_on_close
 from platform_adapters.html_runtime import (
     missing_runtime_modules,
     normalize_html_source,
@@ -59,6 +60,7 @@ _SUBPROCESS_LOG = app_data_path("html_wallpaper_subprocess.log")
 # stop_html_wallpaper.  Without this, old renderer processes can linger
 # and continue using CPU/GPU resources.
 _CURRENT_PROC: subprocess.Popen | None = None  # type: ignore
+_CURRENT_JOB = None
 
 
 def _child_env(role: str) -> dict[str, str]:
@@ -145,10 +147,12 @@ def get_subprocess_log_path() -> str:
 
 def stop_html_wallpaper() -> None:
     """Stop only the exact renderer process previously launched by this app."""
-    global _CURRENT_PROC
+    global _CURRENT_PROC, _CURRENT_JOB
     _hw_logger().info("stop_html_wallpaper called, current pid=%s", _read_pid())
     proc = _CURRENT_PROC
+    job = _CURRENT_JOB
     _CURRENT_PROC = None
+    _CURRENT_JOB = None
 
     # Persisted identity handles crash recovery and terminates the verified
     # process tree.  Legacy PID-only state is intentionally never destructive.
@@ -169,6 +173,11 @@ def stop_html_wallpaper() -> None:
         except Exception:
             pass
 
+    if job is not None:
+        try:
+            job.close()
+        except Exception:
+            pass
     process_state.remove_state(PID_FILE)
     try:
         clear_options()
@@ -255,7 +264,7 @@ def start_html_wallpaper(path: str) -> Tuple[bool, str]:
         cmd.append("--auto-pause")
     # 启动参数必须和运行时控制文件保持一致，否则子进程首轮轮询前
     # 会短暂使用默认 click-through 状态，交互式 HTML 壁纸体验不稳定。
-    global _CURRENT_PROC
+    global _CURRENT_PROC, _CURRENT_JOB
     # v1.4.8: 把子进程 stderr 重定向到日志文件。
     # 自动删除：日志文件超过 512KB 时截断保留最后 128KB，避免无限增长。
     log_file = None
@@ -301,7 +310,23 @@ def start_html_wallpaper(path: str) -> Tuple[bool, str]:
         return False, str(exc)
     # Store the process for proper termination later and write its PID to disk.
     _CURRENT_PROC = proc
-    _write_state(proc.pid, path=str(path))
+    _CURRENT_JOB = attach_process_kill_on_close(
+        proc,
+        log=lambda message: _hw_logger().warning(message),
+    )
+    try:
+        _write_state(proc.pid, path=str(path))
+    except Exception:
+        # Without durable ownership state, do not leave a renderer tree behind.
+        if _CURRENT_JOB is not None:
+            _CURRENT_JOB.close()
+            _CURRENT_JOB = None
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        _CURRENT_PROC = None
+        raise
     # Keep the parent-side handle open briefly so startup failures are captured,
     # then close it to avoid leaking a descriptor for the lifetime of the app.
     deadline = time.monotonic() + 1.5
@@ -315,6 +340,9 @@ def start_html_wallpaper(path: str) -> Tuple[bool, str]:
             pass
     if exit_code is not None:
         _CURRENT_PROC = None
+        if _CURRENT_JOB is not None:
+            _CURRENT_JOB.close()
+            _CURRENT_JOB = None
         try:
             Path(PID_FILE).unlink(missing_ok=True)
         except OSError:

@@ -2,7 +2,6 @@
 from __future__ import annotations
 import os
 import plistlib
-import shutil
 import subprocess
 import sys
 import threading
@@ -10,6 +9,7 @@ from collections import OrderedDict, deque
 from datetime import datetime
 from pathlib import Path
 from core import engine as core
+from app.performance import performance_profile
 from app.config import (
     DEFAULT_THEME_COLOR,
     MODE_KEYS,
@@ -84,6 +84,7 @@ from ui.video_focus_mixin import VideoFocusMixin
 from ui.source_inputs import SourceInputController
 from ui.widgets import CompactSpinBox, ShangComboBox
 from ui.platform_ui_policy import get_platform_ui_policy
+from platform_adapters.hotkey_bindings import parse_hotkey
 from app.scaling import apply_dpi_environment, clamp_dpi_scale, dpi_percent
 if is_feature_enabled("updates"):
     from services.updates import GITHUB_LATEST_RELEASE_URL, GITHUB_PROJECT_URL, UpdateChecker
@@ -700,6 +701,11 @@ class _SharedShangBackgroundWindow(QMainWindow):
         if self._core_busy:
             self.set_status(t("已有壁纸操作正在执行，请稍候…"))
             return None
+        # Mark this worker so completion can reconcile the combo/control state
+        # with the *committed* config.  Mode activation is transactional in the
+        # core service; the UI must not treat the requested combo value as truth
+        # before that transaction succeeds.
+        self._mode_transition_pending = True
         self._core_busy = True
         try:
             core.clear_cancel_operations()
@@ -793,14 +799,16 @@ class _SharedShangBackgroundWindow(QMainWindow):
         except Exception as exc:
             core.log_error("延迟保存配置迁移失败", exc)
 
-        # v1.4.6: 三档性能模式 → 启动延迟
-        level = self._perf_level()
-        if level == "power_saver":
-            _d_preview, _d_bing, _d_native, _d_tray, _d_autostart, _d_bingtask, _d_status = 400, 1200, 700, 950, 2400, 2800, 1700
-        elif level == "performance":
-            _d_preview, _d_bing, _d_native, _d_tray, _d_autostart, _d_bingtask, _d_status = 260, 900, 520, 720, 1900, 2200, 1300
-        else:
-            _d_preview, _d_bing, _d_native, _d_tray, _d_autostart, _d_bingtask, _d_status = 100, 320, 260, 420, 1500, 1250, 950
+        # Central policy keeps the three mode semantics monotonic and identical
+        # across platforms. Balanced preserves the pre-1.5 default timings.
+        profile = performance_profile(self._perf_level())
+        _d_preview = profile.preview_startup_ms
+        _d_bing = profile.bing_startup_ms
+        _d_native = profile.native_effect_startup_ms
+        _d_tray = profile.tray_startup_ms
+        _d_autostart = profile.autostart_prompt_ms
+        _d_bingtask = profile.bing_task_startup_ms
+        _d_status = profile.status_startup_ms
 
         def _later(delay_ms: int, callback):
             QTimer.singleShot(delay_ms, lambda: self._run_startup_callback(callback))
@@ -829,13 +837,7 @@ class _SharedShangBackgroundWindow(QMainWindow):
                 pass
 
     def _preview_poll_interval(self) -> int:
-        # v1.4.6: 三档性能模式 → 预览轮询间隔
-        level = self._perf_level()
-        if level == "power_saver":
-            return 4000
-        if level == "performance":
-            return 3000
-        return 1200  # balanced (默认)
+        return performance_profile(self._perf_level()).preview_poll_ms
 
     def _perf_level(self) -> str:
         """返回当前性能模式: 'power_saver' / 'balanced' / 'performance'."""
@@ -1923,19 +1925,17 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
 
     def _add_home_platform_action_panel(self, right: QVBoxLayout) -> None:
         policy = self._platform_ui_policy()
-        if not policy.show_desktop_context_menu and not is_feature_enabled("hotkeys"):
+        # ``ctx_*`` flags control Windows DesktopBackground shell verbs.  They
+        # are not global-hotkey enable switches.  Linux/macOS already have the
+        # dedicated global-hotkey settings page below, so rendering this panel
+        # there creates duplicated controls that cannot configure anything.
+        if not policy.show_desktop_context_menu:
             return
-        if policy.show_desktop_context_menu:
-            panel = QGroupBox(t("右键菜单"))
-            panel.setMinimumWidth(360)
-            layout = QVBoxLayout(panel)
-            layout.setContentsMargins(10, 18, 10, 10)
-            layout.setSpacing(6)
-        else:
-            panel = QGroupBox(t("全局热键"))
-            layout = QVBoxLayout(panel)
-            layout.setContentsMargins(10, 18, 10, 10)
-            layout.setSpacing(6)
+        panel = QGroupBox(t("右键菜单"))
+        panel.setMinimumWidth(360)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(10, 18, 10, 10)
+        layout.setSpacing(6)
 
         self.ctx_prev = QCheckBox()
         self.ctx_next = QCheckBox()
@@ -1950,11 +1950,10 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             layout.addWidget(checkbox)
         self._refresh_context_shortcut_labels()
 
-        if policy.show_desktop_context_menu:
-            sync_button = QPushButton(t("同步右键菜单"))
-            sync_button.setProperty("secondary", True)
-            sync_button.clicked.connect(self.register_context_with_prompt)
-            layout.addWidget(sync_button)
+        sync_button = QPushButton(t("同步右键菜单"))
+        sync_button.setProperty("secondary", True)
+        sync_button.clicked.connect(self.register_context_with_prompt)
+        layout.addWidget(sync_button)
         right.addWidget(panel)
 
     def _add_global_hotkey_settings_page(self, add_settings_page) -> None:
@@ -1969,8 +1968,6 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         shortcut_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
         shortcut_form.setHorizontalSpacing(14)
         shortcut_form.setVerticalSpacing(12)
-        self.ctx_shortcut_edits = {}
-        self.ctx_shortcut_buttons = {}
         self.ctx_shortcut_current_labels = {}
 
         for action, label, _default_key, _cfg_key, _widget_name in self._context_action_defs():
@@ -1984,7 +1981,6 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             record_button.clicked.connect(
                 lambda checked=False, action=action: self.record_context_hotkey(action)
             )
-            self.ctx_shortcut_buttons[action] = record_button
             row_layout.addWidget(record_button)
             clear_button = QPushButton(t("清除"))
             clear_button.setProperty("secondary", True)
@@ -4781,11 +4777,19 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
     def _on_core_finished(self, ok: bool, message: str, _result):
         self._core_busy = False
         self._core_worker_thread = None
+        mode_transition = bool(getattr(self, "_mode_transition_pending", False))
+        self._mode_transition_pending = False
         self._schedule_preview_refresh()
-        # 壁纸启停后刷新控件状态——尤其是 HTML 停止/重启按钮，
-        # 它们的 enabled 取决于壁纸是否正在运行。
+        # 壁纸启停后刷新控件状态——尤其是 HTML 停止/重启按钮。
+        # 对模式事务还要把下拉框拉回 core.config 的最终值：成功时确认
+        # 新模式，失败/补偿回滚时恢复旧模式，避免“界面说已切换、运行态没切换”。
         try:
-            self.update_control_states()
+            if mode_transition:
+                self._sync_mode_ui_from_config()
+                if self.tray is not None:
+                    QTimer.singleShot(0, self.create_or_update_tray)
+            else:
+                self.update_control_states()
         except Exception:
             pass
         if getattr(self, "_pending_static_wallpaper_list_reset", False):
@@ -4812,85 +4816,67 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                 QTimer.singleShot(0, lambda fn=fn, args=args: self.run_core(fn, *args))
 
 
+    def _sync_mode_ui_from_config(self):
+        """Reconcile mode widgets with the last successfully committed mode."""
+        canonical = normalize_mode_key(core.config.get("mode", "幻灯片放映"))
+        combo = getattr(self, "mode_combo", None)
+        if self._is_qobject_alive(combo):
+            self._set_combo_current_data(combo, canonical)
+        self.update_control_states()
+
+    def _validated_mode_source_update(self, binding_attr: str) -> dict[str, object] | None:
+        """Validate a mode source without persisting it ahead of activation."""
+        binding = getattr(self, binding_attr, None)
+        if binding is None:
+            return {}
+        result = binding.validate()
+        if not result.valid:
+            return None
+        return {binding.key: result.value}
+
     def on_mode_changed(self, _index=None):
         if getattr(self, "_refreshing_from_config", False):
             return
-        mode_key = normalize_mode_key(self.mode_combo.currentData() if self._is_qobject_alive(self.mode_combo) else _index)
-        core.config["mode"] = mode_key
-        core.save_config()
-        self.update_control_states()
-        if self.tray is not None:
-            QTimer.singleShot(0, self.create_or_update_tray)
-        self.set_status(t("正在切换模式…"))
+        # A combo click while another wallpaper transaction is still running
+        # must not leave the UI pointing at a mode that was never requested.
+        if self._core_busy:
+            self._sync_mode_ui_from_config()
+            self.set_status(t("已有壁纸操作正在执行，请稍候…"))
+            return
 
+        mode_key = normalize_mode_key(
+            self.mode_combo.currentData() if self._is_qobject_alive(self.mode_combo) else _index
+        )
+
+        # Validate source text, but stage it together with the mode change so a
+        # failed destructive renderer replacement can restore the previous
+        # source as well as the previous mode/runtime.
+        updates: dict[str, object] = {}
         if mode_key == "幻灯片放映":
-            folder = self._slide_folder_source.commit() if hasattr(self, "_slide_folder_source") else core.config.get("slide_folder")
-
-            def _work():
-                core.stop_video_wallpaper()
-                if folder and os.path.isdir(folder):
-                    return core.restart_slideshow()
-                return True
-            self._run_mode_transition(t("正在切换幻灯片放映…"), _work)
-        elif mode_key == "图片":
-            img = core.config.get("single_image")
-            if img and os.path.exists(img):
-                def _work():
-                    core.stop_slideshow()
-                    core.stop_video_wallpaper()
-                    return core.set_wallpaper(img, t("切换单张图片模式"))
-                self._run_mode_transition(t("正在切换单张图片…"), _work)
-            else:
-                def _work():
-                    core.stop_slideshow()
-                    core.stop_video_wallpaper()
-                    return True
-                self._run_mode_transition(t("正在停止动态壁纸…"), _work)
-                self._schedule_preview_refresh()
+            staged = self._validated_mode_source_update("_slide_folder_source")
         elif mode_key == "视频":
-            video = self._video_source.commit() if hasattr(self, "_video_source") else core.config.get("video_file")
-            if video and os.path.exists(video):
-                def _work():
-                    core.stop_slideshow()
-                    core.stop_video_wallpaper()
-                    return core.start_video_wallpaper(video)
-                self._run_mode_transition(t("正在切换视频壁纸…"), _work)
-            else:
-                def _work():
-                    core.stop_slideshow()
-                    core.stop_video_wallpaper()
-                    return True
-                self._run_mode_transition(t("正在停止动态壁纸…"), _work)
-                self._schedule_preview_refresh()
+            staged = self._validated_mode_source_update("_video_source")
         elif mode_key == "HTML":
-            path = self._html_source.commit() if hasattr(self, "_html_source") else core.config.get("html_file")
-            if path:
-                def _work():
-                    core.stop_slideshow()
-                    core.stop_video_wallpaper()
-                    return core.start_html_wallpaper(path)
-                self._run_mode_transition(t("正在切换 HTML 壁纸…"), _work)
-            else:
-                def _work():
-                    core.stop_slideshow()
-                    core.stop_video_wallpaper()
-                    try:
-                        core.stop_html_wallpaper()
-                    except Exception:
-                        pass
-                    return True
-                self._run_mode_transition(t("正在停止动态壁纸…"), _work)
-                self._schedule_preview_refresh()
-        elif mode_key == "纯色":
-            def _work():
-                core.stop_slideshow()
-                core.stop_video_wallpaper()
-                return core.apply_solid()
-            self._run_mode_transition(t("正在切换纯色壁纸…"), _work)
-        elif mode_key == "渐变":
-            self.apply_gradient_wallpaper()
+            staged = self._validated_mode_source_update("_html_source")
+            if staged is not None:
+                staged.update(self._html_runtime_options_from_ui())
+                staged = {
+                    "html_file": staged.get("html_file", ""),
+                    "html_auto_pause": staged.get("auto_pause", True),
+                    "html_frame_rate": staged.get("frame_rate", 30),
+                }
         else:
-            self._schedule_preview_refresh()
+            staged = {}
+        if staged is None:
+            self._sync_mode_ui_from_config()
+            return
+        updates.update(staged)
+
+        self.set_status(t("正在切换模式…"))
+        self._run_mode_transition(
+            t("正在切换模式…") + " " + self._mode_display_label(mode_key),
+            lambda: core.switch_wallpaper_mode(mode_key, updates=updates),
+        )
 
     def _mode_display_label(self, mode_key: str) -> str:
         canonical = normalize_mode_key(mode_key)
@@ -4919,11 +4905,17 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         if self._is_qobject_alive(combo):
             idx = combo.findData(canonical)
             if idx >= 0:
+                if self._core_busy:
+                    self._sync_mode_ui_from_config()
+                    self.set_status(t("已有壁纸操作正在执行，请稍候…"))
+                    return False
                 if combo.currentIndex() != idx:
                     combo.setCurrentIndex(idx)
-                else:
+                elif normalize_mode_key(core.config.get("mode")) != canonical:
                     self.on_mode_changed(idx)
-                self.set_status(t("已切换到") + "：" + self._mode_display_label(canonical))
+                # setCurrentIndex() synchronously enters on_mode_changed(), which
+                # starts an asynchronous transaction.  Returning True here means
+                # "request accepted", not "transition already succeeded".
                 return True
         ok = core.switch_wallpaper_mode(canonical)
         self.set_status((t("已切换到") if ok else t("切换失败")) + "：" + self._mode_display_label(canonical))
@@ -4965,13 +4957,15 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         self.run_core(core.set_fit_mode, fit_key)
 
     def start_slideshow_from_gui(self):
-        folder = self._slide_folder_source.commit(required=True, show_dialog=True)
-        if not folder:
+        result = self._slide_folder_source.validate(required=True, show_dialog=True)
+        if not result.valid:
             return
-        core.config["mode"] = "幻灯片放映"
-        self._set_combo_current_data(self.mode_combo, "幻灯片放映")
-        core.save_config()
-        self.run_core(core.start_slideshow)
+        self._run_mode_transition(
+            t("正在切换幻灯片放映…"),
+            lambda: core.switch_wallpaper_mode(
+                "幻灯片放映", updates={"slide_folder": result.value}
+            ),
+        )
 
     def choose_folder(self):
         folder = QFileDialog.getExistingDirectory(self, t("选择壁纸文件夹"), self.folder_edit.text() or str(Path.home()))
@@ -5023,16 +5017,13 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         path, _ = QFileDialog.getOpenFileName(self, t("选择图片"), str(Path.home()), t("图片文件 (*.jpg *.jpeg *.png *.bmp);;所有文件 (*.*)"))
         if not path:
             return
-        core.config["single_image"] = path
-        core.config["mode"] = "图片"
         self.single_edit.setText(path)
-        self._set_combo_current_data(self.mode_combo, "图片")
-        core.save_config()
-        def _work():
-            core.stop_slideshow()
-            core.stop_video_wallpaper()
-            return core.set_wallpaper(path, t("单张图片"))
-        self._run_mode_transition(t("正在切换单张图片…"), _work)
+        self._run_mode_transition(
+            t("正在切换单张图片…"),
+            lambda: core.switch_wallpaper_mode(
+                "图片", updates={"single_image": path}
+            ),
+        )
 
     def choose_video_file(self):
         filters = ";;".join(f"{desc} ({ext})" for desc, ext in get_video_filetypes(t)) + ";;" + t("所有文件 (*.*)")
@@ -5159,36 +5150,26 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             except Exception as exc:
                 core.log(f"同步 HTML 壁纸选项失败({runtime_key}): {exc}")
 
-    def _save_html_wallpaper_config_from_ui(self, path: str | None = None) -> str:
-        target = (path or self._html_current_path_from_ui()).strip()
-        options = self._html_runtime_options_from_ui()
-        if hasattr(self, "html_edit") and target:
-            self.html_edit.setText(target)
-        core.config["html_file"] = target
-        core.config["mode"] = "HTML"
-        core.config["html_auto_pause"] = options["auto_pause"]
-        core.config["html_frame_rate"] = options["frame_rate"]
-        self._set_combo_current_data(self.mode_combo, "HTML")
-        core.save_config()
-        self._sync_html_runtime_options(options)
-        return target
-
     def _run_html_wallpaper_from_gui(self, path: str | None = None, *, restart: bool = False, status_text: str | None = None) -> None:
         if path is not None and hasattr(self, "html_edit"):
             self.html_edit.setText(str(path))
-        target = self._html_source.commit(required=True, show_dialog=True)
-        if not target:
+        result = self._html_source.validate(required=True, show_dialog=True)
+        if not result.valid:
             return
-        target = self._save_html_wallpaper_config_from_ui(target)
-
-        def _work():
-            if restart:
-                return core.restart_html_wallpaper(target)
-            core.stop_slideshow()
-            core.stop_video_wallpaper()
-            return core.start_html_wallpaper(target)
-
-        self._run_mode_transition(status_text or (t("正在重启 HTML 壁纸…") if restart else t("正在切换 HTML 壁纸…")), _work)
+        options = self._html_runtime_options_from_ui()
+        updates = {
+            "html_file": result.value,
+            "html_auto_pause": options["auto_pause"],
+            "html_frame_rate": options["frame_rate"],
+        }
+        # Use the same compensated mode transaction for both first start and
+        # same-mode refresh.  The backend may stop the old renderer before the
+        # new one proves healthy; staged updates let compensation restart the
+        # old HTML source/options on failure.
+        self._run_mode_transition(
+            status_text or (t("正在重启 HTML 壁纸…") if restart else t("正在切换 HTML 壁纸…")),
+            lambda: core.switch_wallpaper_mode("HTML", updates=updates),
+        )
 
     def choose_html_file(self):
         """弹出文件选择对话框，让用户选择本地 HTML 文件并直接切换。"""
@@ -5256,20 +5237,16 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             core.log(f"写入 HTML 壁纸选项失败(frame_rate): {exc}")
 
     def start_video_wallpaper_from_gui(self):
-        path = self._video_source.commit(required=True, show_dialog=True)
-        if not path:
+        result = self._video_source.validate(required=True, show_dialog=True)
+        if not result.valid:
             return
-        core.config["mode"] = "视频"
-        self._set_combo_current_data(self.mode_combo, "视频")
-        core.save_config()
         self._refresh_video_volume_controls()
-
-        def _work():
-            core.stop_slideshow()
-            core.stop_video_wallpaper()
-            return core.start_video_wallpaper(path)
-
-        self._run_mode_transition(t("正在切换视频壁纸…"), _work)
+        self._run_mode_transition(
+            t("正在切换视频壁纸…"),
+            lambda: core.switch_wallpaper_mode(
+                "视频", updates={"video_file": result.value}
+            ),
+        )
 
     def _is_desktop_foreground(self) -> bool:
         """Return True when the desktop shell is the active foreground surface.
@@ -5314,15 +5291,16 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         core.save_config()
         # 统一刷新滑块启用状态（静音时灰显）。
         self._refresh_video_volume_controls()
-        # 优先尝试 IPC 热更新（不中断播放）；失败则回退到 stop+start 重启
+        # 优先尝试 IPC 热更新（不中断播放）。音量/静音只是运行时选项，
+        # IPC 失败时不要为了一个选项去 stop+start：Windows 后端的启动
+        # 过程会先停止当前播放器，一旦新播放器未就绪就会把原本健康的
+        # 视频壁纸也丢掉。配置已经持久化，下次正常启动会带上新值。
         if normalize_mode_key(core.config.get("mode")) == "视频" and core.config.get("video_file"):
             volume = int(core.config.get("video_volume", 100))
             if core.is_video_wallpaper_running():
                 if self._set_video_runtime_volume(bool(checked), volume):
-                    # IPC 热更新成功，无需重启播放进程
                     return
-            # IPC 不可用或失败：回退到重启
-            self.run_core(core.start_video_wallpaper, core.config.get("video_file"))
+                self.set_status(t("播放器暂不支持实时更新静音设置；新设置将在下次视频启动时生效"))
 
     def on_video_volume_changed(self, value):
         # Persist the new volume and refresh the live percentage label.
@@ -5364,9 +5342,9 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         muted = bool(core.config.get("video_muted", True))
         if self._set_video_runtime_volume(muted, volume):
             return  # IPC 热更新成功
-        # 回退：重启播放进程。重启会带来短暂闪烁，但保证音量最终生效。
-        if core.config.get("video_file"):
-            self.run_core(core.start_video_wallpaper, core.config.get("video_file"))
+        # 不做破坏性的 stop+start 回退。当前播放器继续保持健康运行，
+        # 用户的新音量值已保存，并会在下次正常启动视频壁纸时生效。
+        self.set_status(t("播放器暂不支持实时更新音量；新设置将在下次视频启动时生效"))
 
     def choose_solid_color(self):
         color = QColorDialog.getColor(QColor(core.config.get("solid_color", "#ffffff")), self, t("选择纯色"))
@@ -5474,36 +5452,15 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         display = "+".join(names.get(p.lower(), p.upper() if len(p) == 1 else p) for p in parts)
         return f"当前：{display}"
 
-    def _context_checkbox_label(self, action: str, label: str) -> str:
-        return f"{label}（{self._context_hotkey_display(action).replace('当前：', '')}）"
-
     def _refresh_context_shortcut_labels(self):
         for action, label, _default_key, _cfg_key, widget_name in self._context_action_defs():
             widget = getattr(self, widget_name, None)
             if self._is_qobject_alive(widget):
-                widget.setText(self._context_checkbox_label(action, label))
+                widget.setText(label)
             current_labels = getattr(self, "ctx_shortcut_current_labels", {})
             if action in current_labels and self._is_qobject_alive(current_labels[action]):
                 current_labels[action].setText(self._context_hotkey_display(action))
 
-
-    def on_context_hotkey_changed(self, action: str, edit: QLineEdit):
-        value = edit.text().strip().replace(" ", "")
-        if value and self._warn_duplicate_context_hotkey(action, value):
-            edit.setText("")
-            return
-        core.config[f"hotkey_{action}"] = value
-        core.save_config()
-        edit.setText(value)
-        self._refresh_context_shortcut_labels()
-        try:
-            if bool(core.config.get("global_hotkeys_enabled", False)):
-                core.refresh_global_hotkeys()
-            else:
-                core.stop_global_hotkeys()
-        except Exception as exc:
-            core.log(f"刷新全局热键失败: {exc}")
-        self.set_status(t("全局热键已保存"))
 
     def _normalized_hotkey_for_compare(self, value: str) -> str:
         """Normalize a saved hotkey string for duplicate checks."""
@@ -5540,7 +5497,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         seq_str = str(seq_str or "").strip()
         if seq_str:
             try:
-                parsed = core._pynput_hotkey_string(seq_str)
+                parsed = parse_hotkey(seq_str)
             except Exception:
                 parsed = None
             if parsed is None:
@@ -5671,15 +5628,12 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         self.set_status(t("聚焦位置检测已开启") if checked else t("聚焦位置检测已关闭"))
 
     def _update_ctx(self, key, value):
+        # Desktop shell visibility and global-hotkey registration are separate
+        # settings. Persist the shell flag only; re-registering every hotkey here
+        # caused avoidable OS hooks churn and made unrelated failures surface
+        # while the user was merely toggling a context-menu item.
         core.config[key] = bool(value)
         core.save_config()
-        try:
-            if bool(core.config.get("global_hotkeys_enabled", False)):
-                core.refresh_global_hotkeys()
-            else:
-                core.stop_global_hotkeys()
-        except Exception as exc:
-            core.log(f"刷新全局热键失败: {exc}")
 
     def ask_yes_no(self, title: str, text: str, *, default_yes: bool = True) -> bool:
         # Delegate to the shared ui.dialog_style helper to keep Yes/No
@@ -5692,14 +5646,8 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         if not core.IS_WINDOWS:
             self.set_status(t("当前平台仅支持全局热键与托盘菜单，不提供桌面右键菜单同步。"))
             return False
-        if core.IS_WINDOWS and not core.is_windows_admin():
-            if self.ask_yes_no(
-                t("需要管理员权限"),
-                t("同步桌面右键菜单需要写入 HKEY_CLASSES_ROOT。是否以管理员身份重启并继续？"),
-                default_yes=True,
-            ):
-                self.restart_as_admin(extra_args=["--sync-context-on-start"])
-            return False
+        # v1.4.7+ writes the desktop verbs under HKCU\Software\Classes, so
+        # normal synchronization is per-user and does not require elevation.
         return self.sync_context_menu(show_message=True)
 
     def sync_context_menu(self, show_message=False, only_if_needed=False):
@@ -6346,13 +6294,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         """
         def _first_refresh():
             self.update_preview()
-            level = self._perf_level()
-            if level == "power_saver":
-                delays = (800,)
-            elif level == "performance":
-                delays = (700,)
-            else:
-                delays = (300, 800)  # 平衡: 2 次（从 4 次精简）
+            delays = performance_profile(self._perf_level()).followup_refresh_ms
             for delay in delays:
                 QTimer.singleShot(delay, self.update_preview_if_changed)
         if initial_delay and initial_delay > 0:
@@ -6458,18 +6400,14 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         """Apply a recent/favorite image as one serialized mode-transition transaction."""
         if not path or not os.path.exists(path):
             return
-        self._set_combo_current_data(self.mode_combo, "图片")
         self._clear_wallpaper_list_selection()
         self._pending_static_wallpaper_list_reset = True
-
-        def _work():
-            core.config["mode"] = "图片"
-            core.stop_slideshow()
-            core.stop_video_wallpaper()
-            core.stop_html_wallpaper()
-            return core.set_wallpaper(path, source)
-
-        self._run_mode_transition(t("正在切换单张图片…"), _work)
+        self._run_mode_transition(
+            t("正在切换单张图片…"),
+            lambda: core.switch_wallpaper_mode(
+                "图片", updates={"single_image": path}
+            ),
+        )
 
     def _apply_favorite_item(self, item) -> None:
         try:
@@ -6574,9 +6512,8 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             return cached
         reader = QImageReader(path)
         reader.setAutoTransform(True)
-        _pl = self._perf_level()
-        _alloc = 48 if _pl == "power_saver" else (64 if _pl == "performance" else 128)
-        reader.setAllocationLimit(_alloc)
+        profile = performance_profile(self._perf_level())
+        reader.setAllocationLimit(profile.icon_decode_limit_mb)
         original = reader.size()
         if original.isValid():
             scaled = original.scaled(size, Qt.KeepAspectRatio)
@@ -6586,8 +6523,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         pixmap = QPixmap.fromImage(image) if not image.isNull() else QPixmap()
         cache[cache_key] = pixmap
         cache.move_to_end(cache_key)
-        _pl2 = self._perf_level()
-        max_cache_items = 32 if _pl2 == "power_saver" else (64 if _pl2 == "performance" else 96)
+        max_cache_items = profile.icon_cache_items
         while len(cache) > max_cache_items:
             cache.popitem(last=False)
         return pixmap
@@ -6650,7 +6586,10 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
 
         def _switch(path: str) -> None:
             try:
-                core.set_wallpaper(path, t("侧边栏切换"))
+                if not core.apply_browsed_wallpaper(path, t("侧边栏切换")):
+                    reason = getattr(core, "last_operation_error", "") or t("切换壁纸失败")
+                    core.log(f"侧边栏切换壁纸失败: {reason}")
+                    return
                 QTimer.singleShot(50, self.update_preview)
             except Exception as exc:
                 core.log(f"侧边栏切换壁纸失败: {exc}")
@@ -6804,16 +6743,13 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             if folder:
                 show_warning(self, t("必应壁纸"), t("请先同步壁纸，使缓存目录实际存在。"))
             return
-        core.config["slide_folder"] = folder
-        core.config["mode"] = "幻灯片放映"
         self.folder_edit.setText(folder)
-        self._set_combo_current_data(self.mode_combo, "幻灯片放映")
-        core.save_config()
-        def _work():
-            core.stop_video_wallpaper()
-            return core.restart_slideshow()
-        self._run_mode_transition(t("正在切换幻灯片放映…"), _work)
-        self.set_status(t("必应缓存已设为幻灯片来源"))
+        self._run_mode_transition(
+            t("正在切换幻灯片放映…"),
+            lambda: core.switch_wallpaper_mode(
+                "幻灯片放映", updates={"slide_folder": folder}
+            ),
+        )
 
     def save_selected_bing_as(self):
         item = self.bing_list.currentItem()
@@ -6867,7 +6803,6 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                 # progress_cb 在应用阶段也发出中间进度，进度条会从 80%
                 # 平滑过渡到 100%。
                 DOWNLOAD_WEIGHT = 0.8
-                APPLY_WEIGHT = 0.2
                 for idx, info in enumerate(infos, 1):
                     if self._current_operation_cancel.is_set():
                         self._emit_bing_result(False, t("必应壁纸同步已终止"), "")
@@ -6889,6 +6824,13 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                 if not paths:
                     self._emit_bing_result(False, t("没有同步到必应壁纸"), "")
                     return
+                # A download may have been the final blocking call in the loop.
+                # Re-check after it returns and before *any* persistence/cache
+                # cleanup/mode activation, otherwise exit restoration can race a
+                # late Bing worker.
+                if self._current_operation_cancel.is_set():
+                    self._emit_bing_result(False, t("必应壁纸同步已终止"), "")
+                    return
 
                 next_index = start_index + len(infos)
                 if next_index > int(core.config.get("bing_next_index", 0)) or not continue_from_saved:
@@ -6904,26 +6846,29 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                     self._emit_bing_result(False, t("必应壁纸同步已终止"), "")
                     return
                 if set_latest:
-                    # Bug 7/8 fix: progress_cb 让 set_wallpaper 在应用阶段
-                    # （configure_fit_mode + set_wallpaper_platform + refresh_shell_ui）
-                    # 也发出进度信号，从 80% 平滑过渡到 100%。
-                    # 通过 bing_result_signal 转发到 GUI 线程，避免子线程
-                    # 直接操作 GUI 控件。
+                    # Setting the downloaded image is a real mode transition.
+                    # A raw set_wallpaper() would stop video/HTML but leave the
+                    # persisted mode unchanged, so a later action/startup could
+                    # resurrect a renderer behind the static Bing image.  Keep
+                    # the 80-100% UX coarse-grained here while the mode service
+                    # owns activation + rollback atomically.
                     apply_base = int(DOWNLOAD_WEIGHT * 100)  # 80
-                    def _apply_cb(status_text: str, percent: float) -> None:
-                        # percent 是 set_wallpaper_direct 内部的 0.0-1.0
-                        # 进度，映射到全局 80-100% 区间。
-                        global_pct = int(apply_base + percent * APPLY_WEIGHT * 100)
-                        # 限制在 0-99 之间，100 留给最终完成消息
-                        global_pct = max(0, min(99, global_pct))
-                        # 通过信号转发到 GUI 线程，路径消息留空（避免被
-                        # _on_bing_finished 当作下载进度解析）。
-                        self.bing_result_signal.emit(
-                            True,
-                            f"应用进度：{global_pct}/{status_text}",
-                            "",
-                        )
-                    core.set_wallpaper(latest, t("必应壁纸"), progress_cb=_apply_cb)
+                    self.bing_result_signal.emit(
+                        True,
+                        f"应用进度：{apply_base}/{t('正在切换单张图片…')}",
+                        "",
+                    )
+                    if not core.switch_wallpaper_mode(
+                        "图片", updates={"single_image": latest}
+                    ):
+                        reason = getattr(core, "last_operation_error", "") or t("设置必应壁纸失败")
+                        self._emit_bing_result(False, reason, "")
+                        return
+                    self.bing_result_signal.emit(
+                        True,
+                        f"应用进度：99/{t('正在完成…')}",
+                        "",
+                    )
                     cleanup_note = f"；已自动删除 {deleted} 张过量 bing 缓存" if deleted else ""
                     self._emit_bing_result(True, f"已同步 {len(paths)} 张并设置最新必应壁纸{cleanup_note}，下次可从第 {core.config.get('bing_next_index', 0) + 1} 张继续", latest)
                 else:
@@ -7349,6 +7294,14 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         restarting: bool = False,
         reason: str = "application_exit",
     ):
+        # Core cancellation covers serialized wallpaper/media work, while Bing
+        # and similar GUI-owned background workers use this local event.  Set it
+        # before teardown so a blocking network call that returns late cannot
+        # write config or repaint the desktop after exit restoration.
+        try:
+            self._current_operation_cancel.set()
+        except Exception:
+            pass
         if not self._exit_signals_disconnected:
             self._exit_signals_disconnected = True
             self._disconnect_own_signals()
@@ -7358,69 +7311,39 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             restarting=restarting,
         )
 
-    def _restart_carry_over_args(self, extra_args=None) -> list[str]:
-        """Keep only safe startup arguments when relaunching the normal Linux GUI."""
-        skip_flags = {
-            "--previous", "--next", "--random", "--show", "--hide",
-            "--jump-to-wallpaper", "--sync-context-on-start", "--inherit-session-wallpaper",
-            "--internal-video-player", "--muted",
-        }
-        skip_value_flags = {"--set-wallpaper"}
-        result: list[str] = []
-        skip_next = False
-        for arg in sys.argv[1:]:
-            if skip_next:
-                skip_next = False
-                continue
-            if arg in skip_flags:
-                continue
-            if arg in skip_value_flags:
-                skip_next = True
-                continue
-            if any(arg.startswith(flag + "=") for flag in skip_value_flags):
-                continue
-            result.append(arg)
-        for arg in list(extra_args or []):
-            if arg not in result:
-                result.append(arg)
-        if "--inherit-session-wallpaper" not in result:
-            result.append("--inherit-session-wallpaper")
-        return result
-
     def restart_program(self, extra_args=None):
-        """Relaunch the Linux GUI without privilege escalation."""
+        """Relaunch through the shared two-phase handoff service."""
         try:
-            core.capture_session_original_wallpaper(inherit_existing=True, force_refresh=False)
-            persist = getattr(core, "_persist_session_original_wallpaper", None)
-            if callable(persist):
-                persist()
+            self._current_operation_cancel.set()
+        except Exception:
+            pass
+        try:
+            launched = bool(core.restart_application(extra_args=extra_args))
         except Exception as exc:
-            core.log(f"重启前保存启动前壁纸记录失败: {exc}")
-        args = self._restart_carry_over_args(extra_args)
-        cmd = self._app_command(*args)
+            core.log(f"重启程序异常: {exc}", level="ERROR", exc_info=exc)
+            launched = False
+        if not launched:
+            self._closing_for_exit = False
+            QMessageBox.warning(self, t("重启程序"), t("重启程序失败，请稍后重试。"))
+            return
+
+        # At this point the replacement child exists and the core has completed
+        # the irreversible restart cleanup.  Do not attempt to recover this GUI;
+        # finish Qt-side tray teardown and let the child leave its parent wait.
+        self._closing_for_exit = True
         try:
-            self._closing_for_exit = True
             if self.tray:
                 self.tray.hide()
                 self.tray.deleteLater()
                 self.tray = None
                 QApplication.processEvents()
                 self._refresh_shell_ui_later()
-            self._perform_exit_cleanup_once(
-                restore_wallpaper=False, restarting=True, reason="restart"
-            )
-            subprocess.Popen(
-                cmd,
-                cwd=core.BASE_DIR,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-            self.set_status(t("已请求重启程序"))
-            QApplication.instance().quit()
         except Exception as exc:
-            self._closing_for_exit = False
-            QMessageBox.warning(self, t("重启程序"), t("重启程序失败：") + str(exc))
+            core.log(f"重启后的 Qt 托盘清理失败: {exc}", level="WARNING", exc_info=exc)
+        self.set_status(t("已请求重启程序"))
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
 
     def restart_as_admin(self, extra_args=None):
         QMessageBox.information(
@@ -7481,28 +7404,6 @@ class _WindowsMainWindowMixin:
                 QApplication.setWindowIcon(self.app_icon)
                 self.setWindowIcon(self.app_icon)
 
-    def _set_button_svg_icon(self, button, icon_name: str, size: int = 20):
-            """给按钮设置统一 SVG 图标，记录以便暗色模式切换时刷新 SVG 颜色。
-
-            Bug 3 fix: 直接用 ``QIcon(path)`` 会让 Qt 内部的 ``QSvgRenderer``
-            缓存按文件路径 keyed — 第二次调用（暗色模式切换后）会拿到失效的
-            renderer，触发 ``qt.svg: Cannot open file …`` 警告。这里改用显式
-            ``QSvgRenderer`` + ``QPixmap.loadFromData(...)`` 渲染路径，并按
-            ``(path, theme_signature, size)`` 缓存像素图，绕过 Qt 的 SVG
-            renderer 缓存。
-            """
-            try:
-                path = self._img_path(icon_name)
-                if os.path.exists(path):
-                    pix = self._render_svg_to_pixmap(path, size)
-                    if pix is not None and not pix.isNull():
-                        button.setIcon(QIcon(pix))
-                        button.setIconSize(QSize(size, size))
-                        if not hasattr(self, "_svg_button_icons"):
-                            self._svg_button_icons = {}
-                        self._svg_button_icons[id(button)] = (button, path, size)
-            except Exception:
-                pass
 
     def _render_svg_to_pixmap(self, path: str, size: int):
             """Render an SVG file to a ``QPixmap`` of ``size x size`` device pixels.
@@ -7571,78 +7472,6 @@ class _WindowsMainWindowMixin:
             except Exception:
                 return None
 
-    def _svg_theme_signature(self) -> str:
-            """Return a short signature that changes when the SVG rendering should
-            be invalidated (dark-mode toggle, theme color change, language switch).
-            Used as part of the ``_svg_pixmap_cache`` key.
-            """
-            try:
-                # Bug 3 fix: use _theme_is_dark() method (the actual API) instead
-                # of the non-existent _dark_mode attribute, so the signature
-                # actually changes on dark-mode toggle and invalidates the cache.
-                dark = bool(self._theme_is_dark()) if hasattr(self, "_theme_is_dark") else False
-                accent = str(core.config.get("theme_color", "")) if hasattr(core, "config") else ""
-                return f"{'d' if dark else 'l'}_{accent}"
-            except Exception:
-                return "default"
-
-    def _refresh_svg_button_icons(self):
-            """暗色模式切换后刷新所有 SVG 按钮图标，确保 currentColor 正确生效。
-
-            Bug 3 fix: 旧的实现 ``button.setIcon(QIcon(path))`` 在第二次调用时
-            会命中 Qt 的 ``QSvgRenderer`` 失效缓存。这里清空本地像素图缓存并
-            用 ``_render_svg_to_pixmap`` 重新渲染，保证暗色模式下 SVG 的
-            ``currentColor`` 等主题相关样式重新生效。
-            """
-            # Clear the pixmap cache so all icons re-render with the new theme.
-            cache = getattr(self, "_svg_pixmap_cache", None)
-            if cache is not None:
-                cache.clear()
-            icons = getattr(self, "_svg_button_icons", {})
-            for btn_id, (button, path, size) in list(icons.items()):
-                try:
-                    pix = self._render_svg_to_pixmap(path, size)
-                    if pix is not None and not pix.isNull():
-                        button.setIcon(QIcon(pix))
-                        button.setIconSize(QSize(size, size))
-                    else:
-                        button.setIcon(QIcon(path))
-                        button.setIconSize(QSize(size, size))
-                except RuntimeError:
-                    icons.pop(btn_id, None)
-                except Exception:
-                    pass
-
-    def _prepare_popup_menu(self, menu: QMenu) -> QMenu:
-            """Prepare a QMenu popup for consistent rendering.
-
-            Note: On Windows we intentionally do NOT set WA_TranslucentBackground.
-            The native DWM theme already draws rounded corners for popup menus,
-            and forcing translucency breaks that (left/right corners become
-            asymmetric and the system drop shadow disappears).  The QSS
-            ``border-radius`` only controls the inner background, not the window
-            shape.  This helper is kept as a no-op placeholder so call sites stay
-            consistent across platforms; Linux/MacOS may extend it later if
-            needed.
-            """
-            if menu is None:
-                return menu
-            return menu
-
-    def _perf_level(self) -> str:
-            """返回当前性能模式: 'power_saver' / 'balanced' / 'performance'.
-
-            v1.4.6: 新增三档. 向后兼容旧 performance_mode 布尔:
-            - 旧 performance_mode=True → 'performance'
-            - 旧 performance_mode=False → 'balanced' (除非 performance_level 已设)
-            """
-            level = str(core.config.get("performance_level", "")).lower()
-            if level in ("power_saver", "balanced", "performance"):
-                return level
-            # 旧配置兼容
-            if bool(core.config.get("performance_mode", False)):
-                return "performance"
-            return "balanced"
 
     def _combo_popup_stylesheet(self) -> str:
             """Use the same theme roles for ShangComboBox's custom QMenu popup.
@@ -8280,164 +8109,6 @@ QWidget[settingsSearchMatch="true"] { border: 2px solid %%visible_accent%%; }
             )
 
 
-
-    def _reset_history_only(self) -> None:
-            """仅清空壁纸历史记录."""
-            try:
-                reply = QMessageBox.question(
-                    self, t("重置壁纸历史"),
-                    t("确定清空壁纸历史记录吗？不影响当前壁纸和文件夹。"),
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No,
-                )
-                if reply != QMessageBox.StandardButton.Yes:
-                    return
-                core.clear_wallpaper_history(reset_slideshow_position=True)
-                self.refresh_history_list()
-                self.set_status(t("壁纸历史已清空"))
-            except Exception as exc:
-                QMessageBox.warning(self, t("重置壁纸历史"), t("重置失败：") + str(exc))
-
-    def _reset_hotkeys_only(self) -> None:
-            """仅重置右键菜单热键和应用内热键到默认值."""
-            try:
-                reply = QMessageBox.question(
-                    self, t("重置快捷键"),
-                    t("确定把所有快捷键恢复为默认值吗？"),
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No,
-                )
-                if reply != QMessageBox.StandardButton.Yes:
-                    return
-                defaults = core.get_default_config()
-                for key in ("hotkey_previous", "hotkey_next", "hotkey_random", "hotkey_jump"):
-                    core.config[key] = defaults.get(key, "")
-                core.config["app_shortcuts"] = dict(defaults.get("app_shortcuts", {}))
-                core.save_config()
-                # 刷新全局热键注册
-                try:
-                    if bool(core.config.get("global_hotkeys_enabled", False)):
-                        core.refresh_global_hotkeys()
-                    else:
-                        core.stop_global_hotkeys()
-                except Exception as exc:
-                    core.log(f"刷新全局热键失败: {exc}")
-                # v1.4.7: 应用内热键已移除, 不再刷新 _refresh_app_shortcuts.
-                # 刷新设置页 UI
-                self._refresh_context_shortcut_labels()
-                self.refresh_from_config()
-                self.set_status(t("快捷键已重置为默认值"))
-            except Exception as exc:
-                QMessageBox.warning(self, t("重置快捷键"), t("重置失败：") + str(exc))
-
-    def _reset_appearance_only(self) -> None:
-            """仅重置外观: 主题色/字体/DPI/暗色/性能模式/字体粗细大小 (v1.4.0 修复)."""
-            try:
-                reply = QMessageBox.question(
-                    self, t("重置外观设置"),
-                    t("确定重置外观设置吗？包括主题色、字体路径、字体粗细、字体大小、程序内 DPI、暗色模式、性能模式。"),
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No,
-                )
-                if reply != QMessageBox.StandardButton.Yes:
-                    return
-                defaults = core.get_default_config()
-                # v1.4.0 修复: 之前 pop("font_size") 会删除新 font_size 键, 现在改为重置为默认值.
-                # 同时补上 font_weight / performance_level (之前漏掉).
-                for key in ("theme_color", "font_path", "font_weight", "font_size",
-                            "dpi_scale", "dark_mode", "enable_animations",
-                            "wallpaper_transition_enabled", "transition_effect",
-                            "transition_duration_ms", "wallpaper_transition_policy_version",
-                            "performance_mode", "performance_level"):
-                    if key in defaults:
-                        core.config[key] = defaults.get(key)
-                core.save_config()
-                self._theme_color = core.config.get("theme_color", DEFAULT_THEME_COLOR)
-                self._icon_pixmap_cache = OrderedDict()
-                self._apply_performance_mode_runtime()
-                self._rebuild_stylesheet()
-                self._refresh_settings_nav_style()
-                self._refresh_svg_button_icons()
-                self.refresh_from_config()
-                apply_dpi_environment(core.config)
-                self.set_status(t("外观设置已重置"))
-                QMessageBox.information(self, t("重置外观设置"), t("已重置主题色、字体路径、字体粗细、字体大小、程序内 DPI、暗色模式和性能模式。DPI 和字体设置需重启程序完全生效。"))
-            except Exception as exc:
-                QMessageBox.warning(self, t("重置外观设置"), t("重置失败：") + str(exc))
-
-    def _reset_tray_only(self) -> None:
-            """仅重置托盘菜单项到默认列表."""
-            try:
-                reply = QMessageBox.question(
-                    self, t("重置托盘菜单"),
-                    t("确定把托盘菜单项恢复为默认列表吗？"),
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No,
-                )
-                if reply != QMessageBox.StandardButton.Yes:
-                    return
-                defaults = core.get_default_config()
-                core.config["tray_menu_items"] = list(defaults.get("tray_menu_items", []))
-                core.config["tray_click_action"] = defaults.get("tray_click_action", "next")
-                core.save_config()
-                self.create_or_update_tray() if core.config.get("tray_icon", True) else None
-                self.refresh_from_config()
-                self.set_status(t("托盘菜单已重置"))
-            except Exception as exc:
-                QMessageBox.warning(self, t("重置托盘菜单"), t("重置失败：") + str(exc))
-
-    def _reset_log_buffer_only(self) -> None:
-            """仅清空内存实时日志缓冲区."""
-            try:
-                from app.log_setup import clear_recent_logs
-                clear_recent_logs()
-                self._refresh_log_viewer()
-                self.set_status(t("实时日志缓冲区已清空"))
-            except Exception as exc:
-                QMessageBox.warning(self, t("清空实时日志"), t("清空失败：") + str(exc))
-
-    def _unregister_context_menu_only(self) -> None:
-            """仅注销桌面右键菜单注册表项 (v1.4.7: 无需 admin)."""
-            try:
-                if not core.IS_WINDOWS:
-                    show_info(self, t("注销桌面右键菜单"), t("此功能仅在 Windows 上可用。"))
-                    return
-                reply = QMessageBox.question(
-                    self, t("注销桌面右键菜单"),
-                    t("确定从 Windows 桌面右键菜单移除本程序注册的项吗？"),
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No,
-                )
-                if reply != QMessageBox.StandardButton.Yes:
-                    return
-                # v1.4.7: register_context 已改用 HKCU\Software\Classes, 无需 admin.
-                try:
-                    # 把所有 ctx_* 设为 False, 然后调用 register_context 清理注册表
-                    for key in ("ctx_last_wallpaper", "ctx_next_wallpaper", "ctx_random_wallpaper", "ctx_jump_to_wallpaper"):
-                        core.config[key] = False
-                    core.save_config()
-                    core.register_context(show_admin_prompt=False)
-                    self.set_status(t("桌面右键菜单已注销"))
-                    show_info(self, t("注销桌面右键菜单"), t("已从桌面右键菜单移除本程序注册的项。"))
-                except Exception as exc:
-                    core.log(f"注销桌面右键菜单失败: {exc}", level="ERROR", exc_info=True)
-                    QMessageBox.warning(self, t("注销桌面右键菜单"), t("注销失败：") + str(exc))
-            except Exception as exc:
-                QMessageBox.warning(self, t("注销桌面右键菜单"), t("操作失败：") + str(exc))
-
-    def _on_dark_mode_toggled(self, checked: bool) -> None:
-            """切换暗色模式并立即应用样式，布局属性和按钮大小保持不变。"""
-            core.config["dark_mode"] = bool(checked)
-            self._rebuild_stylesheet()
-            self._refresh_settings_nav_style()
-            if hasattr(self, "_refresh_color_buttons"):
-                self._refresh_color_buttons()
-            if hasattr(self, "_refresh_styled_widgets"):
-                self._refresh_styled_widgets()
-            self._refresh_svg_button_icons()
-            self.set_status(t("暗色模式已开启") if checked else t("亮色模式已恢复"))
-
-
     def choose_log_file_path(self):
             default = self._log_file_path() or self._default_log_path()
             dest, _ = QFileDialog.getSaveFileName(self, t("选择日志保存路径"), default, t("日志文件 (*.log *.txt);;所有文件 (*.*)"))
@@ -8454,7 +8125,6 @@ QWidget[settingsSearchMatch="true"] { border: 2px solid %%visible_accent%%; }
             except Exception:
                 pass
             return True
-
 
 
     def _is_desktop_foreground(self) -> bool:
@@ -8482,243 +8152,12 @@ QWidget[settingsSearchMatch="true"] { border: 2px solid %%visible_accent%%; }
             # Keep GUI checkbox names identical to the actual Windows desktop
             # context-menu registry labels written by core.engine.
             return [
-                ("previous", t("上一个桌面背景"), "PgUp", "ctx_last_wallpaper", "ctx_prev"),
-                ("next", t("下一个桌面背景"), "PgDown", "ctx_next_wallpaper", "ctx_next"),
-                ("random", t("随机一个桌面背景"), "R", "ctx_random_wallpaper", "ctx_random"),
-                ("jump", t("跳转到壁纸"), "J", "ctx_jump_to_wallpaper", "ctx_jump"),
+                ("previous", t("上一个桌面背景"), "Ctrl+Alt+U", "ctx_last_wallpaper", "ctx_prev"),
+                ("next", t("下一个桌面背景"), "Ctrl+Alt+N", "ctx_next_wallpaper", "ctx_next"),
+                ("random", t("随机一个桌面背景"), "Ctrl+Alt+R", "ctx_random_wallpaper", "ctx_random"),
+                ("jump", t("跳转到壁纸"), "Ctrl+Alt+J", "ctx_jump_to_wallpaper", "ctx_jump"),
             ]
 
-    def _refresh_context_shortcut_labels(self):
-            """刷新右键菜单复选框文案 + 设置页快捷键当前值标签."""
-            try:
-                for action, label, _default_key, _cfg_key, widget_name in self._context_action_defs():
-                    widget = getattr(self, widget_name, None)
-                    if self._is_qobject_alive(widget):
-                        try:
-                            widget.setText(self._context_checkbox_label(action, label))
-                        except Exception:
-                            pass
-                    current_labels = getattr(self, "ctx_shortcut_current_labels", {})
-                    if action in current_labels and self._is_qobject_alive(current_labels[action]):
-                        try:
-                            current_labels[action].setText(self._context_hotkey_display(action))
-                        except Exception:
-                            pass
-            except Exception as exc:
-                try:
-                    core.log(f"刷新右键菜单快捷键标签失败: {exc}", level="WARNING")
-                except Exception:
-                    pass
-
-    def on_context_hotkey_clear(self, action: str):
-            """清除按钮：清空已保存的右键菜单快捷键。"""
-            self.set_context_hotkey(action, "")
-
-    def _warn_duplicate_context_hotkey(self, action: str, seq_str: str) -> bool:
-            duplicate_label = self._duplicate_context_hotkey_action(action, seq_str)
-            if not duplicate_label:
-                return False
-            QMessageBox.warning(
-                self,
-                t("快捷键冲突"),
-                t("该快捷键已被其他动作使用：") + str(duplicate_label),
-            )
-            return True
-
-    def on_global_hotkeys_enabled_changed(self, checked: bool) -> None:
-            """Enable/disable system-level global hotkey registration."""
-            core.config["global_hotkeys_enabled"] = bool(checked)
-            core.save_config()
-            try:
-                if checked:
-                    core.refresh_global_hotkeys()
-                else:
-                    core.stop_global_hotkeys()
-            except Exception as exc:
-                core.log(f"切换全局热键失败: {exc}")
-            self.set_status(t("全局热键已开启") if checked else t("全局热键已关闭"))
-
-    def set_context_hotkey(self, action: str, seq_str: str) -> None:
-            """Apply and persist a right-click menu shortcut hint.
-
-            When global hotkeys are enabled, the same shortcut text is also validated
-            and registered as a system-level hotkey; otherwise it is only shown in
-            the desktop right-click menu label.
-            """
-            seq_str = str(seq_str or "").strip()
-            if seq_str:
-                global_hotkeys_on = bool(core.config.get("global_hotkeys_enabled", False))
-                if global_hotkeys_on:
-                    try:
-                        parsed = core._parse_hotkey_string(seq_str)
-                    except Exception:
-                        parsed = None
-                    if parsed is None:
-                        QMessageBox.warning(
-                            self,
-                            t("全局热键冲突"),
-                            t("当前已启用全局热键，请输入可注册的组合：Ctrl+Alt+N，或单独的 Ctrl / Alt / Shift / Win。若只想作为右键菜单提示，请先关闭全局热键。"),
-                        )
-                        return
-                if self._warn_duplicate_context_hotkey(action, seq_str):
-                    return
-            core.config[f"hotkey_{action}"] = seq_str
-            core.save_config()
-            # Refresh labels in the settings UI
-            self._refresh_context_shortcut_labels()
-            # 仅在用户明确开启全局热键时注册系统级热键；否则只保存为右键菜单显示提示。
-            try:
-                if bool(core.config.get("global_hotkeys_enabled", False)):
-                    core.refresh_global_hotkeys()
-                else:
-                    core.stop_global_hotkeys()
-            except Exception as exc:
-                core.log(f"刷新全局热键失败: {exc}")
-            # Automatically sync the context menu to the registry if running as admin
-            try:
-                if core.IS_WINDOWS and core.is_windows_admin():
-                    core.register_context(show_admin_prompt=False)
-            except Exception as exc:
-                core.log(f"自动同步右键菜单失败: {exc}")
-            # Update status bar message
-            if seq_str:
-                self.set_status((t("已保存右键菜单快捷键 / 全局热键：") if core.config.get("global_hotkeys_enabled", False) else t("已保存右键菜单快捷键：")) + seq_str)
-            else:
-                self.set_status(t("已清除快捷键"))
-
-    def record_context_hotkey(self, action: str) -> None:
-            """Begin recording a shortcut for the given right-click menu action.
-
-            A record button triggers this method. It uses the pynput library to
-            capture all keys pressed until all keys are released. The value is saved
-            as a right-click menu shortcut hint by default; only the optional global
-            hotkey switch makes it system-wide.
-            """
-            try:
-                from pynput import keyboard  # type: ignore
-            except Exception:
-                # Pynput is an optional dependency; without it we cannot record.
-                self.set_status(t("pynput 未安装，无法录制快捷键"))
-                return
-
-            # Inform the user that recording has started
-            self.set_status(t("录制中") + "…")
-
-            def worker() -> None:
-                keys_down: set[object] = set()
-                recorded: set[object] = set()
-
-                # Use nested functions so listener.stop() can be called by returning False
-                def on_press(key):
-                    try:
-                        keys_down.add(key)
-                        recorded.add(key)
-                    except Exception:
-                        pass
-
-                def on_release(key):
-                    try:
-                        keys_down.discard(key)
-                    except Exception:
-                        pass
-                    # Once all keys are released, stop the listener by returning False
-                    if not keys_down:
-                        return False
-
-                # Run the keyboard listener; this blocks until on_release returns False
-                with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
-                    listener.join()
-
-                # Convert recorded keys into a human-friendly combination string
-                parts: list[str] = []
-                try:
-                    # Determine which modifier keys were pressed
-                    def has_key(names: tuple[str, ...]) -> bool:
-                        for item in recorded:
-                            try:
-                                name = getattr(item, 'name', None)
-                                if name in names:
-                                    return True
-                            except Exception:
-                                pass
-                        return False
-                    if has_key(('ctrl', 'ctrl_l', 'ctrl_r', 'control')):
-                        parts.append('Ctrl')
-                    if has_key(('alt', 'alt_l', 'alt_r', 'alt_gr')):
-                        parts.append('Alt')
-                    if has_key(('shift', 'shift_l', 'shift_r')):
-                        parts.append('Shift')
-                    if has_key(('cmd', 'cmd_l', 'cmd_r', 'meta')):
-                        parts.append('Win')
-                    # Append non-modifier keys (letters/digits/function keys)
-                    for item in recorded:
-                        # Skip if already accounted for as modifier
-                        try:
-                            name = getattr(item, 'name', None)
-                            if name in ('ctrl', 'ctrl_l', 'ctrl_r', 'control', 'alt', 'alt_l', 'alt_r', 'alt_gr', 'shift', 'shift_l', 'shift_r', 'cmd', 'cmd_l', 'cmd_r', 'meta'):
-                                continue
-                            if hasattr(item, 'char') and item.char:
-                                parts.append(item.char.upper())
-                            elif name:
-                                # For special keys like f1, space, etc., capitalize the name
-                                parts.append(name.upper())
-                        except Exception:
-                            pass
-                except Exception:
-                    parts = []
-                # Deduplicate while preserving order
-                seq_parts: list[str] = []
-                for part in parts:
-                    if part not in seq_parts:
-                        seq_parts.append(part)
-                seq_str = "+".join(seq_parts)
-
-                # Apply the new hotkey on the GUI thread
-                self.hotkey_recorded_signal.emit(action, seq_str)
-
-            import threading
-            worker_thread = threading.Thread(target=worker, daemon=True)
-            worker_thread.start()
-
-    def _update_ctx(self, key, value):
-            core.config[key] = bool(value)
-            core.save_config()
-            # 启用/禁用某个右键菜单项后，对应的全局热键也需要重新注册
-            try:
-                core.refresh_global_hotkeys()
-            except Exception as exc:
-                core.log(f"刷新全局热键失败: {exc}")
-
-    def register_context_with_prompt(self):
-            # v1.4.7: 右键菜单注册改用 HKCU\Software\Classes, 无需 admin.
-            # 直接调用 sync_context_menu, 不再弹 UAC 提权提示.
-            self.sync_context_menu(show_message=True)
-
-    def sync_context_menu(self, show_message=False, only_if_needed=False):
-            if only_if_needed and core.IS_WINDOWS:
-                try:
-                    if core.is_context_menu_synced():
-                        self.set_status(t("右键菜单已是最新，无需同步"))
-                        if show_message:
-                            QMessageBox.information(self, t("右键菜单"), t("右键菜单已是最新，无需同步"))
-                        return True
-                except Exception as exc:
-                    core.log(f"检查右键菜单同步状态失败: {exc}")
-            ok = core.register_context(show_admin_prompt=False)
-            # 失败时把 core.last_operation_error 一起带给用户，避免"同步失败或已跳过"
-            # 这种不带原因的通用提示
-            if ok:
-                self.set_status(t("右键菜单已同步"))
-            else:
-                reason = getattr(core, "last_operation_error", "") or ""
-                self.set_status(t("右键菜单同步失败或已跳过") + (f"：{reason}" if reason else ""))
-            if show_message:
-                if ok:
-                    QMessageBox.information(self, t("右键菜单"), t("同步完成"))
-                else:
-                    reason = getattr(core, "last_operation_error", "") or ""
-                    QMessageBox.information(self, t("右键菜单"), t("同步失败或已跳过") + (f"\n\n{t('原因')}：{reason}" if reason else ""))
-            return ok
 
     def get_pyqt_startup_folder_path(self):
             try:
@@ -8795,100 +8234,6 @@ QWidget[settingsSearchMatch="true"] { border: 2px solid %%visible_accent%%; }
                 except Exception as exc:
                     core.log(f"删除注册表 Run 键失败: {exc}")
 
-    def _schedule_preview_refresh(self, initial_delay: int = 0):
-            """分批刷新预览；性能模式下只做必要刷新，避免连续切换时堆积解码任务。
-
-            v1.4.8: 平衡模式从 4 次延迟刷新 (120/450/1000/1800ms) 减少为 2 次
-            (300/800ms)。旧版 4 次刷新在每次切换壁纸后会反复触发 update_preview →
-            refresh_history_list → _load_icon_pixmap，即使有缓存也会在 GUI 线程
-            上做 8 项缩略图的 QPixmap 构造和列表清空/重建，叠加起来造成明显卡顿。
-            2 次刷新足以覆盖系统壁纸生效延迟，同时把 GUI 线程开销砍半。
-            """
-            def _first_refresh():
-                self.update_preview()
-                level = self._perf_level()
-                if level == "power_saver":
-                    delays = (800,)  # 省电: 只刷新一次, 延迟更长
-                elif level == "performance":
-                    delays = (700,)  # 性能: 只刷新一次
-                else:
-                    delays = (300, 800)  # 平衡: 2 次（从 4 次精简）
-                for delay in delays:
-                    QTimer.singleShot(delay, self.update_preview_if_changed)
-            if initial_delay and initial_delay > 0:
-                QTimer.singleShot(int(initial_delay), _first_refresh)
-            else:
-                _first_refresh()
-
-    def _refresh_favorites_list(self) -> None:
-            """刷新收藏夹 QListWidget 显示."""
-            if not hasattr(self, "favorites_list"):
-                return
-            previous_block_state = self.favorites_list.blockSignals(True)
-            try:
-                self.favorites_list.clear()
-                for path in core.list_favorites(limit=50, existing_only=True):
-                    item = QListWidgetItem()
-                    item.setToolTip(path)
-                    item.setData(Qt.UserRole, path)
-                    item.setSizeHint(QSize(118, 78))
-                    pix = self._load_icon_pixmap(path, QSize(108, 68))
-                    if not pix.isNull():
-                        item.setIcon(QIcon(pix))
-                    self.favorites_list.addItem(item)
-            except Exception as exc:
-                core.log(f"刷新收藏夹失败: {exc}", level="WARNING", exc_info=True)
-            finally:
-                self.favorites_list.blockSignals(previous_block_state)
-
-    def _toggle_favorite_current(self) -> None:
-            """切换当前壁纸的收藏状态."""
-            try:
-                path = core.config.get("current_wallpaper") or core.get_current_wallpaper()
-                if not path or not os.path.isfile(path):
-                    self.set_status(t("当前无壁纸可收藏"))
-                    return
-                is_now_favorite = core.toggle_favorite(path)
-                self._refresh_favorites_list()
-                self._update_favorite_button_state()
-                self.set_status(t("已加入收藏夹") if is_now_favorite else t("已从收藏夹移除"))
-            except Exception as exc:
-                core.log(f"切换收藏失败: {exc}", level="WARNING", exc_info=True)
-                QMessageBox.warning(self, t("收藏夹"), t("保存收藏失败：") + str(exc))
-
-    def _update_favorite_button_state(self) -> None:
-            """根据当前壁纸是否已收藏, 更新按钮文案."""
-            try:
-                if not hasattr(self, "btn_favorite_current"):
-                    return
-                path = core.config.get("current_wallpaper") or ""
-                if path and core.is_favorite(path):
-                    self.btn_favorite_current.setText(t("取消收藏"))
-                    self.btn_favorite_current.setToolTip(t("从收藏夹移除当前壁纸"))
-                else:
-                    self.btn_favorite_current.setText(t("收藏当前"))
-                    self.btn_favorite_current.setToolTip(t("把当前壁纸加入收藏夹（收藏夹不会随历史滚动消失）"))
-            except Exception as exc:
-                core.log(f"更新收藏按钮状态失败: {exc}", level="WARNING")
-
-    def _apply_favorite_item(self, item) -> None:
-            """单击收藏项 → 作为完整图片模式事务应用."""
-            try:
-                path = item.data(Qt.UserRole) if item else ""
-                self._apply_static_wallpaper_item(path, t("收藏夹"))
-            except Exception as exc:
-                try:
-                    core.log(f"应用收藏壁纸失败: {exc}", level="WARNING")
-                except Exception:
-                    pass
-
-    def open_history_item_location_by_item(self, item) -> None:
-            """双击收藏/历史项 → 打开文件位置 (复用)."""
-            try:
-                path = item.data(Qt.UserRole) if item else ""
-                self._open_file_location(path)
-            except Exception:
-                pass
 
     def _show_favorite_context_menu(self, pos) -> None:
             """右键收藏项 → 弹出菜单 (移除收藏/打开位置)."""
@@ -8920,23 +8265,6 @@ QWidget[settingsSearchMatch="true"] { border: 2px solid %%visible_accent%%; }
                 except Exception:
                     pass
 
-    def _clear_all_favorites(self) -> None:
-            """清空全部收藏."""
-            try:
-                reply = QMessageBox.question(
-                    self, t("清空收藏"),
-                    t("确定清空全部收藏吗？不会删除壁纸文件。"),
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No,
-                )
-                if reply != QMessageBox.StandardButton.Yes:
-                    return
-                core.clear_favorites()
-                self._refresh_favorites_list()
-                self._update_favorite_button_state()
-                self.set_status(t("收藏夹已清空"))
-            except Exception as exc:
-                QMessageBox.warning(self, t("清空收藏"), t("清空失败：") + str(exc))
 
     def _open_file_location(self, path: str):
             if not path or not os.path.exists(path):
@@ -8946,117 +8274,18 @@ QWidget[settingsSearchMatch="true"] { border: 2px solid %%visible_accent%%; }
             except Exception as e:
                 QMessageBox.warning(self, t("跳转失败"), str(e))
 
-    def _load_icon_pixmap(self, path: str, size: QSize) -> QPixmap:
-            try:
-                stat = os.stat(path)
-                cache_key = (path, int(stat.st_mtime), int(stat.st_size), int(size.width()), int(size.height()))
-            except Exception:
-                cache_key = (path, 0, 0, int(size.width()), int(size.height()))
-            cache = getattr(self, "_icon_pixmap_cache", None)
-            if cache is None:
-                cache = OrderedDict()
-                self._icon_pixmap_cache = cache
-            elif not isinstance(cache, OrderedDict):
-                cache = OrderedDict(cache)
-                self._icon_pixmap_cache = cache
-            cached = cache.get(cache_key)
-            if cached is not None:
-                cache.move_to_end(cache_key)
-                return cached
-            reader = QImageReader(path)
-            reader.setAutoTransform(True)
-            # v1.4.6: 三档性能模式 → 图像解码内存上限
-            _level = self._perf_level()
-            if _level == "power_saver":
-                _alloc_limit = 48
-            elif _level == "performance":
-                _alloc_limit = 64
-            else:
-                _alloc_limit = 128
-            reader.setAllocationLimit(_alloc_limit)
-            original = reader.size()
-            if original.isValid():
-                scaled = original.scaled(size, Qt.KeepAspectRatio)
-                if scaled.isValid():
-                    reader.setScaledSize(scaled)
-            image = reader.read()
-            pixmap = QPixmap.fromImage(image) if not image.isNull() else QPixmap()
-            cache[cache_key] = pixmap
-            cache.move_to_end(cache_key)
-            # v1.4.6: 三档性能模式 → 缩略图缓存大小
-            _level2 = self._perf_level()
-            if _level2 == "power_saver":
-                max_cache_items = 32
-            elif _level2 == "performance":
-                max_cache_items = 64
-            else:
-                max_cache_items = 96
-            while len(cache) > max_cache_items:
-                cache.popitem(last=False)
-            return pixmap
-
     def open_current_folder(self):
             path = core.config.get("current_wallpaper") or core.get_current_wallpaper()
             folder = os.path.dirname(path) if path else core.config.get("slide_folder", "")
             if folder and os.path.isdir(folder):
                 os.startfile(folder)
 
-    def open_wallpaper_sidebar(self) -> None:
-            sb = getattr(self, "_sidebar", None)
-            if sb is not None:
-                try:
-                    if hasattr(sb, "_is_closing") and not sb._is_closing:
-                        sb.raise_()
-                        sb.activateWindow()
-                        return
-                except Exception:
-                    pass
-                self._sidebar = None
-
-            from ui.sidebar import WallpaperSidebar
-
-            folder = core.config.get("slide_folder", "")
-            current = core.config.get("current_wallpaper", "") or core.get_current_wallpaper()
-
-            if not folder or not os.path.isdir(folder):
-                show_info(self, t("提示"), t("请先在软件中设置壁纸文件夹"))
-                return
-
-            def _switch(path: str) -> None:
-                try:
-                    core.set_wallpaper(path, t("侧边栏切换"))
-                    QTimer.singleShot(50, self.update_preview)
-                except Exception as exc:
-                    core.log(f"侧边栏切换壁纸失败: {exc}")
-
-            sidebar_log = self._log_file_path() if core.config.get("log_enabled", False) else None
-            self._sidebar = WallpaperSidebar(
-                self, folder, current, sidebar_log,
-                show_message=lambda title, msg: show_info(self, title, msg),
-                switch_wallpaper=_switch,
-            )
-            self._sidebar.closed.connect(lambda: setattr(self, "_sidebar", None))
-
-    def save_selected_bing_as(self):
-            item = self.bing_list.currentItem()
-            if not item:
-                show_info(self, t("必应壁纸"), t("请先在列表中选择一张已缓存的必应壁纸。"))
-                return
-            src = item.data(Qt.UserRole)
-            if not src or not os.path.exists(src):
-                show_warning(self, t("必应壁纸"), t("选中的缓存文件不存在。"))
-                return
-            dst, _ = QFileDialog.getSaveFileName(self, t("另存必应壁纸"), os.path.join(str(Path.home()), os.path.basename(src)), t("JPEG 图片 (*.jpg);;所有文件 (*.*)"))
-            if not dst:
-                return
-            try:
-                shutil.copy2(src, dst)
-                self.set_status(t("已另存为：") + f"{dst}")
-            except Exception as e:
-                QMessageBox.warning(self, t("另存失败"), str(e))
-
     def restart_as_admin(self, extra_args=None):
             self._closing_for_exit = True
+            try:
+                self._current_operation_cancel.set()
+            except Exception:
+                pass
             if core.restart_as_admin(extra_args=extra_args):
                 if self.tray:
                     self.tray.hide()
@@ -9071,100 +8300,7 @@ QWidget[settingsSearchMatch="true"] { border: 2px solid %%visible_accent%%; }
 
 
 class _MacOSMainWindowMixin:
-    def _prepare_popup_menu(self, menu: QMenu) -> QMenu:
-            """Prepare a QMenu popup for consistent rendering.
 
-            Note: We intentionally do NOT set WA_TranslucentBackground on macOS.
-            The native Qt theme already draws rounded corners and shadows for
-            popup menus.  Forcing translucency + frameless flags breaks the native
-            theme, causing asymmetric corners and missing shadows.
-            """
-            if menu is None:
-                return menu
-            return menu
-
-
-
-    def _on_dark_mode_toggled(self, checked: bool) -> None:
-            """切换暗色模式并立即应用样式，布局属性和按钮大小保持不变。"""
-            core.config["dark_mode"] = bool(checked)
-            self._rebuild_stylesheet()
-            self._refresh_settings_nav_style()
-            if hasattr(self, "_refresh_color_buttons"):
-                self._refresh_color_buttons()
-            if hasattr(self, "_refresh_styled_widgets"):
-                self._refresh_styled_widgets()
-            self._refresh_svg_button_icons()
-            self.set_status(t("暗色模式已开启") if checked else t("亮色模式已恢复"))
-
-    def _on_performance_mode_toggled(self, checked: bool) -> None:
-            core.config["performance_mode"] = bool(checked)
-            core.config["performance_level"] = "performance" if checked else "balanced"
-            core.save_config()
-            self._apply_performance_mode_runtime()
-
-    def _on_performance_level_changed(self, index: int) -> None:
-            try:
-                combo = getattr(self, "perf_mode_combo", None)
-                if not self._is_qobject_alive(combo):
-                    return
-                level = combo.currentData()
-                if level not in ("power_saver", "balanced", "performance"):
-                    return
-                core.config["performance_level"] = level
-                core.config["performance_mode"] = (level == "performance")
-                core.save_config()
-                self._apply_performance_mode_runtime()
-                _status_map = {
-                    "power_saver": t("性能模式：节能（降低后台刷新频率）"),
-                    "balanced": t("性能模式：均衡（推荐）"),
-                    "performance": t("性能模式：流畅（更快刷新响应）"),
-                }
-                self.set_status(_status_map.get(level, t("性能模式已切换")))
-            except Exception as exc:
-                try:
-                    core.log(f"切换性能模式失败: {exc}", level="WARNING", exc_info=True)
-                except Exception:
-                    pass
-
-    def _is_desktop_foreground(self) -> bool:
-            """Return True when the desktop shell is the active foreground surface.
-
-            Bug 5 fix: macOS 端现在通过 platform_adapters.integration.is_desktop_foreground()
-            实际检测（osascript 查询 System Events 前台进程名）。之前总是返回 True
-            会让"桌面失焦时暂停"视频策略和 HTML 自动暂停功能在 macOS 上完全失效。
-            """
-            try:
-                if not core.IS_WINDOWS:
-                    # Bug 5 fix: 调用平台特定实现，而不是无条件返回 True。
-                    from platform_adapters import integration
-                    if hasattr(integration, "is_desktop_foreground"):
-                        return bool(integration.is_desktop_foreground())
-                    return True
-                import ctypes
-                user32 = ctypes.windll.user32
-                hwnd = user32.GetForegroundWindow()
-                if not hwnd:
-                    return True
-                buf = ctypes.create_unicode_buffer(256)
-                user32.GetClassNameW(hwnd, buf, 256)
-                cls = (buf.value or "").lower()
-                return cls in {"progman", "workerw", "shelldll_defview", "syslistview32"}
-            except Exception:
-                return True
-
-    def get_pyqt_startup_folder_path(self):
-            try:
-                return core.get_startup_folder_path_windows()
-            except Exception:
-                return os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs\Startup")
-
-    def _startup_launch_command(self) -> str:
-            if core.is_frozen():
-                return f'"{app_executable_path()}" --hide'
-            pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
-            launcher = pythonw if os.path.exists(pythonw) else sys.executable
-            return f'"{launcher}" "{entry_script_path()}" --hide'
 
     def set_auto_start(self, enable: bool):
             """macOS branch only writes the LaunchAgents plist."""
@@ -9233,114 +8369,11 @@ class _MacOSMainWindowMixin:
             except Exception as e:
                 QMessageBox.warning(self, t("跳转失败"), str(e))
 
-    def _load_icon_pixmap(self, path: str, size: QSize) -> QPixmap:
-            try:
-                stat = os.stat(path)
-                cache_key = (path, int(stat.st_mtime), int(stat.st_size), int(size.width()), int(size.height()))
-            except Exception:
-                cache_key = (path, 0, 0, int(size.width()), int(size.height()))
-            cache = getattr(self, "_icon_pixmap_cache", None)
-            if cache is None:
-                cache = OrderedDict()
-                self._icon_pixmap_cache = cache
-            elif not isinstance(cache, OrderedDict):
-                cache = OrderedDict(cache)
-                self._icon_pixmap_cache = cache
-            cached = cache.get(cache_key)
-            if cached is not None:
-                cache.move_to_end(cache_key)
-                return cached
-            reader = QImageReader(path)
-            reader.setAutoTransform(True)
-            # v1.4.6: 三档性能模式 → 图像解码内存上限
-            _level = self._perf_level()
-            if _level == "power_saver":
-                _alloc_limit = 48
-            elif _level == "performance":
-                _alloc_limit = 64
-            else:
-                _alloc_limit = 128
-            reader.setAllocationLimit(_alloc_limit)
-            original = reader.size()
-            if original.isValid():
-                scaled = original.scaled(size, Qt.KeepAspectRatio)
-                if scaled.isValid():
-                    reader.setScaledSize(scaled)
-            image = reader.read()
-            pixmap = QPixmap.fromImage(image) if not image.isNull() else QPixmap()
-            cache[cache_key] = pixmap
-            cache.move_to_end(cache_key)
-            # v1.4.6: 三档性能模式 → 缩略图缓存大小
-            _level2 = self._perf_level()
-            if _level2 == "power_saver":
-                max_cache_items = 32
-            elif _level2 == "performance":
-                max_cache_items = 64
-            else:
-                max_cache_items = 96
-            while len(cache) > max_cache_items:
-                cache.popitem(last=False)
-            return pixmap
-
     def open_current_folder(self):
             path = core.config.get("current_wallpaper") or core.get_current_wallpaper()
             folder = os.path.dirname(path) if path else core.config.get("slide_folder", "")
             if folder and os.path.isdir(folder):
                 subprocess.Popen(["open", folder])
-
-    def open_wallpaper_sidebar(self) -> None:
-            sb = getattr(self, "_sidebar", None)
-            if sb is not None:
-                try:
-                    if hasattr(sb, "_is_closing") and not sb._is_closing:
-                        sb.raise_()
-                        sb.activateWindow()
-                        return
-                except Exception:
-                    pass
-                self._sidebar = None
-
-            from ui.sidebar import WallpaperSidebar
-
-            folder = core.config.get("slide_folder", "")
-            current = core.config.get("current_wallpaper", "") or core.get_current_wallpaper()
-
-            if not folder or not os.path.isdir(folder):
-                show_info(self, t("提示"), t("请先在软件中设置壁纸文件夹"))
-                return
-
-            def _switch(path: str) -> None:
-                try:
-                    core.set_wallpaper(path, t("侧边栏切换"))
-                    QTimer.singleShot(50, self.update_preview)
-                except Exception as exc:
-                    core.log(f"侧边栏切换壁纸失败: {exc}")
-
-            sidebar_log = self._log_file_path() if core.config.get("log_enabled", False) else None
-            self._sidebar = WallpaperSidebar(
-                self, folder, current, sidebar_log,
-                show_message=lambda title, msg: show_info(self, title, msg),
-                switch_wallpaper=_switch,
-            )
-            self._sidebar.closed.connect(lambda: setattr(self, "_sidebar", None))
-
-    def save_selected_bing_as(self):
-            item = self.bing_list.currentItem()
-            if not item:
-                show_info(self, t("必应壁纸"), t("请先在列表中选择一张已缓存的必应壁纸。"))
-                return
-            src = item.data(Qt.UserRole)
-            if not src or not os.path.exists(src):
-                show_warning(self, t("必应壁纸"), t("选中的缓存文件不存在。"))
-                return
-            dst, _ = QFileDialog.getSaveFileName(self, t("另存必应壁纸"), os.path.join(str(Path.home()), os.path.basename(src)), t("JPEG 图片 (*.jpg);;所有文件 (*.*)"))
-            if not dst:
-                return
-            try:
-                shutil.copy2(src, dst)
-                self.set_status(t("已另存为：") + f"{dst}")
-            except Exception as e:
-                QMessageBox.warning(self, t("另存失败"), str(e))
 
     def restart_as_admin(self, extra_args=None):
             QMessageBox.information(

@@ -156,10 +156,12 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
         global _CURRENT_PROC
         process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         _CURRENT_PROC = process
-        process_state.write_state(
+        ownership = process_state.write_state(
             PID_FILE, process.pid, kind=PROCESS_KIND,
             extra={"ipc_path": ipc_path or "", "command": list(cmd)},
         )
+        if isinstance(ownership, dict) and ownership.get("identity_unavailable"):
+            raise OSError("无法确认新播放器进程身份")
         # 持久化 IPC socket 路径，供 set_video_volume 在父进程中读取
         try:
             with open(IPC_FILE, "w", encoding="utf-8") as fh:
@@ -182,7 +184,9 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
             return False, "macOS 视频播放器启动后立即退出，请检查权限、依赖或文件编码。"
         return True, ""
     except Exception as exc:
-        _CURRENT_PROC = None
+        # If Popen succeeded but durable identity recording failed, the exact
+        # Popen handle is still ours.  Terminate it before clearing ownership.
+        _stop_tracked_process()
         process_state.remove_state(PID_FILE)
         try:
             os.remove(IPC_FILE)

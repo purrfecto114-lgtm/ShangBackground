@@ -100,8 +100,8 @@ def _read_state() -> dict[str, object]:
     return process_state.read_state(PID_FILE)
 
 
-def _write_state(pid: int, path: str = "") -> None:
-    process_state.write_state(
+def _write_state(pid: int, path: str = "") -> dict[str, object]:
+    return process_state.write_state(
         PID_FILE,
         pid,
         kind=PROCESS_KIND,
@@ -277,7 +277,32 @@ def start_html_wallpaper(path: str) -> Tuple[bool, str]:
         return False, str(exc)
     # Store process for later termination and record its PID.
     _CURRENT_PROC = proc
-    _write_state(proc.pid, path=str(path))
+    try:
+        ownership = _write_state(proc.pid, path=str(path))
+        if isinstance(ownership, dict) and ownership.get("identity_unavailable"):
+            raise OSError("无法确认新 HTML 渲染进程身份")
+    except Exception as exc:
+        # A renderer reported as failed must not keep running without durable
+        # ownership state.  The exact Popen handle is still safe to terminate.
+        try:
+            proc.terminate()
+            proc.wait(timeout=1.5)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+                proc.wait(timeout=1.0)
+            except Exception:
+                pass
+        except Exception:
+            pass
+        _CURRENT_PROC = None
+        process_state.remove_state(PID_FILE)
+        if log_file is not None:
+            try:
+                log_file.close()
+            except Exception:
+                pass
+        return False, f"无法记录 HTML 渲染进程所有权，已终止新进程：{exc}"
     # Keep the parent-side handle open briefly so startup failures are captured,
     # then close it to avoid leaking a descriptor for the lifetime of the app.
     deadline = time.monotonic() + 1.5

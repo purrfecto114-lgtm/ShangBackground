@@ -214,3 +214,181 @@ def test_macos_immediate_player_exit_cleans_state(monkeypatch: pytest.MonkeyPatc
     assert macos_video._CURRENT_PROC is None
     assert removed == [os.fspath(tmp_path / "video.pid")]
     assert not ipc_file.exists()
+
+
+def test_windows_video_prefers_mpv_process_before_full_app_libmpv_child(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    from platform_adapters.backends.windows import video as windows_video
+
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"video")
+    calls: list[str] = []
+    monkeypatch.setattr(windows_video, "stop_video_wallpaper", lambda: None)
+    monkeypatch.setattr(windows_video, "_find_workerw", lambda: 1234)
+    monkeypatch.setattr(
+        windows_video,
+        "_mpv_command",
+        lambda *_args: ("mpv", ["mpv.exe", "--wid=1234"], r"\\.\pipe\test"),
+    )
+    monkeypatch.setattr(
+        windows_video,
+        "_internal_libmpv_command",
+        lambda *_args: calls.append("internal") or ("libmpv", ["ShangBackground.exe"], "pipe2"),
+    )
+    monkeypatch.setattr(
+        windows_video,
+        "_start_player",
+        lambda name, _cmd, ipc_path="": (calls.append(name) or True, "ok"),
+    )
+
+    ok, message = windows_video.start_video_wallpaper(str(media))
+
+    assert (ok, message) == (True, "ok")
+    assert calls == ["mpv"]
+
+
+def test_linux_video_terminates_child_when_state_persistence_fails(monkeypatch: pytest.MonkeyPatch):
+    from platform_adapters.backends.linux import video as linux_video
+
+    class FakeProcess:
+        pid = 2468
+
+        def __init__(self):
+            self.terminated = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            self.terminated = True
+
+    process = FakeProcess()
+    removed: list[str] = []
+    monkeypatch.setattr(linux_video.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(
+        linux_video.process_state,
+        "write_state",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    monkeypatch.setattr(linux_video.process_state, "remove_state", removed.append)
+    monkeypatch.setattr(
+        linux_video,
+        "_wait_for_ipc",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("ownership must be durable before readiness wait")),
+    )
+
+    ok, message = linux_video._start_process(["player"], "播放器", "/tmp/test.sock")
+
+    assert ok is False
+    assert "所有权" in message
+    assert process.terminated is True
+    assert linux_video._CURRENT_PROC is None
+    assert removed == [linux_video.PID_FILE]
+
+
+def test_macos_video_terminates_child_when_state_persistence_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    from platform_adapters.backends.macos import video as macos_video
+
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"test")
+
+    class FakeProcess:
+        pid = 9753
+
+        def __init__(self):
+            self.terminated = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            self.terminated = True
+
+    process = FakeProcess()
+    monkeypatch.setattr(macos_video, "stop_video_wallpaper", lambda: None)
+    monkeypatch.setattr(macos_video.importlib.util, "find_spec", lambda _name: object())
+    monkeypatch.setattr(macos_video, "_mpv_ipc_path", lambda: os.fspath(tmp_path / "video.sock"))
+    monkeypatch.setattr(macos_video.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(
+        macos_video.process_state,
+        "write_state",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("read-only state dir")),
+    )
+    monkeypatch.setattr(macos_video.process_state, "remove_state", lambda _path: None)
+
+    ok, message = macos_video.start_video_wallpaper(os.fspath(media))
+
+    assert ok is False
+    assert "read-only state dir" in message
+    assert process.terminated is True
+    assert macos_video._CURRENT_PROC is None
+
+
+@pytest.mark.parametrize("platform", ["linux", "macos"])
+def test_posix_html_terminates_child_when_state_persistence_fails(
+    platform: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    module = importlib.import_module(f"platform_adapters.backends.{platform}.html_wallpaper")
+    html = tmp_path / "wallpaper.html"
+    html.write_text("<html></html>", encoding="utf-8")
+
+    class FakeRuntime:
+        name = "native"
+        internal_flag = "--internal-html-runner"
+
+    class FakeProcess:
+        pid = 8642
+
+        def __init__(self):
+            self.terminated = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            self.terminated = True
+
+    process = FakeProcess()
+    monkeypatch.setattr(module, "stop_html_wallpaper", lambda: None)
+    monkeypatch.setattr(module, "normalize_html_source", lambda value: str(value) if value else None)
+    monkeypatch.setattr(module, "missing_runtime_modules", lambda _runtime: ())
+    monkeypatch.setattr(module, "select_html_runtime", lambda: FakeRuntime())
+    if platform == "macos":
+        monkeypatch.setattr(module.importlib.util, "find_spec", lambda _name: object())
+    monkeypatch.setattr(module, "is_packaged_runtime", lambda: True)
+    monkeypatch.setattr(module, "app_executable_path", lambda: "/tmp/ShangBackground")
+    monkeypatch.setattr(module, "runtime_set_option", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(module.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(
+        module,
+        "_write_state",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("state write failed")),
+    )
+    monkeypatch.setattr(module.process_state, "remove_state", lambda _path: None)
+    monkeypatch.setattr(module, "_SUBPROCESS_LOG", os.fspath(tmp_path / f"{platform}.log"))
+
+    ok, message = module.start_html_wallpaper(os.fspath(html))
+
+    assert ok is False
+    assert "所有权" in message
+    assert process.terminated is True
+    assert module._CURRENT_PROC is None

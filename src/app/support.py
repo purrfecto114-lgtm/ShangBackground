@@ -92,9 +92,47 @@ def _parse_early_args() -> argparse.Namespace:
     parser.add_argument("--jump-to-wallpaper", action="store_true")
     parser.add_argument("--set-wallpaper", dest="set_wallpaper")
     parser.add_argument("--from-context-menu", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--context-menu-dispatched-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--sync-context-on-start", action="store_true")
     parser.add_argument("--inherit-session-wallpaper", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--relaunch-wait-pid", type=int, default=0, help=argparse.SUPPRESS)
+    parser.add_argument("--relaunch-wait-created-at", type=float, default=0.0, help=argparse.SUPPRESS)
     return parser.parse_known_args()[0]
+
+
+def _wait_for_relaunch_parent(args: argparse.Namespace, timeout: float = 30.0) -> bool:
+    """Wait for the exact relaunching parent before touching singleton state."""
+    pid = int(getattr(args, "relaunch_wait_pid", 0) or 0)
+    if pid <= 0:
+        return True
+    expected_created_at = float(getattr(args, "relaunch_wait_created_at", 0.0) or 0.0)
+    try:
+        import psutil
+        process = psutil.Process(pid)
+        if expected_created_at and abs(float(process.create_time()) - expected_created_at) > 1.0:
+            return True
+        try:
+            process.wait(timeout=max(0.1, float(timeout)))
+            return True
+        except psutil.TimeoutExpired:
+            return False
+    except psutil.NoSuchProcess:
+        return True
+    except Exception:
+        # Best-effort fallback when psutil is unavailable very early in startup.
+        import time
+        deadline = time.monotonic() + max(0.1, float(timeout))
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return True
+            except PermissionError:
+                pass
+            except OSError:
+                return True
+            time.sleep(0.05)
+        return False
 
 
 def _open_sidebar_standalone() -> None:
@@ -130,7 +168,9 @@ def _open_sidebar_standalone() -> None:
 
         def _switch(path: str) -> None:
             try:
-                core.set_wallpaper(path, t("侧边栏切换"))
+                if not core.apply_browsed_wallpaper(path, t("侧边栏切换")):
+                    reason = getattr(core, "last_operation_error", "") or t("切换壁纸失败")
+                    core.log(f"侧边栏切换壁纸失败: {reason}")
             except Exception as exc:
                 core.log(f"侧边栏切换壁纸失败: {exc}")
 
@@ -191,7 +231,12 @@ def _dispatch_action_to_existing_instance(args: argparse.Namespace) -> bool:
     # answers in <5ms. If the main instance is running, it will respond
     # immediately. The previous 3×140ms=420ms + 500ms WM_COPYDATA fallback
     # = ~920ms was a significant contributor to the 3s perceived delay.
-    attempts = 40 if wait_for_exit else 2
+    # A detached Explorer child is allowed to wait for a primary instance that
+    # has acquired the single-instance lock but is still constructing its GUI
+    # and local IPC server. Explorer itself has already returned, so this retry
+    # budget improves reliability without reintroducing shell latency.
+    detached_context_child = bool(getattr(args, "context_menu_dispatched_child", False))
+    attempts = 40 if (wait_for_exit or detached_context_child) else 2
     for _attempt in range(attempts):
         existing_identity = single_instance.read_identity()
         if local_ipc.send_command(
@@ -205,7 +250,7 @@ def _dispatch_action_to_existing_instance(args: argparse.Namespace) -> bool:
             if wait_for_exit:
                 return _wait_for_process_exit(existing_identity)
             return True
-        time.sleep(0.1 if wait_for_exit else 0.04)
+        time.sleep(0.1 if wait_for_exit else (0.08 if detached_context_child else 0.04))
 
     # Backward compatibility with a pre-refactor Windows instance.
     # v1.4.4: Reduced timeout from 0.5s to 0.2s.
@@ -249,8 +294,12 @@ def _wait_for_process_exit(identity: dict, timeout: float = 20.0) -> bool:
         return False
 
 
-def _handle_action_args(args: argparse.Namespace) -> bool:
+def _handle_action_args(args: argparse.Namespace) -> int | None:
     """在 PySide6 GUI 创建前处理右键菜单/命令行动作。
+
+    返回 ``None`` 表示继续启动 GUI；返回整数表示动作已经处理，且该
+    整数应直接作为进程退出码。这样命令行/Explorer 调用不会把失败
+    伪装成成功。
 
     Windows 桌面右键菜单在程序关闭时应启动主程序，而不是执行一次
     previous/next/random 后立即退出。因此 from-context-menu 的动作在
@@ -271,39 +320,44 @@ def _handle_action_args(args: argparse.Namespace) -> bool:
         core.pending_startup_context_command = pending_command
         core.hide_window = True
         core.log(f"{origin}最小化启动主程序并暂存动作: {pending_command}")
-        return False
+        return None
     if command and command != "show":
         core.log(f"{origin}唤起程序动作: {command}")
     if getattr(args, "quit", False):
         # No primary instance exists; there is nothing to stop.
-        return True
+        return 0
     try:
         if args.previous:
             core.previous_wallpaper()
-            return True
+            return 0
         if args.next:
             core.next_wallpaper()
-            return True
+            return 0
         if args.random:
             core.random_wallpaper()
-            return True
+            return 0
         if args.set_wallpaper:
-            target = args.set_wallpaper
-            if os.path.isfile(target):
-                core.set_wallpaper(target, t("命令行设置"))
-            else:
+            target = os.path.abspath(os.path.expanduser(str(args.set_wallpaper)))
+            if not os.path.isfile(target):
                 core.log(f"壁纸文件不存在: {target}")
-            return True
+                return 2
+            # A direct set-wallpaper command is a mode change, not merely one
+            # static frame painted on top of a still-running video/HTML backend.
+            # Route it through the same transactional coordinator as the GUI so
+            # dynamic renderers are stopped and failure can compensate back.
+            if not core.switch_wallpaper_mode("图片", updates={"single_image": target}):
+                return 1
+            return 0
         if args.jump_to_wallpaper:
             _open_sidebar_standalone()
-            return True
+            return 0
         if args.show and core.IS_WINDOWS:
             if core.activate_existing_instance(show_notice=False):
-                return True
+                return 0
     except Exception as exc:
         core.log_error(f"{origin}动作执行失败({command or 'unknown'})", exc)
-        return True
-    return False
+        return 1
+    return None
 
 
 # ---------- 单实例检测 ----------

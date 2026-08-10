@@ -149,7 +149,13 @@ class ExitService:
             else:
                 steps.append(self._execute("close_ipc", self._close_ipc))
 
-            if self._release_single_instance is None:
+            if restarting:
+                # Keep the authoritative singleton guard until this process
+                # actually terminates.  The replacement child waits for this
+                # exact parent PID, so releasing here would create a handoff
+                # window where an unrelated third launch could become primary.
+                steps.append(self._skipped("release_single_instance", "restart handoff"))
+            elif self._release_single_instance is None:
                 steps.append(self._skipped("release_single_instance", "not configured"))
             else:
                 steps.append(

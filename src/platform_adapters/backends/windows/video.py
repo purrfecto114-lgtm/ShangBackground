@@ -27,6 +27,7 @@ except ImportError:  # pragma: no cover - optional dependency
 
 from app.config import IS_WINDOWS
 from platform_adapters import process_state
+from platform_adapters.windows_job import attach_process_kill_on_close
 
 _DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir(), "ShangBackground")
 os.makedirs(_DATA_DIR, exist_ok=True)
@@ -36,6 +37,7 @@ PID_FILE = os.path.join(_DATA_DIR, "video_wallpaper.pid")
 VIDEO_EXTENSIONS = (".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".wmv")
 PROCESS_KIND = "video-wallpaper-windows"
 _CURRENT_PROC: subprocess.Popen | None = None
+_CURRENT_JOB = None
 _CANDIDATE_CACHE: dict[tuple[str, ...], tuple[float, tuple[str, ...]]] = {}
 _CANDIDATE_CACHE_SECONDS = 30.0
 PLAYER_LOG = os.path.join(_DATA_DIR, "video-player.log")
@@ -68,6 +70,17 @@ def _read_pid() -> int | None:
         return None
 
 
+def _close_current_job() -> None:
+    global _CURRENT_JOB
+    job = _CURRENT_JOB
+    _CURRENT_JOB = None
+    if job is not None:
+        try:
+            job.close()
+        except Exception:
+            pass
+
+
 def _stop_tracked_process() -> None:
     global _CURRENT_PROC
     proc = _CURRENT_PROC
@@ -90,6 +103,9 @@ def _stop_tracked_process() -> None:
 def stop_video_wallpaper() -> None:
     _stop_tracked_process()
     process_state.terminate_verified(PID_FILE, expected_kind=PROCESS_KIND)
+    # Closing the job is the final containment fallback for descendants that
+    # survived or were re-parented after the renderer root exited.
+    _close_current_job()
     process_state.remove_state(PID_FILE)
 
 
@@ -375,19 +391,19 @@ def _mpv_ipc_path(pid: int | None = None) -> str:
 def _internal_libmpv_command(
     video_path: str, muted: bool, volume: int, workerw: int
 ) -> tuple[str, list[str], str] | None:
-    """Use the direct ctypes/libmpv child before an external executable.
+    """Build the legacy isolated ctypes/libmpv fallback command.
 
-    v1.4.4 regression fix: Only use the internal ctypes/libmpv player when the
+    Only use the internal ctypes/libmpv player when the
     build manifest explicitly bundled libmpv (mode == "bundled"). When the
     manifest says "system" (as in our --mpv-runtime system builds), spawning
     the full packaged executable as a child process just to play a video
     causes massive memory/CPU overhead — the child loads ALL Qt DLLs, Python
     modules, and resources before even reaching the libmpv ctypes call.
 
-    The fix: if video_runtime_mode() is "system" or "disabled", skip the
-    internal libmpv path and fall through to the external mpv.exe path,
-    which spawns a lightweight mpv process (~30MB) instead of the full
-    ShangBackground executable (~300MB+).
+    If video_runtime_mode() is "system" or "disabled", skip the internal
+    libmpv path.  In bundled mode this function is now a compatibility fallback
+    for older libmpv-only payloads; a bundled mpv.exe is preferred because it
+    avoids launching a second full ShangBackground runtime as the player.
     """
     if not libmpv_runtime_available():
         return None
@@ -509,13 +525,14 @@ def _command_for_log(cmd: list[str]) -> str:
 
 
 def _launch(cmd: list[str]) -> subprocess.Popen:
-    global _CURRENT_PROC
+    global _CURRENT_PROC, _CURRENT_JOB
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     _rotate_player_log()
     with open(PLAYER_LOG, "a", encoding="utf-8", errors="replace") as log:
         log.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] launch: {_command_for_log(cmd)}\n")
         log.flush()
         _CURRENT_PROC = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, creationflags=flags)
+        _CURRENT_JOB = attach_process_kill_on_close(_CURRENT_PROC)
     return _CURRENT_PROC
 
 
@@ -534,6 +551,7 @@ def _terminate_failed_player(process: subprocess.Popen) -> None:
         pass
     if _CURRENT_PROC is process:
         _CURRENT_PROC = None
+        _close_current_job()
 
 
 def _wait_for_player_ready(process: subprocess.Popen, ipc_path: str, timeout: float = 3.0) -> bool:
@@ -601,12 +619,13 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
         return False, "无法定位 Windows 桌面 WorkerW，已取消视频启动以避免打开普通播放器窗口"
 
     errors: list[str] = []
-    # Fast path: the real application runtime is a child process using the
-    # direct ctypes/libmpv API. External player discovery (registry and common
-    # installation directories) is deliberately deferred until this path fails.
-    embedded = _internal_libmpv_command(video_path, muted, volume, workerw)
-    if embedded is not None:
-        name, cmd, ipc_path = embedded
+    # Prefer mpv's executable + JSON IPC. In bundled mode candidate discovery
+    # is restricted to the verified packaged runtime, so this does not silently
+    # pick up a random system player. It also avoids starting a second complete
+    # ShangBackground executable merely to host libmpv.
+    external_mpv = _mpv_command(video_path, muted, volume, workerw)
+    if external_mpv is not None:
+        name, cmd, ipc_path = external_mpv
         try:
             ok, message = _start_player(name, cmd, ipc_path=ipc_path)
             if ok:
@@ -615,11 +634,12 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
         except Exception as exc:
             errors.append(f"{name}: {exc}")
 
-    for builder in (_mpv_command,):
-        candidate = builder(video_path, muted, volume, workerw)
-        if candidate is None:
-            continue
-        name, cmd, ipc_path = candidate
+    # Compatibility for an existing libmpv-only bundled payload. This remains
+    # isolated in a subprocess because a bad native DLL must not take down the
+    # primary GUI process.
+    embedded = _internal_libmpv_command(video_path, muted, volume, workerw)
+    if embedded is not None:
+        name, cmd, ipc_path = embedded
         try:
             ok, message = _start_player(name, cmd, ipc_path=ipc_path)
             if ok:
@@ -640,7 +660,7 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
             errors.append(f"{name}: {exc}")
 
     return False, (
-        "未找到可用的视频壁纸播放器，或播放器无法启动。优先尝试了内置 libmpv，随后才扫描系统 mpv/VLC。"
+        "未找到可用的视频壁纸播放器，或播放器无法启动。优先尝试了 mpv 可执行运行时，随后尝试兼容 libmpv/VLC。"
         f" 诊断日志：{PLAYER_LOG}"
         + ("\n" + "；".join(errors[-4:]) if errors else "")
     )

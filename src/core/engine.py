@@ -577,8 +577,12 @@ def restart_as_admin(extra_args=None):
 
 def _do_exit(code=0):
     """安全退出当前进程，用于提权重启后终止旧实例。"""
-    release_single_instance_mutex()
+    # During restart the ExitService intentionally keeps the singleton guard
+    # until process termination.  Do any potentially-slow tray work first,
+    # then release only at the final exit boundary (the OS would also release
+    # the underlying process handles/locks on termination).
     _cleanup_tray_icon_on_exit()
+    release_single_instance_mutex()
     try:
         os._exit(code)
     except Exception:
@@ -1324,10 +1328,13 @@ def _execute_ipc_wallpaper_command(command: str) -> bool:
         random_wallpaper()
         return True
     if command.startswith("set_wallpaper|"):
-        target = command.split("|", 1)[1]
-        if os.path.isfile(target):
-            log(f"侧边栏请求切换壁纸: {target}")
-            set_wallpaper(target, "侧边栏切换")
+        target = os.path.abspath(os.path.expanduser(command.split("|", 1)[1]))
+        if not os.path.isfile(target):
+            raise RuntimeError(f"壁纸文件不存在: {target}")
+        log(f"跨进程请求切换到图片模式: {target}")
+        if not switch_wallpaper_mode("图片", updates={"single_image": target}):
+            reason = last_operation_error or "切换到图片模式失败"
+            raise RuntimeError(reason)
         return True
     if command == "jump":
         if root is not None and hasattr(root, "after"):
@@ -1554,11 +1561,13 @@ def _remember_slideshow_wallpaper(path: str, *, persist: bool = False) -> bool:
 
 
 @_serialized_wallpaper_operation
-def switch_wallpaper_mode(target: str | None = "next") -> bool:
+def switch_wallpaper_mode(target: str | None = "next", *, updates=None) -> bool:
     """Compatibility facade for WallpaperModeService."""
+    _set_last_operation_error("")
     try:
-        return _get_application_services().modes.switch(target)
+        return _get_application_services().modes.switch(target, updates=updates)
     except WallpaperModeError as exc:
+        _set_last_operation_error(str(exc))
         log_error("switch wallpaper mode failed", exc)
         return False
 
@@ -1641,6 +1650,35 @@ def set_wallpaper(path, operation_name="用户", progress_cb=None):
     if success:
         log_time_diff(operation_name, path)
     return success
+
+
+@_serialized_wallpaper_operation
+def apply_browsed_wallpaper(path, operation_name="浏览壁纸") -> bool:
+    """Apply a wallpaper selected from the library/sidebar without splitting mode state.
+
+    In slideshow mode a browse selection is a seek within the active slideshow,
+    so keep the mode and renew its timer.  In every other mode the selected
+    image is a real mode transition to ``图片`` so video/HTML/color state cannot
+    remain persisted behind a static desktop.
+    """
+    _set_last_operation_error("")
+    normalized = _normalize_wallpaper_path(path or "")
+    if not normalized or not os.path.isfile(normalized):
+        _set_last_operation_error("壁纸文件不存在: " + normalized)
+        return False
+    if normalize_mode_key(config.get("mode")) == "幻灯片放映":
+        success = bool(set_wallpaper(normalized, operation_name))
+        if success:
+            try:
+                reset_slide_timer()
+            except Exception as exc:
+                log_error("重置幻灯片计时器失败", exc)
+        return success
+    return bool(
+        switch_wallpaper_mode(
+            "图片", updates={"single_image": normalized}
+        )
+    )
 
 
 
@@ -1887,6 +1925,32 @@ def stop_slideshow():
 def restart_slideshow():
     return _get_application_services().slideshow.restart()
 
+
+@_serialized_wallpaper_operation
+def restore_configured_wallpaper_mode(expected_mode: str, *, is_startup: bool = False) -> bool:
+    """Restore a delayed startup mode only if it is still the committed mode.
+
+    Startup restoration is intentionally delayed until after the first frame.
+    Holding the shared wallpaper-operation lock across the mode check and the
+    backend start prevents a stale QTimer callback from overwriting a newer GUI
+    or IPC mode change that happened during that delay.
+    """
+    expected = normalize_mode_key(expected_mode)
+    current = normalize_mode_key(config.get("mode"))
+    if current != expected:
+        log(f"跳过过期的启动模式恢复: expected={expected}, current={current}")
+        return True
+    if expected == "幻灯片放映":
+        return bool(start_slideshow(is_startup=is_startup))
+    if expected == "视频":
+        return bool(start_video_wallpaper(config.get("video_file")))
+    if expected == "HTML":
+        return bool(
+            start_html_wallpaper(
+                config.get("html_file", "") or config.get("html_url", "")
+            )
+        )
+    return True
 
 
 @_serialized_wallpaper_operation
@@ -2329,24 +2393,14 @@ def _build_context_action_command(*args):
     ``--windows-console-mode=disable`` which prevents any console window.
     In source mode, pythonw.exe is used (no console).
 
-    Explorer's ShellExecute spawns the process and returns immediately for
-    .exe files — no busy cursor is shown because Explorer does not wait
-    for GUI applications to exit (unlike console applications).
+    The registered command intentionally stays direct and quote-safe. Latency
+    isolation is handled by app.context_menu_fastpath before the GUI stack is
+    imported: a live instance receives a bounded WM_COPYDATA accelerator, while
+    a cold action is detached from Explorer and continues through authenticated
+    local IPC / normal single-instance startup.
     """
     parts = [str(part) for part in _context_command_parts(*args)]
     return subprocess.list2cmdline(parts)
-
-
-def _context_hotkey_suffix(key_name):
-    """v1.4.7: 不再在右键菜单显示快捷键提示.
-
-    用户反馈: 右键菜单右侧的快捷键提示容易误导 (用户以为必须按那个键才能触发),
-    实际上右键菜单应该由用户自行点击. 全局热键 (Ctrl+Alt+...) 是独立的系统级
-    触发, 与右键菜单是否显示提示无关.
-
-    返回空字符串, 右键菜单只显示纯文本标签.
-    """
-    return ""
 
 
 def _desired_context_menu_entries():
@@ -2355,25 +2409,25 @@ def _desired_context_menu_entries():
         {
             "path": r"DesktopBackground\Shell\LastWallpaper",
             "enabled": bool(config.get("ctx_last_wallpaper", False)),
-            "label": f"上一个桌面背景{_context_hotkey_suffix('previous')}",
+            "label": "上一个桌面背景",
             "command": _build_context_action_command("--from-context-menu", "--previous"),
         },
         {
             "path": r"DesktopBackground\Shell\NextWallpaper",
             "enabled": bool(config.get("ctx_next_wallpaper", False)),
-            "label": f"下一个桌面背景{_context_hotkey_suffix('next')}",
+            "label": "下一个桌面背景",
             "command": _build_context_action_command("--from-context-menu", "--next"),
         },
         {
             "path": r"DesktopBackground\Shell\RandomWallpaper",
             "enabled": bool(config.get("ctx_random_wallpaper", False)),
-            "label": f"随机一个桌面背景{_context_hotkey_suffix('random')}",
+            "label": "随机一个桌面背景",
             "command": _build_context_action_command("--from-context-menu", "--random"),
         },
         {
             "path": r"DesktopBackground\Shell\ZJumpToWallpaper",
             "enabled": bool(config.get("ctx_jump_to_wallpaper", False)),
-            "label": f"跳转到壁纸{_context_hotkey_suffix('jump')}",
+            "label": "跳转到壁纸",
             "command": _build_context_action_command("--from-context-menu", "--jump-to-wallpaper"),
         },
     )
@@ -2502,6 +2556,26 @@ def _stale_context_menu_paths() -> tuple[str, ...]:
     )
 
 
+def _notify_shell_association_changed() -> None:
+    """Tell Explorer that per-user shell verbs changed.
+
+    Registry writes are synchronous, but Explorer is allowed to cache shell
+    association data.  SHCNE_ASSOCCHANGED is the documented broad invalidation
+    signal for this case and avoids making users restart Explorer/log out just
+    to see a newly enabled or disabled verb.
+    """
+    if not IS_WINDOWS:
+        return
+    try:
+        SHCNE_ASSOCCHANGED = 0x08000000
+        SHCNF_IDLIST = 0x0000
+        ctypes.windll.shell32.SHChangeNotify(
+            SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None
+        )
+    except Exception as exc:
+        log(f"刷新 Windows Shell 关联缓存失败: {exc}")
+
+
 def is_context_menu_synced() -> bool:
     """Return True if the Windows desktop context menu exactly matches config."""
     if not IS_WINDOWS or winreg is None:
@@ -2599,6 +2673,7 @@ def register_context(show_admin_prompt=False):
             save_config()
         except Exception:
             pass
+        _notify_shell_association_changed()
         last_operation_error = ""
         return True
 

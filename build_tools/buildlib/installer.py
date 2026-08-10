@@ -27,6 +27,7 @@ Design notes
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -81,6 +82,14 @@ class InstallerPlan:
     def arch(self) -> str:
         return self.plan.arch
 
+    @property
+    def bundle_subdir(self) -> str:
+        return "ShangBackground" if self.plan.tool == "pyinstaller" else "ShangBackground.dist"
+
+    @property
+    def manifest_relative(self) -> str:
+        return r"_internal\build-features.json" if self.plan.tool == "pyinstaller" else "build-features.json"
+
 
 def _publish_dir(plan: BuildPlan) -> Path:
     """Return the published standalone output directory for ``plan``.
@@ -112,14 +121,12 @@ def _detect_source_layout(source: Path) -> str | None:
     return None
 
 
-def _validate_source_layout(source: Path) -> tuple[str, ...]:
-    """Ensure the published standalone output is ready for the installer.
+def _validate_source_layout(source: Path, *, expected_tool: str | None = None) -> tuple[str, ...]:
+    """Ensure the standalone output is complete and internally consistent.
 
-    Supports both PyInstaller (``ShangBackground/`` + ``_internal/``) and
-    Nuitka (``ShangBackground.dist/``) layouts. The Inno Setup [Files] glob
-    is layout-agnostic: it pulls in ``ShangBackground.dist/*`` OR
-    ``ShangBackground/*`` depending on which exists at compile time, so we
-    only need to verify the entry executable + manifest are present.
+    Presence-only checks are insufficient: a stale/empty manifest could make an
+    installer look valid while describing a different freezer, platform, or
+    architecture. Validate the manifest fields that the installer depends on.
     """
     errors: list[str] = []
     if not source.is_dir():
@@ -130,31 +137,54 @@ def _validate_source_layout(source: Path) -> tuple[str, ...]:
             "and ShangBackground.dist/ exist. Keep exactly one build layout.",
         )
     layout = _detect_source_layout(source)
+    if expected_tool is not None and layout is not None and layout != expected_tool:
+        errors.append(f"Standalone layout is {layout}, but installer tool is {expected_tool}.")
+
+    executable: Path | None = None
+    manifest: Path | None = None
     if layout == "pyinstaller":
         app_root = source / "ShangBackground"
         executable = app_root / "ShangBackground.exe"
-        if not executable.is_file():
-            errors.append(f"ShangBackground.exe is missing: {executable}")
         internal = app_root / "_internal"
         if not internal.is_dir():
             errors.append(f"PyInstaller _internal directory is missing: {internal}")
         manifest = internal / "build-features.json"
-        if not manifest.is_file():
-            errors.append(f"build-features.json manifest is missing: {manifest}")
     elif layout == "nuitka":
         dist_dir = source / "ShangBackground.dist"
         executable = dist_dir / "ShangBackground.exe"
-        if not executable.is_file():
-            errors.append(f"ShangBackground.exe is missing: {executable}")
         manifest = dist_dir / "build-features.json"
-        if not manifest.is_file():
-            errors.append(f"build-features.json manifest is missing: {manifest}")
     else:
         errors.append(
             f"Unrecognized standalone layout under {source}. Expected either "
             "ShangBackground/ShangBackground.exe (PyInstaller) or "
             "ShangBackground.dist/ShangBackground.exe (Nuitka)."
         )
+        return tuple(errors)
+
+    if executable is not None:
+        if not executable.is_file():
+            errors.append(f"ShangBackground.exe is missing: {executable}")
+        elif executable.stat().st_size <= 0:
+            errors.append(f"ShangBackground.exe is empty: {executable}")
+
+    if manifest is not None:
+        if not manifest.is_file():
+            errors.append(f"build-features.json manifest is missing: {manifest}")
+        else:
+            try:
+                payload = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                errors.append(f"build-features.json manifest is invalid: {manifest}: {exc}")
+            else:
+                if not isinstance(payload, dict):
+                    errors.append(f"build-features.json manifest root is not an object: {manifest}")
+                else:
+                    expected = {"tool": layout, "target": "windows", "arch": "x86_64"}
+                    for key, value in expected.items():
+                        if payload.get(key) != value:
+                            errors.append(
+                                f"build-features.json {key} mismatch: expected {value!r}, found {payload.get(key)!r}"
+                            )
     return tuple(errors)
 
 
@@ -230,7 +260,10 @@ def _find_iscc() -> str | None:
     Order:
     1. ``SHANGBACKGROUND_ISCC`` env var (explicit override).
     2. ``PATH`` lookup.
-    3. Well-known Inno Setup 7/6 install paths.
+    3. Well-known Inno Setup 7 install paths.
+
+    Inno Setup 6 is intentionally not auto-selected: the installer definition
+    uses Inno Setup 7's 64-bit ``SetupArchitecture`` directive.
     """
     if sys.platform != "win32" and os.name != "nt":
         return None
@@ -253,10 +286,9 @@ def _find_iscc() -> str | None:
     for root in candidate_roots:
         if not root:
             continue
-        for sub in ("Inno Setup 7", "Inno Setup 6"):
-            candidate = Path(root) / sub / "ISCC.exe"
-            if candidate.is_file():
-                return os.fspath(candidate)
+        candidate = Path(root) / "Inno Setup 7" / "ISCC.exe"
+        if candidate.is_file():
+            return os.fspath(candidate)
     return None
 
 
@@ -274,6 +306,8 @@ def render_iscc_command(plan: InstallerPlan) -> list[str]:
         f"/DPRODUCT_NAME={PRODUCT_NAME}",
         f"/DARCH={plan.arch}",
         f"/DSOURCE_ROOT={os.fspath(plan.source_root)}",
+        f"/DBUNDLE_SUBDIR={plan.bundle_subdir}",
+        f"/DMANIFEST_RELATIVE={plan.manifest_relative}",
         f"/DOUTPUT_DIR={os.fspath(plan.output_dir)}",
         f"/DOUTPUT_BASENAME={plan.output_basename}",
         f"/DPROJECT_ROOT={os.fspath(PROJECT_ROOT)}",
@@ -357,7 +391,7 @@ def create_installer_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--skip-validate",
         action="store_true",
-        help="Skip the source-layout pre-check; useful only when re-running on a known-good bundle.",
+        help="Skip the source-layout pre-check for dry-run command inspection only; real installers always validate.",
     )
     return parser
 
@@ -392,8 +426,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     _print_plan(plan)
 
+    if args.skip_validate and not args.dry_run:
+        print("--skip-validate is allowed only with --dry-run; real installers must validate their payload.", file=sys.stderr)
+        return 2
+
     if not args.skip_validate:
-        errors = _validate_source_layout(plan.source_root)
+        errors = _validate_source_layout(plan.source_root, expected_tool=plan.plan.tool)
         if errors:
             print("Installer source layout is invalid:", file=sys.stderr)
             for error in errors:

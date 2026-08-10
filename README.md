@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.4.6-0ea5e9?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-v1.5.0-0ea5e9?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/PySide6-6.11-41cd52?style=flat-square&logo=qt&logoColor=white" alt="PySide6">
   <img src="https://img.shields.io/badge/License-GPLv3-blue?style=flat-square" alt="GPLv3">
@@ -98,7 +98,7 @@ python build_tools/build.py mpv --help
 
 可选模块：`video`、`html`、`bing`、`hotkeys`、`updates`、`fonts`。图片、幻灯片、纯色和渐变属于核心功能，始终保留。
 
-Windows 自包含视频包需先显式下载或手动放置匹配架构的完整 libmpv 运行时：
+Windows 自包含视频包需先显式下载或手动放置匹配架构的完整 mpv 原生运行时：
 
 ```bash
 python build_tools/build.py mpv download --target windows --arch x86_64 --channel stable

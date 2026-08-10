@@ -2,17 +2,15 @@
 
 ## 程序实际怎样调用 MPV
 
-Windows 和 Linux 的首选视频路径不是 `python-mpv`：
+Windows 的首选视频路径不是 `python-mpv`，也不再把完整主程序当作首选播放器进程：
 
-1. 平台视频后端启动当前应用的子进程；
-2. 子进程参数包含 `--internal-libmpv-player`、目标窗口 ID 和随机 IPC 地址；
-3. `src/main.py` 识别该内部参数并调用 `app.libmpv_runtime.run_libmpv_player()`；
-4. `app.libmpv_runtime` 使用 `ctypes` 直接加载 libmpv，调用 `mpv_create`、`mpv_set_option_string`、`mpv_initialize`、`mpv_command(loadfile)` 和 `mpv_wait_event`；
-5. GUI 通过 mpv JSON IPC 调整暂停、静音和音量；
-6. 内部 libmpv 启动失败后，Windows/Linux 才尝试外部 `mpv`，Windows 最后还可尝试 VLC；
-7. macOS 走 AVFoundation/AppKit，不依赖 libmpv。
+1. Windows 优先启动已验证的 `mpv.exe`，传入 WorkerW 的 `--wid`；
+2. 使用 `--no-config` 隔离用户 mpv 配置，并通过 `--input-ipc-server` 的 JSON IPC 调整暂停、静音和音量；
+3. 旧的 libmpv-only bundle 仍可回退到 `--internal-libmpv-player` 兼容路径；
+4. Linux 保留各桌面环境/Wayland 的平台适配路径；
+5. macOS 走 AVFoundation/AppKit，不依赖 libmpv。
 
-这意味着 Windows 发布包需要的是完整、同架构的 libmpv DLL 运行时及其同目录依赖。仅有 `mpv.exe` 不能保证内部首选路径可用；`python-mpv` 包也不是运行依赖。
+这意味着 **v1.5.0 新 Windows 发布包必须包含完整、同架构的 `mpv.exe` 运行时**（及其同目录 DLL 依赖）。运行时代码仍兼容旧安装遗留的 libmpv-only payload，但构建器不再接受它作为新发布包输入，避免再次生成“启动完整 ShangBackground 子进程承载 libmpv”的 bundle。`python-mpv` 包不是运行依赖。
 
 ## 本地文件优先
 
@@ -34,9 +32,9 @@ bin/ 下的对应结构
 src/bin/mpv/<target>/<arch>/
 ├─ ACTIVE
 ├─ <runtime-id>/
-│  ├─ libmpv-2.dll / libmpv.so.*
-│  ├─ 同目录依赖
-│  ├─ 可选 mpv.exe / mpv
+│  ├─ mpv.exe                  # Windows v1.5.0 新包必需
+│  ├─ *.dll                    # Windows 同目录依赖（如有）
+│  ├─ libmpv.so.* / mpv       # Linux 本地运行时（按构建策略）
 │  ├─ licenses/
 │  └─ runtime.json
 ```
@@ -55,9 +53,9 @@ python build_tools/build.py mpv activate --target windows --arch x86_64 <runtime
 python build_tools/build.py mpv prune --target windows --arch x86_64 --keep 2
 ```
 
-下载器限制 HTTPS 主机、压缩包大小、单成员大小、成员数量和解压总量，拒绝路径穿越与符号链接，并在元数据提供摘要时核对 SHA-256；发布者也可用 `--sha256` 提供独立固定值。安装后会验证主库、全部 DLL/EXE 的 PE 架构、目标 CPU 架构和运行时清单。
+`stable`（默认）读取 mpv 官方 GitHub 的 latest stable release；当前稳定发布页明确同时提供 CI 构建的二进制资产。`development` 则读取 `git-release` prerelease，属于最新 master 的未测试开发构建，只应显式选用。下载器限制 HTTPS 主机、压缩包大小、单成员大小、成员数量和解压总量，拒绝路径穿越与符号链接，并在元数据提供摘要时核对 SHA-256；发布者也可用 `--sha256` 提供独立固定值。安装后会验证 `mpv.exe`、全部 DLL/EXE 的 PE 架构、目标 CPU 架构和运行时清单。
 
-官方 release 页面提供的二进制资产属于 CI 构建，可能因构建选项不同而缺少某些功能。正式发布应固定版本、记录来源和 SHA-256，并在目标机器上验证硬件解码、常见编码、循环、IPC、中文路径和退出回收。
+官方稳定 release 页说明其中二进制资产同样由 CI 生成，且构建选项可能不覆盖 mpv 的全部功能（例如编码能力）。正式发布应固定稳定版本、记录来源和 SHA-256，并在目标机器上验证硬件解码、常见编码、循环、IPC、中文路径和退出回收。
 
 ## 各平台构建策略
 

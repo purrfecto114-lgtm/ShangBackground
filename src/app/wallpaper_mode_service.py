@@ -1,7 +1,7 @@
 """Wallpaper-mode switching coordinator."""
 from __future__ import annotations
 
-from collections.abc import Callable, MutableMapping, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from threading import RLock
 from typing import Any
@@ -69,14 +69,27 @@ class WallpaperModeService:
             return self._order[(index + 1) % len(self._order)]
         return self._normalize_mode(raw)
 
-    def switch(self, target: str | None = "next") -> bool:
+    def switch(
+        self,
+        target: str | None = "next",
+        *,
+        updates: Mapping[str, Any] | None = None,
+    ) -> bool:
         with self._lock:
             config = self._config
             selected = self.resolve(target)
             if selected not in self._order:
                 raise WallpaperModeError(f"不支持的壁纸模式: {selected or target}")
+            # Snapshot *before* staging source/runtime-option changes.  This lets
+            # same-mode replacements (video -> new video, HTML -> refreshed
+            # HTML) restore both the previous renderer and its previous source
+            # if destructive backend startup fails after stopping the old one.
             before = dict(config)
             previous_mode = self._normalize_mode(before.get("mode", ""))
+            for key, value in dict(updates or {}).items():
+                if key == "mode":
+                    continue
+                config[str(key)] = value
             config["mode"] = selected
             try:
                 activation = self._activation_result(self._activate(selected, config))

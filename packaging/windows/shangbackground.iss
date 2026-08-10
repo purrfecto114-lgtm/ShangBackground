@@ -1,7 +1,7 @@
-; ShangBackground Windows installer definition for Inno Setup.
+﻿; ShangBackground Windows installer definition for Inno Setup.
 ;
 ; This script is consumed by ``build_tools/build.py installer``. It expects a
-; validated PyInstaller standalone layout under ``SourceRoot`` and emits a
+; validated Nuitka or PyInstaller standalone layout under ``SourceRoot`` and emits a
 ; single self-contained ``setup.exe`` that bundles the application, start-menu
 ; shortcuts, uninstaller, and the user licence agreement.
 ;
@@ -23,6 +23,8 @@
 ;   /DPRODUCT_NAME         (default: Previous Desktop Background)
 ;   /DARCH                 (default: x86_64)
 ;   /DSOURCE_ROOT          (default: .)
+;   /DBUNDLE_SUBDIR        (default: ShangBackground.dist)
+;   /DMANIFEST_RELATIVE    (default: build-features.json)
 ;   /DOUTPUT_DIR           (default: .)
 ;   /DOUTPUT_BASENAME      (default: ShangBackground-setup)
 ;   /DPROJECT_ROOT         (default: .)
@@ -47,6 +49,12 @@
 #endif
 #ifndef SOURCE_ROOT
   #define SOURCE_ROOT "."
+#endif
+#ifndef BUNDLE_SUBDIR
+  #define BUNDLE_SUBDIR "ShangBackground.dist"
+#endif
+#ifndef MANIFEST_RELATIVE
+  #define MANIFEST_RELATIVE "build-features.json"
 #endif
 #ifndef OUTPUT_DIR
   #define OUTPUT_DIR "."
@@ -86,13 +94,19 @@ SetupIconFile={#PROJECT_ROOT}\src\img\installer_icon.ico
 UninstallDisplayIcon={app}\ShangBackground.exe
 UninstallDisplayName={#APP_NAME}
 
+; Inno Setup 7: emit a native x64 installer for this x64-only application.
+; Either the 32-bit or 64-bit Inno Setup 7 compiler can build it.
+SetupArchitecture=x64
+
 ; Modern look, LZMA2 ultra compression, solid archive for smallest setup.exe.
 WizardStyle=modern
 Compression=lzma2/ultra64
 SolidCompression=yes
 LZMAUseSeparateProcess=yes
 
-; 64-bit only (matches the PyInstaller x86_64 standalone layout).
+; 64-bit only. Qt/PySide 6.11 supports Windows 10 1809+ on x86_64,
+; so do not let Setup install successfully on an OS where the app cannot run.
+MinVersion=10.0.17763
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
@@ -102,6 +116,9 @@ CreateUninstallRegKey=yes
 
 ; Sensible defaults.
 PrivilegesRequired=admin
+CloseApplications=yes
+RestartApplications=no
+SetupLogging=yes
 DisableProgramGroupPage=yes
 DisableDirPage=no
 DefaultDirName={autopf}\{#APP_NAME}
@@ -114,10 +131,8 @@ LanguageDetectionMethod=none
 DisableWelcomePage=no
 
 [Languages]
-; ChineseSimplified.isl ships with Inno Setup 6.5.0+ only. To stay compatible
-; across Inno Setup compiler versions, we bundle the official language file from
-; https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/ChineseSimplified.isl
-; and reference it via a relative path rooted at PROJECT_ROOT.
+; Keep the Simplified Chinese language file in-repo for reproducible builds
+; instead of depending on a compiler installation's optional language payload.
 Name: "chinesesimp"; MessagesFile: "{#PROJECT_ROOT}\packaging\windows\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
@@ -160,14 +175,11 @@ WelcomeLabel1=欢迎使用 ShangBackground 安装向导
 WelcomeLabel2=这将安装 ShangBackground {#APP_VERSION} 到您的计算机。%n%nShangBackground 是一个跨平台桌面壁纸管理器，支持静态壁纸、幻灯片、Bing 每日壁纸、视频壁纸和交互式 HTML 壁纸。%n%n建议在继续前关闭所有其他应用程序。%n%n点击"下一步"继续。
 
 [Files]
-; Pull in the entire validated standalone layout. The build pipeline produces
-; either a PyInstaller layout (ShangBackground\ShangBackground.exe +
-; ShangBackground\_internal\) or a Nuitka layout (ShangBackground.dist\*).
-; Both are emitted under {#SOURCE_ROOT}. We use skipifsourcedoesntexist so
-; ISCC does not abort when one of the two globs matches nothing (only one
-; layout is ever present at a time).
-Source: "{#SOURCE_ROOT}\ShangBackground\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
-Source: "{#SOURCE_ROOT}\ShangBackground.dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+; The Python build driver resolves exactly one validated freezer layout and
+; passes its subdirectory explicitly. Do not use dual skipifsourcedoesntexist
+; globs here: a wrong/empty build must fail compilation rather than silently
+; producing a setup.exe with no application payload.
+Source: "{#SOURCE_ROOT}\{#BUNDLE_SUBDIR}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#APP_NAME}"; Filename: "{app}\ShangBackground.exe"; WorkingDir: "{app}"; Comment: "{#PRODUCT_NAME}"
@@ -182,6 +194,18 @@ Name: "{autodesktop}\{#APP_NAME}"; Filename: "{app}\ShangBackground.exe"; Workin
 [InstallDelete]
 ; Remove the duplicate all-users Startup shortcut created by v1.4.5.
 Type: files; Name: "{commonstartup}\{#APP_NAME}.lnk"
+; _internal is an application-owned PyInstaller payload directory. Clearing it
+; avoids stale DLL/PYD files surviving a PyInstaller upgrade and also cleans it
+; when migrating a previous PyInstaller installation to the release Nuitka build.
+; We deliberately do NOT wildcard-delete {app}: users may choose a custom path.
+Type: filesandordirs; Name: "{app}\_internal"
+; MPV is a native dependency bundle whose filenames change across builds.
+; Leaving obsolete codec/runtime DLLs beside a newer mpv.exe can produce
+; loader failures that are very hard to diagnose. Replace this product-owned
+; subtree deterministically on every upgrade instead of layering new files over it.
+Type: filesandordirs; Name: "{app}\bin\mpv"
+; Remove the old root manifest before the selected bundle layout is copied.
+Type: files; Name: "{app}\build-features.json"
 
 [Run]
 ; Offer to launch the app after a successful install. ``postinstall`` adds the
@@ -200,6 +224,53 @@ begin
   Result := True;
 end;
 
+// Upgrade lifecycle: ask the currently logged-in user's existing instance to
+// perform its normal exit transaction before Restart Manager scans for locked
+// payload files.  Setup itself is elevated, so use ExecAsOriginalUser to keep
+// the helper process in the same user/session/security context as the tray app.
+// Failure is deliberately non-fatal: a damaged older executable or unavailable
+// IPC must not make the package un-upgradeable; CloseApplications=yes remains
+// the fallback immediately after this hook.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ExecutablePath: String;
+  ResultCode: Integer;
+  ExistingVersion: Int64;
+  MinimumGracefulQuitVersion: Int64;
+begin
+  Result := '';
+  ExecutablePath := ExpandConstant('{app}\ShangBackground.exe');
+  if not FileExists(ExecutablePath) then
+    Exit;
+
+  // Older releases did not understand --quit. Starting one merely to ask it
+  // to exit could instead open a fresh GUI and make ewWaitUntilTerminated hang.
+  // 1.4.2 is the first verified release in this upgrade line with --quit.
+  MinimumGracefulQuitVersion := PackVersionComponents(1, 4, 2, 0);
+  if (not GetPackedVersion(ExecutablePath, ExistingVersion)) or
+     (ComparePackedVersion(ExistingVersion, MinimumGracefulQuitVersion) < 0) then
+  begin
+    Log('{#APP_NAME}: installed version predates the verified graceful-quit protocol; Restart Manager will handle remaining locks');
+    Exit;
+  end;
+
+  try
+    if ExecAsOriginalUser(ExecutablePath, '--quit --wait-for-exit',
+      ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    begin
+      if ResultCode = 0 then
+        Log('{#APP_NAME}: existing instance exited cleanly before upgrade')
+      else
+        Log(Format('{#APP_NAME}: graceful pre-upgrade exit returned code %d; Restart Manager will handle remaining locks', [ResultCode]));
+    end
+    else
+      Log(Format('{#APP_NAME}: could not launch graceful pre-upgrade exit helper (%d: %s); Restart Manager will handle remaining locks',
+        [ResultCode, SysErrorMessage(ResultCode)]));
+  except
+    Log('{#APP_NAME}: graceful pre-upgrade exit helper raised an exception; Restart Manager will handle remaining locks: ' + GetExceptionMessage);
+  end;
+end;
+
 function InitializeUninstall(): Boolean;
 var
   ExecutablePath: String;
@@ -213,11 +284,12 @@ begin
   if (not Exec(ExecutablePath, '--quit --wait-for-exit', ExpandConstant('{app}'),
     SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
   begin
-    SuppressibleMsgBox(
-      '无法安全停止正在运行的 {#APP_NAME}。' #13#10 #13#10 +
-      '请从托盘菜单退出程序后重试卸载。',
-      mbError, MB_OK, IDOK);
-    Result := False;
+    Result := SuppressibleMsgBox(
+      '无法通过应用内退出命令确认 {#APP_NAME} 已停止。' #13#10 #13#10 +
+      '这也可能发生在安装文件已经损坏、原生依赖无法加载时。' #13#10 +
+      '建议先从托盘退出程序；如果程序已经无法启动，可以继续卸载。' #13#10 #13#10 +
+      '是否仍然继续卸载？',
+      mbConfirmation, MB_YESNO, IDYES) = IDYES;
   end;
 end;
 
@@ -262,13 +334,15 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ExecutablePath: String;
+  ManifestPath: String;
 begin
   if CurStep = ssPostInstall then
   begin
     ExecutablePath := ExpandConstant('{app}\ShangBackground.exe');
+    ManifestPath := ExpandConstant('{app}\{#MANIFEST_RELATIVE}');
     if not FileExists(ExecutablePath) then
-    begin
-      RaiseException('打包产物缺失：安装后未找到 ' + ExecutablePath + '。可能是磁盘空间不足或杀毒软件拦截，请关闭杀毒软件后重试或联系作者。');
-    end;
+      RaiseException('打包产物缺失：安装后未找到 ' + ExecutablePath + '。可能是磁盘空间不足或安全软件拦截，请检查安装日志。');
+    if not FileExists(ManifestPath) then
+      RaiseException('打包产物不完整：安装后未找到构建清单 ' + ManifestPath + '。请检查安装日志。');
   end;
 end;

@@ -22,12 +22,12 @@ A selected build copies only one runtime to the packaged path:
   bin/mpv/
 
 Examples:
-  src/bin/mpv/windows/x86_64/v0.41.0/libmpv-2.dll
-  src/bin/mpv/windows/arm64/v0.41.0/libmpv-2.dll
+  src/bin/mpv/windows/x86_64/v0.41.0/mpv.exe
+  src/bin/mpv/windows/arm64/v0.41.0/mpv.exe
   src/bin/mpv/linux/x86_64/local/libmpv.so.2
 
 Flat local payloads are a supported explicit override and are checked before version metadata.
 macOS uses the native AVFoundation runner by default and ignores libmpv payloads.
 
-The internal player calls libmpv directly through Python ctypes; python-mpv is not required.
+Windows prefers the bundled mpv executable + JSON IPC; a libmpv-only payload remains a compatibility fallback. python-mpv is not required.
 Verify origin, architecture, licenses, dependencies, and SHA-256 before distribution.

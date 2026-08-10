@@ -64,6 +64,8 @@ def test_installer_script_uses_python_rendered_placeholders():
         "PRODUCT_NAME",
         "ARCH",
         "SOURCE_ROOT",
+        "BUNDLE_SUBDIR",
+        "MANIFEST_RELATIVE",
         "OUTPUT_DIR",
         "OUTPUT_BASENAME",
         "PROJECT_ROOT",
@@ -79,7 +81,7 @@ def test_installer_script_uses_only_valid_inno_setup_directives():
     the correct name is just ``VersionInfoVersion``).
     """
     text = installer_module.ISS_PATH.read_text(encoding="utf-8")
-    # Source: Inno Setup 6 help file, [Setup] section directives list.
+    # Source: current Inno Setup 7 help, [Setup] section directives list.
     # We only assert the directives we actually use plus a denylist of
     # common misspellings that look right but cause compile failures.
     forbidden_directives = (
@@ -102,31 +104,44 @@ def test_installer_script_uses_only_valid_inno_setup_directives():
         "OutputDir=",
         "OutputBaseFilename=",
         "ArchitecturesInstallIn64BitMode=",
+        "SetupArchitecture=x64",
+        "MinVersion=10.0.17763",
+        "SetupLogging=yes",
     ):
         assert required in text, f".iss is missing required [Setup] directive: {required}"
 
 
-def test_installer_script_does_not_check_destination_in_prepare_to_install():
-    """Regression: ``PrepareToInstall`` runs BEFORE [Files] copies anything,
-    so checking ``{app}\\ShangBackground.exe`` at that point always fails and
-    blocks every install with '打包产物缺失'. The .iss must NOT contain a
-    PrepareToInstall function that calls FileExists on a destination path.
+def test_installer_prepare_to_install_does_not_perform_post_copy_sanity_checks():
+    """Regression: ``PrepareToInstall`` runs before [Files] copies the new payload.
 
-    The post-install sanity check belongs in ``CurStepChanged(ssPostInstall)``
-    instead, which fires AFTER all [Files] entries have been copied.
+    It may inspect an *existing* installed executable for upgrade coordination,
+    but missing destination files must never be treated as an installation error
+    here. New-payload sanity checks belong in ``ssPostInstall``.
     """
     text = installer_module.ISS_PATH.read_text(encoding="utf-8")
-    # The .iss must NOT define a PrepareToInstall function.
-    assert "function PrepareToInstall" not in text, (
-        ".iss defines PrepareToInstall - this hook runs BEFORE file copy, so "
-        "any FileExists check on {app} will always fail and block installation. "
-        "Move the check to CurStepChanged(ssPostInstall) instead."
-    )
-    # The .iss MUST define a CurStepChanged post-install guard.
-    assert "procedure CurStepChanged" in text, (
-        ".iss must define CurStepChanged for post-install sanity check"
-    )
-    assert "ssPostInstall" in text, ".iss CurStepChanged must check ssPostInstall step"
+    prepare = text.split("function PrepareToInstall", 1)[1].split(
+        "function InitializeUninstall", 1
+    )[0]
+    assert "RaiseException" not in prepare
+    assert "打包产物缺失" not in prepare
+    assert "build-features.json" not in prepare
+    assert "procedure CurStepChanged" in text
+    assert "ssPostInstall" in text
+
+
+def test_installer_attempts_graceful_upgrade_shutdown_before_restart_manager():
+    text = installer_module.ISS_PATH.read_text(encoding="utf-8")
+    prepare = text.split("function PrepareToInstall", 1)[1].split(
+        "function InitializeUninstall", 1
+    )[0]
+    assert "ExecAsOriginalUser" in prepare
+    assert "--quit --wait-for-exit" in prepare
+    assert "GetPackedVersion" in prepare
+    assert "PackVersionComponents(1, 4, 2, 0)" in prepare
+    assert "ComparePackedVersion" in prepare
+    assert "Result := '';" in prepare
+    assert "CloseApplications=yes" in text
+    assert "AppMutex=" not in text
 
 
 def test_uninstaller_does_not_create_setup_wizard_pages():
@@ -134,6 +149,9 @@ def test_uninstaller_does_not_create_setup_wizard_pages():
     assert "CreateOutputMsgPage" not in text
     assert "--quit --wait-for-exit" in text
     assert "SuppressibleMsgBox" in text
+    assert "Check: ShouldDeleteConfig" in text
+
+
     assert "Check: ShouldDeleteConfig" in text
 
 
@@ -193,6 +211,8 @@ def test_installer_command_carries_all_placeholders():
         "/DPRODUCT_NAME=",
         "/DARCH=x86_64",
         "/DSOURCE_ROOT=",
+        "/DBUNDLE_SUBDIR=",
+        "/DMANIFEST_RELATIVE=",
         "/DOUTPUT_DIR=",
         "/DOUTPUT_BASENAME=",
         "/DPROJECT_ROOT=",
@@ -252,7 +272,9 @@ def test_validate_source_layout_accepts_full_bundle_pyinstaller(tmp_path: Path):
     internal = bundle / "_internal"
     internal.mkdir(parents=True)
     (bundle / "ShangBackground.exe").write_bytes(b"MZ")
-    (internal / "build-features.json").write_text("{}", encoding="utf-8")
+    (internal / "build-features.json").write_text(
+        '{"tool":"pyinstaller","target":"windows","arch":"x86_64"}', encoding="utf-8"
+    )
     errors = _validate_source_layout(source)
     assert errors == ()
 
@@ -262,7 +284,9 @@ def test_validate_source_layout_accepts_full_bundle_nuitka(tmp_path: Path):
     dist = source / "ShangBackground.dist"
     dist.mkdir(parents=True)
     (dist / "ShangBackground.exe").write_bytes(b"MZ")
-    (dist / "build-features.json").write_text("{}", encoding="utf-8")
+    (dist / "build-features.json").write_text(
+        '{"tool":"nuitka","target":"windows","arch":"x86_64"}', encoding="utf-8"
+    )
     errors = _validate_source_layout(source)
     assert errors == ()
 
@@ -309,3 +333,66 @@ def test_installer_main_dry_run_returns_zero(capsys: pytest.CaptureFixture[str])
     out = capsys.readouterr().out
     assert "Inno Setup command" in out
     assert "dry-run: ISCC.exe not invoked" in out
+
+
+def test_installer_script_uses_one_fail_fast_bundle_source():
+    text = installer_module.ISS_PATH.read_text(encoding="utf-8")
+    files_section = text.split("[Files]", 1)[1].split("[Icons]", 1)[0]
+    assert "{#BUNDLE_SUBDIR}" in files_section
+    source_lines = [line for line in files_section.splitlines() if line.lstrip().startswith("Source:")]
+    assert all("skipifsourcedoesntexist" not in line for line in source_lines)
+    assert files_section.count("Source:") == 1
+    assert 'Type: filesandordirs; Name: "{app}\\_internal"' in text
+    assert 'Type: filesandordirs; Name: "{app}\\bin\\mpv"' in text
+    assert 'Name: "{app}\\*"' not in text
+
+
+def test_uninstaller_can_continue_when_installed_executable_is_broken():
+    text = installer_module.ISS_PATH.read_text(encoding="utf-8")
+    uninstall_init = text.split("function InitializeUninstall(): Boolean;", 1)[1].split("var\n  DeleteConfigSelected", 1)[0]
+    assert "MB_YESNO" in uninstall_init
+    assert "IDYES" in uninstall_init
+    assert "Result := False" not in uninstall_init
+
+
+def test_validate_source_layout_rejects_invalid_manifest(tmp_path: Path):
+    source = tmp_path / "standalone"
+    dist = source / "ShangBackground.dist"
+    dist.mkdir(parents=True)
+    (dist / "ShangBackground.exe").write_bytes(b"MZ")
+    (dist / "build-features.json").write_text("not-json", encoding="utf-8")
+    errors = _validate_source_layout(source)
+    assert any("manifest is invalid" in error for error in errors)
+
+
+def test_validate_source_layout_rejects_wrong_freezer_manifest(tmp_path: Path):
+    source = tmp_path / "standalone"
+    dist = source / "ShangBackground.dist"
+    dist.mkdir(parents=True)
+    (dist / "ShangBackground.exe").write_bytes(b"MZ")
+    (dist / "build-features.json").write_text(
+        '{"tool":"pyinstaller","target":"windows","arch":"x86_64"}', encoding="utf-8"
+    )
+    errors = _validate_source_layout(source)
+    assert any("tool mismatch" in error for error in errors)
+
+
+def test_validate_source_layout_rejects_selected_tool_mismatch(tmp_path: Path):
+    source = tmp_path / "standalone"
+    dist = source / "ShangBackground.dist"
+    dist.mkdir(parents=True)
+    (dist / "ShangBackground.exe").write_bytes(b"MZ")
+    (dist / "build-features.json").write_text(
+        '{"tool":"nuitka","target":"windows","arch":"x86_64"}', encoding="utf-8"
+    )
+    errors = _validate_source_layout(source, expected_tool="pyinstaller")
+    assert any("installer tool is pyinstaller" in error for error in errors)
+
+
+def test_real_installer_cannot_skip_validation(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(installer_module, "_print_plan", lambda _plan: None)
+    code = installer_module.main([
+        "--target", "windows", "--tool", "nuitka", "--profile", "full",
+        "--arch", "x86_64", "--input", str(tmp_path / "missing"), "--skip-validate",
+    ])
+    assert code == 2

@@ -39,14 +39,21 @@ class SourceBinding:
     cleared_text: str = ""
     on_changed: ChangedCallback | None = None
 
-    def commit(self, *, required: bool = False, show_dialog: bool = False) -> str:
+    def validate(self, *, required: bool = False, show_dialog: bool = False) -> SourceValidation:
+        """Validate and normalize the visible value without persisting it."""
         result = self.validator(self.edit.text(), optional=not required)
         if not result.valid:
             self._show_error(result, show_dialog=show_dialog)
-            return ""
+            return result
         set_text_input_validation(self.edit)
         if self.edit.text().strip() != result.value:
             self.edit.setText(result.value)
+        return result
+
+    def commit(self, *, required: bool = False, show_dialog: bool = False) -> str:
+        result = self.validate(required=required, show_dialog=show_dialog)
+        if not result.valid:
+            return ""
         previous = str(self.config.get(self.key, "") or "")
         if previous == result.value:
             return result.value
