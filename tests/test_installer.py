@@ -180,7 +180,83 @@ def test_uninstaller_does_not_create_setup_wizard_pages():
     assert "Check: ShouldDeleteConfig" in text
 
 
-    assert "Check: ShouldDeleteConfig" in text
+def test_installer_exposes_start_menu_shortcut_option():
+    """The Select Start Menu Folder wizard page must be shown so users can
+    rename the group or opt out of start-menu shortcuts entirely.
+
+    Regression: previous builds used ``DisableProgramGroupPage=yes`` which
+    silently forced the start-menu group with no UI option to skip it.
+    """
+    text = installer_module.ISS_PATH.read_text(encoding="utf-8")
+    # Look only at the [Setup] section so comment text mentioning the old
+    # behavior doesn't trigger false positives.
+    setup_section = text.split("[Setup]", 1)[1].split("[Languages]", 1)[0]
+    directive_lines = [
+        line.strip() for line in setup_section.splitlines()
+        if line.strip() and not line.strip().startswith(";")
+    ]
+    assert any(line.startswith("DisableProgramGroupPage=no") for line in directive_lines), (
+        "DisableProgramGroupPage=no must be set in [Setup] so the Select "
+        "Start Menu Folder page is shown"
+    )
+    assert not any(line.startswith("DisableProgramGroupPage=yes") for line in directive_lines), (
+        "DisableProgramGroupPage=yes must NOT be set — it silently forces "
+        "the start-menu group with no user option to skip"
+    )
+
+
+def test_installer_shortcut_comment_uses_app_name_not_product_name():
+    """Shortcut tooltip (``Comment:``) must show ``APP_NAME — PRODUCT_NAME``
+    rather than just ``PRODUCT_NAME`` so the Windows shell hover tooltip
+    matches the shortcut label.
+
+    Regression: previous builds set ``Comment: "{#PRODUCT_NAME}"`` which
+    made the hover tooltip show "Previous Desktop Background" while the
+    shortcut label was "ShangBackground" — confusing for users.
+    """
+    text = installer_module.ISS_PATH.read_text(encoding="utf-8")
+    icons_section = text.split("[Icons]", 1)[1].split("[InstallDelete]", 1)[0]
+    # Only check actual icon lines (skip comments and blank lines).
+    icon_lines = [
+        line.strip() for line in icons_section.splitlines()
+        if line.strip() and not line.strip().startswith(";")
+    ]
+    assert icon_lines, "no icon entries found in [Icons] section"
+    for line in icon_lines:
+        if "Comment:" in line:
+            # Bare PRODUCT_NAME only (without APP_NAME prefix) is forbidden.
+            assert 'Comment: "{#PRODUCT_NAME}"' not in line, (
+                f"Shortcut Comment uses bare PRODUCT_NAME — tooltip won't "
+                f"match the shortcut label: {line}"
+            )
+            # The Comment must reference APP_NAME so the tooltip aligns with
+            # the shortcut label. The uninstall shortcut uses a Chinese
+            # prefix ("卸载 {#APP_NAME}") rather than the literal token, so
+            # accept any Comment that contains {#APP_NAME}.
+            assert "{#APP_NAME}" in line, (
+                f"Shortcut Comment must reference APP_NAME so the tooltip "
+                f"matches the shortcut label: {line}"
+            )
+
+
+def test_installer_start_menu_shortcuts_are_task_gated():
+    """Start Menu [Icons] entries must be guarded by ``Tasks: startmenu`` so
+    the user-visible checkbox on the Additional Tasks page actually controls
+    their creation. Without the Tasks guard, the shortcut would be created
+    unconditionally even when the user unchecked the option."""
+    text = installer_module.ISS_PATH.read_text(encoding="utf-8")
+    icons_section = text.split("[Icons]", 1)[1].split("[InstallDelete]", 1)[0]
+    # Group shortcuts (Start Menu) must be task-gated.
+    group_lines = [line for line in icons_section.splitlines() if "{group}" in line]
+    assert group_lines, "no {group} shortcut lines found in [Icons] section"
+    for line in group_lines:
+        assert "Tasks: startmenu" in line, (
+            f"Start Menu shortcut not guarded by Tasks: startmenu — "
+            f"user cannot opt out: {line.strip()}"
+        )
+    # The startmenu task must be declared in [Tasks].
+    tasks_section = text.split("[Tasks]", 1)[1].split("[Registry]", 1)[0]
+    assert 'Name: "startmenu"' in tasks_section
 
 
 def test_installer_plan_resolves_for_windows_x86_64():

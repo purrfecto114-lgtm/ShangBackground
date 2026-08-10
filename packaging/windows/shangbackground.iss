@@ -119,7 +119,11 @@ PrivilegesRequired=admin
 CloseApplications=yes
 RestartApplications=no
 SetupLogging=yes
-DisableProgramGroupPage=yes
+; Show the Select Start Menu Folder page so the user can rename the group
+; or opt out of start-menu shortcuts entirely. Previous builds used
+; DisableProgramGroupPage=yes which silently forced the group; users had no
+; way to skip start-menu shortcut creation.
+DisableProgramGroupPage=no
 DisableDirPage=no
 DefaultDirName={autopf}\{#APP_NAME}
 DefaultGroupName={#APP_NAME}
@@ -137,6 +141,11 @@ Name: "chinesesimp"; MessagesFile: "{#PROJECT_ROOT}\packaging\windows\ChineseSim
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
+; "startmenu" mirrors the built-in {group} behavior but exposes it as an
+; explicit task so the wizard's "Additional shortcuts" page lists it. This
+; gives users a visible option to skip Start Menu shortcuts. When unchecked,
+; the [Icons] entries guarded by Tasks: startmenu are skipped entirely.
+Name: "startmenu"; Description: "创建开始菜单快捷方式"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "startup"; Description: "开机自启动 {#APP_NAME}"; GroupDescription: "其他选项:"
 
@@ -182,10 +191,15 @@ WelcomeLabel2=这将安装 ShangBackground {#APP_VERSION} 到您的计算机。%
 Source: "{#SOURCE_ROOT}\{#BUNDLE_SUBDIR}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\{#APP_NAME}"; Filename: "{app}\ShangBackground.exe"; WorkingDir: "{app}"; Comment: "{#PRODUCT_NAME}"
-Name: "{group}\卸载 {#APP_NAME}"; Filename: "{uninstallexe}"; Comment: "卸载 {#APP_NAME}"
-Name: "{group}\{#APP_NAME} 官方仓库"; Filename: "https://github.com/purrfecto114-lgtm/ShangBackground"
-Name: "{autodesktop}\{#APP_NAME}"; Filename: "{app}\ShangBackground.exe"; WorkingDir: "{app}"; Tasks: desktopicon; Comment: "{#PRODUCT_NAME}"
+; Shortcut Comment (tooltip shown on hover) uses APP_NAME, not PRODUCT_NAME.
+; Previous builds set Comment: "{#PRODUCT_NAME}" which made the Windows shell
+; tooltip show "Previous Desktop Background" — confusing because the Start
+; Menu / Desktop label is "ShangBackground" and users expect the tooltip to
+; match the label they clicked.
+Name: "{group}\{#APP_NAME}"; Filename: "{app}\ShangBackground.exe"; WorkingDir: "{app}"; Comment: "{#APP_NAME} — {#PRODUCT_NAME}"; Tasks: startmenu
+Name: "{group}\卸载 {#APP_NAME}"; Filename: "{uninstallexe}"; Comment: "卸载 {#APP_NAME}"; Tasks: startmenu
+Name: "{group}\{#APP_NAME} 官方仓库"; Filename: "https://github.com/purrfecto114-lgtm/ShangBackground"; Tasks: startmenu
+Name: "{autodesktop}\{#APP_NAME}"; Filename: "{app}\ShangBackground.exe"; WorkingDir: "{app}"; Tasks: desktopicon; Comment: "{#APP_NAME} — {#PRODUCT_NAME}"
 
 ; Autostart is provided only by the HKCU Run value above. A second common
 ; Startup shortcut would launch another process and cannot be disabled from
