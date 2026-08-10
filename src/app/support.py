@@ -116,7 +116,7 @@ def _wait_for_relaunch_parent(args: argparse.Namespace, timeout: float = 30.0) -
             return True
         except psutil.TimeoutExpired:
             return False
-    except psutil.NoSuchProcess:
+    except (ImportError, psutil.NoSuchProcess if 'psutil' in dir() else OSError):
         return True
     except Exception:
         # Best-effort fallback when psutil is unavailable very early in startup.
