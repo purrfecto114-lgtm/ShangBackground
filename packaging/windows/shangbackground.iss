@@ -335,7 +335,7 @@ var
   StartupFolder: String;
   VbsPath: String;
   LocalAppData: String;
-  FindResult: Integer;
+  FindResult: Boolean;
   FindRec: TFindRec;
   LockDir: String;
   LegacySessionFile: String;
