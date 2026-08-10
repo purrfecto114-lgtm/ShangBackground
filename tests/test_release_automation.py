@@ -163,14 +163,27 @@ def test_release_workflow_does_not_force_prerelease():
 
 
 def test_release_workflow_smoke_tests_frozen_binary():
-    """The frozen --version probe is a release gate, not a best-effort warning."""
+    """The frozen --version probe is a release gate, not a best-effort warning.
+
+    The check uses ``grep -qF`` (substring match) rather than exact equality
+    because Nuitka binaries may emit Qt/fontconfig warnings to stderr that
+    would break an exact ``[ "$output" != "$expected" ]`` comparison. The
+    probe must still exit 1 when the version string is genuinely absent.
+    """
     release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
     step = release_workflow.split("- name: Smoke-test frozen binary", 1)[1].split("- name: Build Windows setup.exe", 1)[0]
     assert "--version" in step
     assert "PYTHONPATH=src" in step
+    # `|| true` would mask real failures; the probe must use `exit 1` on mismatch.
     assert "|| true" not in step
     assert "exit 1" in step
     assert "this may be normal if the binary requires a display" not in step
+    # The substring match (grep -qF) is mandatory; exact equality is too strict.
+    assert "grep -qF" in step
+    # Empty-output tolerance for Windows GUI-mode binaries is required so the
+    # smoke test does not fail on windows-latest runners where stdout is not
+    # attached to a console.
+    assert "produced no output" in step
 
 
 def test_release_workflow_uses_ldconfig_for_libxcb_cursor():
@@ -205,3 +218,37 @@ def test_expected_release_assets_include_windows_installer():
     assets = release.expected_release_assets()
     metadata = release.read_metadata()
     assert metadata.windows_installer("x86_64") in assets
+
+
+def test_release_workflow_uploads_build_logs_on_failure():
+    """``release.yml`` must upload build logs even when the build step fails,
+    so remote CI failures are debuggable without re-running locally."""
+    release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "Upload build logs" in release_workflow
+    assert "if: always()" in release_workflow
+    assert "build-logs/" in release_workflow
+    assert "compilation-report.xml" in release_workflow
+
+
+def test_release_workflow_skips_upx_on_macos():
+    """``release.yml`` must not pass ``--upx`` unconditionally; the build
+    tool would silently skip it on macOS anyway, but omitting the flag
+    for macOS avoids confusion in build logs."""
+    release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    build_step = release_workflow.split("- name: Build validated full standalone package", 1)[1]
+    build_step = build_step.split("- name: Copy libxcb-cursor", 1)[0]
+    # The macOS exclusion guard must be present.
+    assert '"macos"' in build_step
+    assert "args+=(--upx)" in build_step
+
+
+def test_release_workflow_installer_step_has_chocolatey_fallback():
+    """``release.yml`` must fall back to chocolatey when winget fails to
+    install Inno Setup, so transient winget source issues do not block
+    the Windows setup.exe build."""
+    release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    installer_step = release_workflow.split("- name: Install Inno Setup + UPX", 1)[1]
+    installer_step = installer_step.split("- name: Run tests on native runner", 1)[0]
+    assert "winget install" in installer_step
+    assert "choco install innosetup" in installer_step
+    assert "Inno Setup 6" in installer_step

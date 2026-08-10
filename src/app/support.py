@@ -108,31 +108,41 @@ def _wait_for_relaunch_parent(args: argparse.Namespace, timeout: float = 30.0) -
     expected_created_at = float(getattr(args, "relaunch_wait_created_at", 0.0) or 0.0)
     try:
         import psutil
-        process = psutil.Process(pid)
-        if expected_created_at and abs(float(process.create_time()) - expected_created_at) > 1.0:
-            return True
+    except ImportError:
+        # psutil unavailable: fall through to the os.kill polling fallback below.
+        psutil = None  # type: ignore[assignment]
+
+    if psutil is not None:
         try:
-            process.wait(timeout=max(0.1, float(timeout)))
-            return True
-        except psutil.TimeoutExpired:
-            return False
-    except (ImportError, psutil.NoSuchProcess if 'psutil' in dir() else OSError):
-        return True
-    except Exception:
-        # Best-effort fallback when psutil is unavailable very early in startup.
-        import time
-        deadline = time.monotonic() + max(0.1, float(timeout))
-        while time.monotonic() < deadline:
+            process = psutil.Process(pid)
+            if expected_created_at and abs(float(process.create_time()) - expected_created_at) > 1.0:
+                return True
             try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
+                process.wait(timeout=max(0.1, float(timeout)))
                 return True
-            except PermissionError:
-                pass
-            except OSError:
+            except psutil.TimeoutExpired:
+                return False
+            except psutil.NoSuchProcess:
                 return True
-            time.sleep(0.05)
-        return False
+        except psutil.NoSuchProcess:
+            return True
+        except Exception as exc:
+            core.log(f"psutil wait 降级到 os.kill 轮询: {exc}")
+
+    # Best-effort fallback when psutil is unavailable or raised unexpectedly.
+    import time
+    deadline = time.monotonic() + max(0.1, float(timeout))
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            pass
+        except OSError:
+            return True
+        time.sleep(0.05)
+    return False
 
 
 def _open_sidebar_standalone() -> None:
