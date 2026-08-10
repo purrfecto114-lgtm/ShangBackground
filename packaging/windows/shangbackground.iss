@@ -264,8 +264,7 @@ begin
         Log(Format('{#APP_NAME}: graceful pre-upgrade exit returned code %d; Restart Manager will handle remaining locks', [ResultCode]));
     end
     else
-      Log(Format('{#APP_NAME}: could not launch graceful pre-upgrade exit helper (%d: %s); Restart Manager will handle remaining locks',
-        [ResultCode, SysErrorMessage(ResultCode)]));
+      Log(Format('{#APP_NAME}: could not launch graceful pre-upgrade exit helper (%d: %s); Restart Manager will handle remaining locks', [ResultCode, SysErrorMessage(ResultCode)]));
   except
     Log('{#APP_NAME}: graceful pre-upgrade exit helper raised an exception; Restart Manager will handle remaining locks: ' + GetExceptionMessage);
   end;

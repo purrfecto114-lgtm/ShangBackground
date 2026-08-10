@@ -144,6 +144,34 @@ def test_installer_attempts_graceful_upgrade_shutdown_before_restart_manager():
     assert "AppMutex=" not in text
 
 
+def test_installer_code_section_has_no_line_starting_with_bracket():
+    """Regression: Inno Setup 7's parser treats a line starting with ``[``
+    (after whitespace) as a potential section header. Inside the ``[Code]``
+    section, Pascal array literals like ``[ResultCode, SysErrorMessage(...)]``
+    must NOT appear at the start of a continuation line — otherwise ISCC
+    aborts with "Invalid section tag".
+
+    See: https://github.com/purrfecto114-lgtm/ShangBackground commit bf124a0
+    broke the Windows setup.exe build because a multi-line Format() call had
+    its array argument on a separate line starting with ``[``.
+    """
+    text = installer_module.ISS_PATH.read_text(encoding="utf-8")
+    code_section = text.split("[Code]", 1)[1] if "[Code]" in text else ""
+    # Find lines that start with [ (after optional whitespace) inside [Code].
+    # These are NOT valid Pascal statements — they're parser traps.
+    bad_lines = []
+    for i, line in enumerate(code_section.split("\n"), start=1):
+        stripped = line.lstrip()
+        if stripped.startswith("[") and not stripped.startswith("[Code]"):
+            # Allow comments that happen to start with [
+            if not stripped.startswith("[//") and not stripped.startswith("[;"):
+                bad_lines.append((i, line.rstrip()))
+    assert not bad_lines, (
+        f"Lines starting with '[' found inside [Code] section — "
+        f"Inno Setup 7 will abort with 'Invalid section tag': {bad_lines}"
+    )
+
+
 def test_uninstaller_does_not_create_setup_wizard_pages():
     text = installer_module.ISS_PATH.read_text(encoding="utf-8")
     assert "CreateOutputMsgPage" not in text
