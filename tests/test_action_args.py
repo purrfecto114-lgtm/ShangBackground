@@ -71,7 +71,9 @@ def test_source_entry_action_does_not_require_pyside_for_missing_file(tmp_path):
     missing = tmp_path / "missing.jpg"
     completed = subprocess.run(
         [sys.executable, "src/main.py", "--set-wallpaper", str(missing)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30, check=False,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace",
+        timeout=30, check=False,
     )
     assert completed.returncode == 2
     assert "壁纸文件不存在" in completed.stderr + completed.stdout

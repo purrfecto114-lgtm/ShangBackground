@@ -1,8 +1,22 @@
 # ShangBackground PySide6 thin entry point.
 from __future__ import annotations
 
-from importlib import import_module
 import sys
+
+# Reconfigure stdout/stderr to UTF-8 BEFORE any other imports that might log.
+# On Windows with a pipe (e.g. subprocess.PIPE) or OEM codepage cp1252, Python
+# defaults to backslashreplace error handling, which turns Chinese log messages
+# into literal "\u58c1\u7eb8..." escape sequences. This breaks tests that
+# check for Chinese text in subprocess output and confuses log viewers.
+# UTF-8 can encode all Unicode characters, so backslashreplace is kept as a
+# safety net for any unexpected bytes.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except (AttributeError, ValueError, OSError):
+        pass  # Stream is None, already closed, or doesn't support reconfigure.
+
+from importlib import import_module
 
 
 def _dispatch_internal_mode() -> int | None:

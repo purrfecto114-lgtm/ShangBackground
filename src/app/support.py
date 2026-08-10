@@ -109,27 +109,32 @@ def _wait_for_relaunch_parent(args: argparse.Namespace, timeout: float = 30.0) -
     try:
         import psutil
     except ImportError:
-        # psutil unavailable: fall through to the os.kill polling fallback below.
-        psutil = None  # type: ignore[assignment]
+        # psutil is unavailable: we cannot perform the PID-reuse identity check
+        # (which requires create_time). Returning True immediately lets the
+        # caller proceed with the relaunch handoff rather than blocking on an
+        # os.kill poll that cannot distinguish PID reuse — a live process at
+        # the same PID might be an unrelated new process, not our parent.
+        return True
 
-    if psutil is not None:
+    # psutil is available — use it for a precise wait with identity check.
+    try:
+        process = psutil.Process(pid)
+        if expected_created_at and abs(float(process.create_time()) - expected_created_at) > 1.0:
+            return True  # PID reuse detected: create_time mismatch
         try:
-            process = psutil.Process(pid)
-            if expected_created_at and abs(float(process.create_time()) - expected_created_at) > 1.0:
-                return True
-            try:
-                process.wait(timeout=max(0.1, float(timeout)))
-                return True
-            except psutil.TimeoutExpired:
-                return False
-            except psutil.NoSuchProcess:
-                return True
+            process.wait(timeout=max(0.1, float(timeout)))
+            return True  # Parent exited cleanly
+        except psutil.TimeoutExpired:
+            return False  # Parent still alive after timeout
         except psutil.NoSuchProcess:
-            return True
-        except Exception as exc:
-            core.log(f"psutil wait 降级到 os.kill 轮询: {exc}")
+            return True  # Parent exited between checks
+    except psutil.NoSuchProcess:
+        return True  # Parent already gone
+    except Exception as exc:
+        # Unexpected psutil error — log and fall back to os.kill polling.
+        core.log(f"psutil wait 降级到 os.kill 轮询: {exc}")
 
-    # Best-effort fallback when psutil is unavailable or raised unexpectedly.
+    # Best-effort fallback for unexpected psutil errors only (not ImportError).
     import time
     deadline = time.monotonic() + max(0.1, float(timeout))
     while time.monotonic() < deadline:
