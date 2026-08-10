@@ -180,6 +180,73 @@ def test_uninstaller_does_not_create_setup_wizard_pages():
     assert "Check: ShouldDeleteConfig" in text
 
 
+def test_uninstaller_cleans_single_instance_lock_directory():
+    """The per-user single-instance lock directory at
+    ``%LOCALAPPDATA%\\ShangBackground-<hash>\\single_instance.lock`` must be
+    removed during uninstall. The hash suffix is derived from the user name
+    (see src/core/single_instance.py:_runtime_dir), so the .iss cannot
+    hard-code the path — it must scan %LOCALAPPDATA% for matching prefixes.
+
+    Regression: previous builds left this directory behind even when the user
+    confirmed config deletion, because [UninstallDelete] only targeted
+    ``{localappdata}\\ShangBackground`` (no hash suffix).
+    """
+    text = installer_module.ISS_PATH.read_text(encoding="utf-8")
+    code_section = text.split("[Code]", 1)[1]
+    # The scan-and-remove logic must be present in the [Code] section.
+    assert "ShangBackground-*" in code_section, (
+        "CurUninstallStepChanged must scan %LOCALAPPDATA% for "
+        "'ShangBackground-*' directories to remove the hashed lock dir"
+    )
+    assert "single_instance.lock" in code_section
+    assert "RemoveDir" in code_section
+    assert "FindFirst" in code_section and "FindNext" in code_section
+
+
+def test_uninstaller_cleans_legacy_temp_session_file():
+    """The legacy session wallpaper file at
+    ``%TEMP%\\ShangBackground_session_wallpaper.json`` (written by v1.4.x and
+    earlier) must be removed during uninstall, not just the new path under
+    the data dir.
+
+    The cleanup is performed in the [Code] section's CurUninstallStepChanged
+    procedure (not [UninstallDelete]) because the file lives in %TEMP% and
+    must be removed unconditionally, not gated by the config-deletion prompt.
+    """
+    text = installer_module.ISS_PATH.read_text(encoding="utf-8")
+    code_section = text.split("[Code]", 1)[1]
+    assert "ShangBackground_session_wallpaper.json" in code_section, (
+        "CurUninstallStepChanged must delete the legacy %TEMP% session file"
+    )
+    assert "{tmp}" in code_section or "ExpandConstant('{tmp}')" in code_section, (
+        "The legacy session file path must reference {tmp}"
+    )
+
+
+def test_uninstaller_uses_dirifempty_fallback_for_data_dir():
+    """When the user confirms config deletion, [UninstallDelete] must use
+    both 'filesandordirs' (recursive file delete) AND 'dirifempty' (remove
+    the now-empty directory itself). Without the dirifempty fallback, the
+    directory survives if it contained only subdirectories that were
+    removed by filesandordirs.
+    """
+    text = installer_module.ISS_PATH.read_text(encoding="utf-8")
+    uninstall_delete_section = text.split("[UninstallDelete]", 1)[1].split("[Code]", 1)[0]
+    data_dir_lines = [
+        line for line in uninstall_delete_section.splitlines()
+        if "{localappdata}" in line and "{#APP_NAME}" in line
+    ]
+    assert data_dir_lines, "no [UninstallDelete] entry targets the data dir"
+    types = [line.split("Type:")[1].split(";")[0].strip() for line in data_dir_lines if "Type:" in line]
+    assert "filesandordirs" in types, (
+        "filesandordirs must be used to recursively delete data dir contents"
+    )
+    assert "dirifempty" in types, (
+        "dirifempty fallback must be present so the data dir itself is removed "
+        "even when only subdirectories existed"
+    )
+
+
 def test_installer_exposes_start_menu_shortcut_option():
     """The Select Start Menu Folder wizard page must be shown so users can
     rename the group or opt out of start-menu shortcuts entirely.

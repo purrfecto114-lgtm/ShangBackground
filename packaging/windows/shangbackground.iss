@@ -229,7 +229,20 @@ Filename: "{app}\ShangBackground.exe"; Description: "{cm:LaunchProgram,{#APP_NAM
 [UninstallDelete]
 ; Delete settings and logs only after explicit confirmation. This directory
 ; can also contain user-managed runtime files, so the default is to preserve it.
+; Use both 'filesandordirs' (recursive delete of files + empty subdirs) and an
+; explicit 'dirifempty' fallback so the directory itself is removed even when
+; only subdirectories existed.
 Type: filesandordirs; Name: "{localappdata}\{#APP_NAME}"; Check: ShouldDeleteConfig
+Type: dirifempty; Name: "{localappdata}\{#APP_NAME}"; Check: ShouldDeleteConfig
+; The single-instance lock lives in a per-user hashed directory next to the
+; main data dir (see src/core/single_instance.py:_runtime_dir). The hash
+; suffix is derived from the user name, so we cannot hard-code the full name
+; here. Instead, the [Code] section's CurUninstallStepChanged procedure
+; scans %LOCALAPPDATA% for 'ShangBackground-*' directories and removes them.
+; This entry handles the legacy non-hashed lock file location as a fallback.
+Type: files; Name: "{localappdata}\{#APP_NAME}\single_instance.lock"; Check: ShouldDeleteConfig
+; Legacy session wallpaper file written to %TEMP% by older releases.
+Type: files; Name: "{tmp}\ShangBackground_session_wallpaper.json"
 
 [Code]
 // InitializeSetup runs before any file operations.
@@ -314,20 +327,59 @@ begin
   Result := DeleteConfigSelected;
 end;
 
-// CurUninstallStepChanged: mandatory VBS/registry cleanup + optional config deletion
+// CurUninstallStepChanged: mandatory VBS/registry/lock cleanup.
+// Runs during usUninstall BEFORE [UninstallDelete] evaluates its Check functions,
+// so the single-instance lock file is released and can be deleted.
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   StartupFolder: String;
   VbsPath: String;
+  LocalAppData: String;
+  FindResult: Integer;
+  FindRec: TFindRec;
+  LockDir: String;
+  LegacySessionFile: String;
 begin
   if CurUninstallStep = usUninstall then
   begin
-    // MANDATORY: Remove legacy VBS startup files
+    // MANDATORY: Remove legacy VBS startup files (v1.4.4 and earlier).
     StartupFolder := ExpandConstant('{userstartup}');
     VbsPath := StartupFolder + '\ShangBackground.vbs';
-    
     if FileExists(VbsPath) then
       DeleteFile(VbsPath);
+
+    // MANDATORY: Remove the per-user single-instance lock directory.
+    // src/core/single_instance.py creates %LOCALAPPDATA%\ShangBackground-<hash>\
+    // (the hash is derived from the user name) to hold single_instance.lock.
+    // The [Registry] section's uninsdeletekey flags cannot clean this because
+    // it is a file-system directory, not a registry key, and the hash suffix
+    // prevents hard-coding the path. Scan %LOCALAPPDATA% for matching prefixes.
+    LocalAppData := ExpandConstant('{localappdata}');
+    FindResult := FindFirst(LocalAppData + '\ShangBackground-*', FindRec);
+    try
+      while FindResult do
+      begin
+        if FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY <> 0 then
+        begin
+          LockDir := LocalAppData + '\' + FindRec.Name;
+          // Delete the lock file first so the directory can be removed.
+          if FileExists(LockDir + '\single_instance.lock') then
+            DeleteFile(LockDir + '\single_instance.lock');
+          if DirExists(LockDir) then
+            RemoveDir(LockDir);
+        end;
+        FindResult := FindNext(FindRec);
+      end;
+    finally
+      FindClose(FindRec);
+    end;
+
+    // MANDATORY: Remove the legacy session wallpaper file written to %TEMP%
+    // by v1.4.x and earlier. The new path lives under the data dir and is
+    // cleaned by [UninstallDelete] when the user confirms config deletion.
+    LegacySessionFile := ExpandConstant('{tmp}\ShangBackground_session_wallpaper.json');
+    if FileExists(LegacySessionFile) then
+      DeleteFile(LegacySessionFile);
   end;
 end;
 
