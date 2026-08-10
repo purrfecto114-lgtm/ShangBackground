@@ -114,11 +114,15 @@ def test_filtered_restart_args_drop_stale_handoff_parent(tmp_path: Path):
 
 def test_wait_for_relaunch_parent_ignores_pid_reuse_identity_mismatch():
     import os
-    import psutil
+    try:
+        import psutil
+        created = psutil.Process(os.getpid()).create_time() - 1000.0
+    except ImportError:
+        created = 0.0  # When psutil is unavailable, use a sentinel that triggers the mismatch path
 
     args = argparse.Namespace(
         relaunch_wait_pid=os.getpid(),
-        relaunch_wait_created_at=psutil.Process(os.getpid()).create_time() - 1000.0,
+        relaunch_wait_created_at=created,
     )
     assert _wait_for_relaunch_parent(args, timeout=0.1) is True
 
