@@ -366,7 +366,9 @@ def run_libmpv_player(
             "audio-file-auto": "no",
             "autoload-files": "no",
             "really-quiet": "yes",
-            "volume": str(0 if muted else clamped),
+            # volume and mute are independent mpv settings; retain the saved
+            # level while muted so IPC can unmute without reconstructing it.
+            "volume": str(clamped),
             "mute": "yes" if muted else "no",
         }
         if ipc_path:

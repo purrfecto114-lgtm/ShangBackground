@@ -71,6 +71,33 @@ def test_wayland_video_uses_current_mpvpaper_selector_and_safe_options(
     assert "volume=61" in cmd[2]
 
 
+def test_wayland_mpvpaper_muting_keeps_audio_track_and_saved_volume(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"test")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    monkeypatch.setenv("XDG_CURRENT_DESKTOP", "KDE")
+    monkeypatch.setattr(video, "stop_video_wallpaper", lambda: None)
+    monkeypatch.setattr(video, "_mpv_ipc_path", lambda: "/tmp/shangbg-test.sock")
+    monkeypatch.setattr(video, "external_media_runtime_allowed", lambda: True)
+    monkeypatch.setattr(video.shutil, "which", lambda name: "/usr/bin/mpvpaper" if name == "mpvpaper" else None)
+
+    def fake_start(cmd, fail_name, ipc_path=""):
+        captured.update(cmd=cmd, fail_name=fail_name, ipc_path=ipc_path)
+        return True, ""
+
+    monkeypatch.setattr(video, "_start_process", fake_start)
+    assert video.start_video_wallpaper(os.fspath(media), muted=True, volume=61)[0] is True
+
+    options = captured["cmd"][2]
+    assert "mute=yes" in options
+    assert "volume=61" in options
+    assert "no-audio" not in options
+
+
 def test_wayland_video_output_can_be_selected(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     media = tmp_path / "clip.webm"
     media.write_bytes(b"test")

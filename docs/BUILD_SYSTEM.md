@@ -76,8 +76,9 @@ python build_tools/build.py mpv list --target windows --arch x86_64
 
 Nuitka 使用构建时临时包和 `--user-package-configuration-file`：
 
-- `dlls/from_filenames` 收集 libmpv 及同目录依赖；
-- `executable: yes` 收集可选 `mpv.exe`；
+- Windows v1.5+ 运行时以 `mpv.exe` 为必需入口，并收集同目录 DLL；
+- 旧 libmpv-only payload 仅作为运行时兼容路径，不再作为 Windows 新包输入；
+- Linux 本地 bundled 模式仍可收集 libmpv 及同目录依赖；
 - `data-files` 收集许可证和运行时元数据；
 - 统一放入产物 `bin/mpv/`。
 

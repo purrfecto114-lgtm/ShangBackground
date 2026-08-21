@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -75,6 +76,20 @@ def subprocess_result(stdout: str):
     from subprocess import CompletedProcess
 
     return CompletedProcess([], 0, stdout=stdout, stderr="")
+
+
+def test_python_probe_is_bounded_and_reports_timeout(monkeypatch: pytest.MonkeyPatch):
+    seen: dict[str, object] = {}
+
+    def fake_run(*args, **kwargs):
+        seen.update(kwargs)
+        raise subprocess.TimeoutExpired(args[0], kwargs.get("timeout", 0))
+
+    monkeypatch.setattr(diagnostics.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="timed out"):
+        diagnostics._python_probe("print('probe')")
+    assert isinstance(seen.get("timeout"), (int, float))
+    assert 0 < float(seen["timeout"]) <= 30
 
 
 def test_pinned_runtime_versions_match_requirement_files():

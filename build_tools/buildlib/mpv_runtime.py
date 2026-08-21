@@ -41,6 +41,7 @@ _MAX_MEMBER_BYTES = 512 * 1024 * 1024
 _MAX_RUNTIME_FILES = 20000
 _MAX_RUNTIME_BYTES = 4 * 1024 * 1024 * 1024
 _MAX_ARCHIVE_MEMBERS = 10000
+_MAX_NESTED_ARCHIVES = 4
 _RUNTIME_METADATA = "runtime.json"
 _ACTIVE_FILE = "ACTIVE"
 
@@ -613,7 +614,12 @@ def _zip_member_path(member: zipfile.ZipInfo) -> Path:
     return path
 
 
-def _extract_zip_safely(archive: Path, destination: Path) -> None:
+def _extract_zip_safely(
+    archive: Path,
+    destination: Path,
+    *,
+    max_expanded_bytes: int = _MAX_EXPANDED_BYTES,
+) -> int:
     with zipfile.ZipFile(archive) as zf:
         members = zf.infolist()
         if len(members) > _MAX_ARCHIVE_MEMBERS:
@@ -622,7 +628,7 @@ def _extract_zip_safely(archive: Path, destination: Path) -> None:
         if oversized:
             raise RuntimeError(f"mpv archive member exceeds the safety limit: {oversized[0]}")
         expanded = sum(max(0, int(member.file_size)) for member in members)
-        if expanded > _MAX_EXPANDED_BYTES:
+        if expanded > max_expanded_bytes:
             raise RuntimeError("mpv archive expands beyond the safety limit")
         for member in members:
             relative = _zip_member_path(member)
@@ -635,6 +641,57 @@ def _extract_zip_safely(archive: Path, destination: Path) -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
             with zf.open(member) as source, target.open("wb") as output:
                 shutil.copyfileobj(source, output, length=1024 * 1024)
+    return expanded
+
+
+def _contains_mpv_executable(path: Path) -> bool:
+    return any(
+        item.is_file() and item.name.lower() == "mpv.exe"
+        for item in path.rglob("*")
+    )
+
+
+def _expand_nested_windows_archives(extracted: Path, *, expanded_bytes: int) -> None:
+    """Expand one nested MPV zip layer used by some official MinGW artifacts.
+
+    The outer GitHub artifact may contain the actual portable MPV zip instead
+    of ``mpv.exe`` directly.  Keep this deliberately bounded: only MPV-named
+    zip files, at most four candidates, one additional archive layer, and the
+    same aggregate expanded-size budget as a normal download.
+    """
+    if _contains_mpv_executable(extracted):
+        return
+    candidates = sorted(
+        (
+            item
+            for item in extracted.rglob("*.zip")
+            if item.is_file() and "mpv" in item.name.lower()
+        ),
+        key=lambda item: item.as_posix().lower(),
+    )
+    if not candidates:
+        return
+    if len(candidates) > _MAX_NESTED_ARCHIVES:
+        raise RuntimeError("mpv archive contains too many nested archives")
+
+    remaining = _MAX_EXPANDED_BYTES - max(0, int(expanded_bytes))
+    if remaining <= 0:
+        raise RuntimeError("mpv archive expands beyond the safety limit")
+    nested_root = extracted / ".nested"
+    nested_root.mkdir(parents=True, exist_ok=True)
+    for index, archive in enumerate(candidates):
+        if archive.stat().st_size > _MAX_ARCHIVE_BYTES:
+            raise RuntimeError(f"nested mpv archive exceeds the safety size limit: {archive.name}")
+        destination = nested_root / str(index)
+        destination.mkdir(parents=True, exist_ok=True)
+        expanded = _extract_zip_safely(
+            archive,
+            destination,
+            max_expanded_bytes=remaining,
+        )
+        remaining -= expanded
+        if _contains_mpv_executable(destination):
+            return
 
 
 def _pe_machine(path: Path) -> int | None:
@@ -797,11 +854,6 @@ def _runtime_id(release: Mapping[str, object], asset_name: str, channel: str) ->
 def _copy_runtime_payload(extracted: Path, destination: Path, target: str) -> None:
     if target != "windows":
         raise RuntimeError("Automatic payload reduction is implemented for Windows archives only")
-    _ = [
-        item
-        for item in extracted.rglob("*")
-        if item.is_file() and item.name.lower() in {"libmpv-2.dll", "mpv-2.dll", "libmpv.dll"}
-    ]
     exe_candidates = [
         item for item in extracted.rglob("*") if item.is_file() and item.name.lower() == "mpv.exe"
     ]
@@ -876,7 +928,9 @@ def install_downloaded_runtime(
         staged = temp / runtime_id
         extracted.mkdir()
         staged.mkdir()
-        _extract_zip_safely(archive, extracted)
+        expanded_bytes = _extract_zip_safely(archive, extracted)
+        if target == "windows":
+            _expand_nested_windows_archives(extracted, expanded_bytes=expanded_bytes)
         _copy_runtime_payload(extracted, staged, target)
         ok, errors = verify_runtime_directory(staged, target, arch)
         if not ok:

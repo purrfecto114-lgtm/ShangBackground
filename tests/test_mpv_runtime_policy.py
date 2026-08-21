@@ -1,9 +1,22 @@
 from __future__ import annotations
 
+import io
 from pathlib import Path
+import struct
+import zipfile
 
+import pytest
 
 from build_tools.buildlib import mpv_runtime
+
+
+def _fake_pe(machine: int) -> bytes:
+    payload = bytearray(0x86)
+    payload[:2] = b"MZ"
+    struct.pack_into("<I", payload, 0x3C, 0x80)
+    payload[0x80:0x84] = b"PE\0\0"
+    struct.pack_into("<H", payload, 0x84, machine)
+    return bytes(payload)
 
 
 def test_mpv_download_defaults_to_official_stable_release_channel():
@@ -28,6 +41,19 @@ def test_asset_patterns_cover_stable_and_development_windows_names():
     assert mpv_runtime.select_release_asset(development, "windows", "x86_64")["name"].endswith("msvc.zip")
 
 
+def test_stable_windows_x86_asset_pattern_accepts_mingw_archive():
+    release = {
+        "assets": [
+            {
+                "name": "mpv-v0.41.0-i686-w64-mingw32.zip",
+                "browser_download_url": "https://github.com/mpv-player/mpv/releases/download/v0.41.0/example.zip",
+            }
+        ]
+    }
+    selected = mpv_runtime.select_release_asset(release, "windows", "x86")
+    assert selected["name"] == "mpv-v0.41.0-i686-w64-mingw32.zip"
+
+
 def test_windows_flat_payload_can_use_mpv_executable(tmp_path: Path):
     payload = tmp_path / "src" / "bin" / "mpv" / "windows" / "x86_64"
     payload.mkdir(parents=True)
@@ -40,3 +66,52 @@ def test_windows_new_bundle_rejects_libmpv_only_flat_payload(tmp_path: Path):
     payload.mkdir(parents=True)
     (payload / "libmpv-2.dll").write_bytes(b"MZ")
     assert mpv_runtime.local_payload_dir(tmp_path, "windows", "x86_64") is None
+
+
+def test_windows_installer_accepts_one_level_nested_mingw_artifact(tmp_path: Path):
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("mpv.exe", _fake_pe(0x014C))
+
+    archive = tmp_path / "mpv-v0.41.0-i686-w64-mingw32.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("mpv-git-i686/mpv-v0.41.0-i686-w64-mingw32.zip", inner.getvalue())
+
+    installed = mpv_runtime.install_downloaded_runtime(
+        tmp_path,
+        {"tag_name": "v0.41.0", "name": "v0.41.0"},
+        {
+            "name": archive.name,
+            "browser_download_url": "https://github.com/mpv-player/mpv/releases/download/v0.41.0/" + archive.name,
+            "size": archive.stat().st_size,
+        },
+        archive,
+        target="windows",
+        arch="x86",
+        channel="stable",
+        sha256="test",
+    )
+
+    assert (installed.path / "mpv.exe").is_file()
+
+
+def test_nested_mpv_archive_keeps_safe_extraction_guards(tmp_path: Path):
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("../mpv.exe", _fake_pe(0x014C))
+
+    archive = tmp_path / "mpv-v0.41.0-i686-w64-mingw32.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("mpv-v0.41.0-i686-w64-mingw32.zip", inner.getvalue())
+
+    with pytest.raises(RuntimeError, match="Unsafe path"):
+        mpv_runtime.install_downloaded_runtime(
+            tmp_path,
+            {"tag_name": "v0.41.0", "name": "v0.41.0"},
+            {"name": archive.name, "browser_download_url": "https://github.com/example", "size": archive.stat().st_size},
+            archive,
+            target="windows",
+            arch="x86",
+            channel="stable",
+            sha256="test",
+        )

@@ -1,2 +1,4 @@
-# Windows video support uses the direct ctypes libmpv client API.
-# No extra Python package is required; bundle the complete native libmpv runtime under src/bin/<platform>/.
+# Windows v1.5+ prefers a verified native mpv.exe controlled by JSON IPC.
+# The direct ctypes libmpv helper remains only for compatibility with older
+# libmpv-only payloads. No extra Python package is required; managed runtimes
+# live under src/bin/mpv/windows/<arch>/.

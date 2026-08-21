@@ -326,9 +326,8 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
         mpvpaper = shutil.which("mpvpaper") if external_media_runtime_allowed() else None
         if mpvpaper:
             # mpvpaper accepts mpv options via -o as a space-separated string.
-            # `volume=N` is the mpv-native 0-100 knob.  When muted we still
-            # pass `volume=0` plus `no-audio` so the player is fully silent
-            # (some mpvpaper builds ignore `volume=0` on its own).
+            # Keep the audio track alive and preserve the configured volume;
+            # mpv's mute property is independently hot-controllable over IPC.
             # 同时启用 input-ipc-server 让 GUI 能热调音量而不重启播放。
             # See https://github.com/GhostNaN/mpvpaper (mpv IPC support).
             safe_options = (
@@ -336,10 +335,10 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
                 "audio-file-auto=no no-osc no-osd-bar no-input-default-bindings "
                 "loop-file=inf"
             )
-            if muted:
-                mpv_options = f"{safe_options} no-audio volume=0 input-ipc-server={ipc_path}"
-            else:
-                mpv_options = f"{safe_options} volume={clamped_volume} input-ipc-server={ipc_path}"
+            mpv_options = (
+                f"{safe_options} volume={clamped_volume} "
+                f"mute={'yes' if muted else 'no'} input-ipc-server={ipc_path}"
+            )
             # Current mpvpaper documents ALL as the selector for every output.
             # Keep an opt-in override for users who want one named connector.
             output = os.environ.get("SHANGBACKGROUND_MPVPAPER_OUTPUT", "").strip() or "ALL"
@@ -381,9 +380,8 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
         "--really-quiet",
         f"--input-ipc-server={ipc_path}",
     ]
-    # mpv --volume takes 0-100 (100 = original loudness).  --mute is kept
-    # so the user can un-mute instantly without losing the saved volume.
-    mpv_args.append(f"--volume={0 if muted else clamped_volume}")
+    # Keep volume and mute independent so hot unmute restores saved volume.
+    mpv_args.append(f"--volume={clamped_volume}")
     mpv_args.append(f"--mute={'yes' if muted else 'no'}")
     mpv_args.append(abs_video)
     cmd = [xwinwrap, "-ov", "-fs", "--", *mpv_args]
@@ -409,8 +407,8 @@ def set_video_volume(muted: bool, volume: int) -> bool:
         # mpv JSON IPC: 每行一条命令，UTF-8 编码。
         # See https://mpv.io/manual/stable/#json-ipc
         cmds = [
+            {"command": ["set_property", "volume", clamped_volume]},
             {"command": ["set_property", "mute", bool(muted)]},
-            {"command": ["set_property", "volume", 0 if muted else clamped_volume]},
         ]
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(0.5)

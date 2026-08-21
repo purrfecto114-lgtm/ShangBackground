@@ -53,7 +53,7 @@ python build_tools/build.py mpv activate --target windows --arch x86_64 <runtime
 python build_tools/build.py mpv prune --target windows --arch x86_64 --keep 2
 ```
 
-`stable`（默认）读取 mpv 官方 GitHub 的 latest stable release；当前稳定发布页明确同时提供 CI 构建的二进制资产。`development` 则读取 `git-release` prerelease，属于最新 master 的未测试开发构建，只应显式选用。下载器限制 HTTPS 主机、压缩包大小、单成员大小、成员数量和解压总量，拒绝路径穿越与符号链接，并在元数据提供摘要时核对 SHA-256；发布者也可用 `--sha256` 提供独立固定值。安装后会验证 `mpv.exe`、全部 DLL/EXE 的 PE 架构、目标 CPU 架构和运行时清单。
+`stable`（默认）读取 mpv 官方 GitHub 的 latest stable release；当前稳定发布页明确同时提供 CI 构建的二进制资产。`development` 则读取 `git-release` prerelease，属于最新 master 的未测试开发构建，只应显式选用。部分官方 MinGW/CI artifact 的外层 ZIP 里还会再放一个 MPV ZIP；下载器兼容**一层、受限的 MPV 嵌套 ZIP**，同时把外层与内层展开量计入同一个安全预算。它还限制 HTTPS 主机、压缩包大小、单成员大小、成员数量和解压总量，拒绝路径穿越与符号链接，并在元数据提供摘要时核对 SHA-256；发布者也可用 `--sha256` 提供独立固定值。安装后会验证 `mpv.exe`、全部 DLL/EXE 的 PE 架构、目标 CPU 架构和运行时清单。
 
 官方稳定 release 页说明其中二进制资产同样由 CI 生成，且构建选项可能不覆盖 mpv 的全部功能（例如编码能力）。正式发布应固定稳定版本、记录来源和 SHA-256，并在目标机器上验证硬件解码、常见编码、循环、IPC、中文路径和退出回收。
 

@@ -9,20 +9,55 @@ video_runtime_mode() and returns None in system/disabled mode.
 """
 from __future__ import annotations
 
+import pytest
 
-def test_windows_internal_libmpv_skipped_in_system_mode():
+
+@pytest.mark.parametrize("mode", ["system", "disabled"])
+def test_windows_internal_libmpv_skipped_in_system_mode(monkeypatch: pytest.MonkeyPatch, mode: str):
     """In system mode, _internal_libmpv_command must return None so the
     external mpv.exe path is used instead of spawning the full app."""
-    from app.build_features import video_runtime_mode
-    assert video_runtime_mode() in ("system", "disabled", "bundled", "native", "source")
+    from app import build_features
+    from platform_adapters.backends.windows import video
+
+    monkeypatch.setattr(video, "libmpv_runtime_available", lambda: True)
+    monkeypatch.setattr(build_features, "video_runtime_mode", lambda: mode)
+    assert video._internal_libmpv_command("clip.mp4", True, 50, 1234) is None
 
 
-def test_linux_internal_libmpv_skipped_in_system_mode():
+@pytest.mark.parametrize("mode", ["system", "disabled"])
+def test_linux_internal_libmpv_skipped_in_system_mode(monkeypatch: pytest.MonkeyPatch, mode: str):
     """Same check for Linux X11 backend."""
-    from app.build_features import video_runtime_mode
-    mode = video_runtime_mode()
-    # In our CI builds, mode should be "system" (from --mpv-runtime system)
-    assert mode in ("system", "disabled", "bundled", "native", "source")
+    from app import build_features
+    from platform_adapters.backends.linux import video
+
+    monkeypatch.setattr(video, "libmpv_runtime_available", lambda: True)
+    monkeypatch.setattr(build_features, "video_runtime_mode", lambda: mode)
+    assert video._internal_libmpv_x11_command("/usr/bin/xwinwrap", "clip.mp4", "/tmp/mpv.sock", True, 50) is None
+
+
+def test_windows_mpv_muting_preserves_configured_volume(monkeypatch: pytest.MonkeyPatch):
+    from platform_adapters.backends.windows import video
+
+    monkeypatch.setattr(video, "_candidate_paths", lambda *_args: ["/tmp/mpv.exe"])
+    monkeypatch.setattr(video, "_mpv_ipc_path", lambda: r"\\.\pipe\shangbg-test")
+    result = video._mpv_command("clip.mp4", True, 61, 1234)
+    assert result is not None
+    _name, command, _ipc = result
+    assert "--volume=61" in command
+    assert "--mute=yes" in command
+
+
+def test_windows_live_mute_preserves_configured_volume(monkeypatch: pytest.MonkeyPatch):
+    from platform_adapters.backends.windows import video
+
+    seen: list[list[dict]] = []
+    monkeypatch.setattr(video, "_send_mpv_ipc_commands", lambda commands: seen.append(commands) or True)
+
+    assert video.set_video_volume(True, 61) is True
+    assert seen == [[
+        {"command": ["set_property", "volume", 61]},
+        {"command": ["set_property", "mute", True]},
+    ]]
 
 
 def test_build_features_manifest_loads_correctly():

@@ -443,9 +443,8 @@ def _mpv_command(video_path: str, muted: bool, volume: int, workerw: int) -> tup
     if not workerw:
         return None
     wid_arg = f"--wid={workerw}"
-    # mpv --volume takes 0-100 (100 = original loudness).  When muted we
-    # still pass --mute=yes so the user can un-mute instantly without
-    # losing the saved volume level.
+    # mpv keeps volume and mute as separate properties. Preserve the saved
+    # volume while muted so a later hot unmute restores it immediately.
     clamped_volume = max(0, min(100, int(volume)))
     # IPC socket so the GUI can adjust volume/mute live without restarting mpv.
     # See https://mpv.io/manual/stable/#json-ipc for the protocol.
@@ -470,7 +469,7 @@ def _mpv_command(video_path: str, muted: bool, volume: int, workerw: int) -> tup
         "--no-border",
         "--really-quiet",
         f"--input-ipc-server={ipc_path}",
-        f"--volume={0 if muted else clamped_volume}",
+        f"--volume={clamped_volume}",
         f"--mute={'yes' if muted else 'no'}",
         os.path.abspath(video_path),
     ]
@@ -700,8 +699,8 @@ def set_video_volume(muted: bool, volume: int) -> bool:
     """Live-adjust volume/mute on the running player without restart."""
     clamped_volume = max(0, min(100, int(volume)))
     return _send_mpv_ipc_commands([
+        {"command": ["set_property", "volume", clamped_volume]},
         {"command": ["set_property", "mute", bool(muted)]},
-        {"command": ["set_property", "volume", 0 if muted else clamped_volume]},
     ])
 
 
@@ -717,7 +716,7 @@ def main() -> None:
     parser.add_argument("video_path")
     parser.add_argument("--muted", action="store_true")
     parser.add_argument("--volume", type=int, default=100,
-                        help="audio volume 0-100, only effective when --muted is not set (default: 100)")
+                        help="audio volume 0-100; preserved while muted for later unmute (default: 100)")
     args = parser.parse_args()
     ok, message = start_video_wallpaper(args.video_path, muted=args.muted, volume=args.volume)
     if not ok:

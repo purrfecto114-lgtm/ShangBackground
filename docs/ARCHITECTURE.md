@@ -27,7 +27,12 @@ platform_adapters/backends/{windows,linux,macos}
 
 ## 视频壁纸
 
-Windows/Linux 优先使用内部 libmpv helper，并通过 IPC 热更新暂停、静音和音量；macOS 使用原生视频路径。helper 始终是独立进程。
+Windows 新发布包优先使用已验证的内置 `mpv.exe + JSON IPC`，把 WorkerW 句柄通过
+`--wid` 交给独立 mpv 进程；旧的 libmpv-only 运行时只保留为兼容回退。Linux X11
+可使用内置 libmpv helper 或 `xwinwrap + mpv`，Wayland 的 layer-shell 会话使用
+`mpvpaper`；`system/disabled` 构建模式不会启动内部 libmpv helper。macOS 使用原生
+AVFoundation/AppKit 视频路径。所有可热控的 mpv 路径都把 `volume` 与 `mute` 作为
+独立状态，通过 IPC 更新暂停、静音和音量，避免静音时丢失用户保存的音量。
 
 ## HTML 壁纸
 

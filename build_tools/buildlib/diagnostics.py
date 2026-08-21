@@ -24,17 +24,27 @@ from .constants import (
 from .plan import BuildPlan
 
 
+_PYTHON_PROBE_TIMEOUT_SECONDS = 15
+
+
 def _python_probe(script: str, *arguments: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [python_executable(), "-c", script, *arguments],
-        cwd=PROJECT_ROOT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+    command = [python_executable(), "-c", script, *arguments]
+    try:
+        return subprocess.run(
+            command,
+            cwd=PROJECT_ROOT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=_PYTHON_PROBE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"Selected build Python probe timed out after {_PYTHON_PROBE_TIMEOUT_SECONDS}s: {python_executable()}"
+        ) from exc
 
 
 def _module_exists(name: str) -> bool:
