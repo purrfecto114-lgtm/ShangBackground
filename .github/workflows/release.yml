@@ -138,8 +138,36 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          choco install upx --version=5.2.0 -y --no-progress --limit-output
-          if ($LASTEXITCODE -ne 0) { throw "UPX installation failed" }
+
+          # UPX: try chocolatey first, then fall back to GitHub release download.
+          # chocolatey.org occasionally returns 504 Gateway Timeout (transient
+          # infrastructure issue), so we cannot rely on it as the only source.
+          $upx = $null
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            Write-Host "UPX install attempt $attempt (chocolatey)..."
+            choco install upx --version=5.2.0 -y --no-progress --limit-output
+            if ($LASTEXITCODE -eq 0) {
+              $upx = (Get-Command upx.exe -ErrorAction SilentlyContinue).Source
+              if ($upx) { break }
+            }
+            Write-Host "chocolatey attempt $attempt failed (exit $LASTEXITCODE); retrying..."
+            Start-Sleep -Seconds 10
+          }
+          if (-not $upx) {
+            Write-Host "chocolatey failed after 3 attempts; falling back to GitHub release download"
+            $upxRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/upx/upx/releases/latest" -Headers @{ "User-Agent" = "ShangBackground-CI" }
+            $asset = $upxRelease.assets | Where-Object { $_.name -match "upx-[\d.]+-win64\.zip$" } | Select-Object -First 1
+            if (-not $asset) { throw "Could not find UPX win64 asset in latest GitHub release" }
+            Write-Host "Downloading UPX from: $($asset.browser_download_url)"
+            $zipPath = "$env:TEMP\upx.zip"
+            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath
+            $extractDir = "$env:TEMP\upx-extracted"
+            Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+            $upx = (Get-ChildItem -Path $extractDir -Recurse -Filter "upx.exe" | Select-Object -First 1).FullName
+            if (-not $upx) { throw "upx.exe not found in downloaded archive" }
+          }
+          Write-Host "UPX binary: $upx"
+          & $upx --version | Select-Object -First 2
 
           # Prefer winget (Inno Setup 7); fall back to chocolatey if winget is unavailable or fails.
           $iscc = $null
@@ -156,8 +184,13 @@ jobs:
             Write-Host "winget install failed: $_; falling back to chocolatey"
           }
           if (-not $iscc) {
-            choco install innosetup --version=6.5.5 -y --no-progress --limit-output
-            if ($LASTEXITCODE -ne 0) { throw "Inno Setup chocolatey fallback failed" }
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+              Write-Host "Inno Setup chocolatey install attempt $attempt..."
+              choco install innosetup --version=6.5.5 -y --no-progress --limit-output
+              if ($LASTEXITCODE -eq 0) { break }
+              Start-Sleep -Seconds 10
+            }
+            if ($LASTEXITCODE -ne 0) { throw "Inno Setup chocolatey install failed after 3 attempts" }
             $iscc = @(
               "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
               "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
@@ -165,10 +198,8 @@ jobs:
           }
           if (-not $iscc) { throw "Inno Setup ISCC.exe was not found after installation" }
 
-          $upx = (Get-Command upx.exe -ErrorAction Stop).Source
           "SHANGBACKGROUND_UPX_BINARY=$upx" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
           "SHANGBACKGROUND_ISCC=$iscc" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-          & $upx --version | Select-Object -First 2
           & $iscc /? | Select-Object -First 2
 
       - name: Run tests on native runner

@@ -252,3 +252,34 @@ def test_release_workflow_installer_step_has_chocolatey_fallback():
     assert "winget install" in installer_step
     assert "choco install innosetup" in installer_step
     assert "Inno Setup 6" in installer_step
+
+
+def test_release_workflow_upx_install_has_retry_and_github_fallback():
+    """``release.yml`` must retry chocolatey UPX install and fall back to
+    GitHub release download, because chocolatey.org occasionally returns
+    504 Gateway Timeout (transient infrastructure issue).
+
+    Regression: v1.5.0 re-release failed on 2026-08-21 because chocolatey
+    returned 504 for the UPX package, blocking the entire Windows build.
+    """
+    release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    installer_step = release_workflow.split("- name: Install Inno Setup + UPX", 1)[1]
+    installer_step = installer_step.split("- name: Run tests on native runner", 1)[0]
+    # Retry loop for chocolatey UPX install
+    assert "for ($attempt = 1; $attempt -le 3; $attempt++)" in installer_step
+    # GitHub release fallback for UPX
+    assert "api.github.com/repos/upx/upx/releases/latest" in installer_step
+    assert r"upx-[\d.]+-win64\.zip" in installer_step
+
+
+def test_release_workflow_inno_setup_chocolatey_has_retry():
+    """``release.yml`` must retry the chocolatey Inno Setup install to
+    handle transient chocolatey.org 504 errors."""
+    release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    installer_step = release_workflow.split("- name: Install Inno Setup + UPX", 1)[1]
+    installer_step = installer_step.split("- name: Run tests on native runner", 1)[0]
+    # The Inno Setup chocolatey fallback must have a retry loop (count >= 2)
+    # Find the block after "winget install failed"
+    fallback_block = installer_step.split("if (-not $iscc)", 1)[1]
+    assert "for ($attempt" in fallback_block
+    assert "choco install innosetup" in fallback_block
