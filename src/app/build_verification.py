@@ -70,6 +70,11 @@ def collect_build_verification() -> dict[str, Any]:
     qt_smoke = _qt_smoke_test()
     return {
         "schema": 1,
+        "verification": {
+            "mode": "real" if is_packaged_runtime() else "source",
+            "executed": True,
+            "source": "in-process build verification",
+        },
         "app_version": APP_VERSION,
         "platform": diagnostics.get("platform"),
         "architecture": _runtime_architecture(),

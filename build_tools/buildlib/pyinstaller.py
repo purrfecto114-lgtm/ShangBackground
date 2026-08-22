@@ -59,6 +59,11 @@ def build_args(plan: BuildPlan, *, windows_console_mode: str, contents_directory
             destination = (Path("bin/mpv") / item.relative_to(source).parent).as_posix()
             suffix = item.suffix.lower()
             binary = suffix in {".dll", ".so", ".dylib", ".exe"} or ".so." in item.name
+            # Native MPV files must be siblings in the final ``bin/mpv``
+            # directory so Windows DLL search and the post-build verifier see
+            # the same layout as the source runtime.
+            if binary:
+                destination = "bin/mpv"
             command += _asset_arg("--add-binary" if binary else "--add-data", item, destination)
 
     for module in dynamic_modules(plan):

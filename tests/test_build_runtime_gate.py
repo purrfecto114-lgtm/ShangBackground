@@ -188,6 +188,7 @@ def test_frozen_linux_runtime_forces_xcb_and_rejects_offscreen_plugin(
     assert "QT_PLUGIN_PATH" not in captured_environment
     assert "LD_LIBRARY_PATH" not in captured_environment
     assert any("did not load the XCB" in error for error in errors)
+    assert any("real executed runtime check" in error for error in errors)
 
 
 def test_frozen_macos_runtime_accepts_frameworks_resource_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
