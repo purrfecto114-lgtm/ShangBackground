@@ -2953,7 +2953,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         tray_menu_layout.setVerticalSpacing(12)
         self.tray_menu_labels = {
             "show": t("打开主界面"), "previous": t("上一张"), "next": t("下一张"), "random": t("随机"),
-"bing": t("同步必应"), "jump": t("跳转壁纸"), "about": t("关于"), "exit": t("退出"),
+"bing": t("同步必应"), "jump": t("跳转壁纸"), "settings": t("全局设置"), "about": t("关于"), "exit": t("退出"),
         }
         if not is_feature_enabled("bing"):
             self.tray_menu_labels.pop("bing", None)
@@ -4538,7 +4538,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                     widget.blockSignals(False)
 
             if hasattr(self, "tray_menu_checks"):
-                menu_items = cfg.get("tray_menu_items") or ["show", "previous", "next", "random", "bing", "jump", "about", "exit"]
+                menu_items = cfg.get("tray_menu_items") or ["show", "previous", "next", "random", "bing", "jump", "settings", "about", "exit"]
                 if menu_items and isinstance(menu_items[0], dict):
                     menu_items = [item.get("action") for item in menu_items if item.get("enabled", True)]
                 for action, cb in self.tray_menu_checks.items():
@@ -6122,6 +6122,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             return
         callbacks = {
             "show": self.show_from_tray,
+            "settings": self.show_from_tray,
             # Tray clicks should release the native menu immediately.  Route
             # wallpaper actions through the existing coalescing worker instead
             # of entering the main-window operation queue from the menu callback.
@@ -6175,7 +6176,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             labels.pop("bing", None)
         if not is_feature_enabled("html"):
             labels.pop("refresh_html", None)
-        defaults = [name for name in ("show", "previous", "next", "random", "bing", "jump", "about", "exit") if name in labels]
+        defaults = [name for name in ("show", "previous", "next", "random", "bing", "jump", "settings", "about", "exit") if name in labels]
         actions = core.config.get("tray_menu_items") or defaults
         if isinstance(actions, list) and actions and isinstance(actions[0], dict):
             actions = [item.get("action") for item in actions if item.get("enabled", True)]
