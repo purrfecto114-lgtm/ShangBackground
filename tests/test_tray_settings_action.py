@@ -1,6 +1,19 @@
+from pathlib import Path
+
+import pytest
+
 from app.config_defaults import build_default_config
 from app.config_normalization import normalize_runtime_config
-import inspect
+
+try:
+    from ui.main_window import _SharedShangBackgroundWindow
+except ModuleNotFoundError:  # minimal CI environments do not install PySide6
+    _SharedShangBackgroundWindow = None  # type: ignore[assignment]
+
+
+def _require_window_class() -> None:
+    if _SharedShangBackgroundWindow is None:
+        pytest.skip("PySide6 is not installed; skipping Qt-bound behaviour test")
 
 
 def test_default_tray_items_include_settings():
@@ -8,9 +21,10 @@ def test_default_tray_items_include_settings():
 
 
 def test_tray_settings_action_dispatches_to_existing_window(monkeypatch):
-    from ui.main_window import _SharedShangBackgroundWindow
+    _require_window_class()
 
     called = []
+
     class StubWindow:
         show_from_tray = lambda self: called.append(True)
         apply_html_wallpaper_from_gui = lambda self: None
@@ -32,7 +46,5 @@ def test_old_context_settings_flag_migrates_to_settings_action():
 
 
 def test_tray_menu_builder_exposes_settings_label():
-    from ui.main_window import _SharedShangBackgroundWindow
-
-    source = inspect.getsource(_SharedShangBackgroundWindow.create_or_update_tray)
+    source = Path("src/ui/main_window.py").read_text(encoding="utf-8")
     assert '"settings": t("全局设置")' in source

@@ -13,7 +13,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 DEFAULT_TIMESTAMP_URL = "http://timestamp.digicert.com"

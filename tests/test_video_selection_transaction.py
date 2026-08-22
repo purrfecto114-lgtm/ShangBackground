@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from dataclasses import dataclass
 from pathlib import Path
 from types import MethodType
@@ -11,7 +13,16 @@ from app.source_validation import SourceValidation
 from app.config import VIDEO_EXTENSIONS
 from app.source_validation import validate_existing_file
 from app.wallpaper_mode_service import WallpaperModeError, WallpaperModeService
-from ui.main_window import _SharedShangBackgroundWindow
+
+try:
+    from ui.main_window import _SharedShangBackgroundWindow
+except ModuleNotFoundError:  # minimal CI environments do not install PySide6
+    _SharedShangBackgroundWindow = None  # type: ignore[assignment]
+
+
+def _require_window_class() -> None:
+    if _SharedShangBackgroundWindow is None:
+        pytest.skip("PySide6 is not installed; skipping Qt-bound behaviour test")
 
 
 @dataclass
@@ -66,6 +77,7 @@ def _finish(window, ok: bool, message: str = "failed") -> None:
 
 
 def test_choose_video_from_image_mode_submits_video_transaction(monkeypatch, tmp_path):
+    _require_window_class()
     video_file = tmp_path / "candidate.mp4"
     video_file.write_bytes(b"video")
     window, edit = _window(monkeypatch)
@@ -82,6 +94,7 @@ def test_choose_video_from_image_mode_submits_video_transaction(monkeypatch, tmp
 
 
 def test_cancelled_video_selection_preserves_mode_and_source(monkeypatch):
+    _require_window_class()
     window, edit = _window(monkeypatch)
     calls = []
     window._select_video_path = lambda: ""
@@ -94,6 +107,7 @@ def test_cancelled_video_selection_preserves_mode_and_source(monkeypatch):
 
 
 def test_illegal_video_selection_is_rejected_without_transaction(monkeypatch, tmp_path):
+    _require_window_class()
     image_file = tmp_path / "not-video.txt"
     image_file.write_text("not a video", encoding="utf-8")
     window, edit = _window(monkeypatch)
@@ -108,6 +122,7 @@ def test_illegal_video_selection_is_rejected_without_transaction(monkeypatch, tm
 
 
 def test_failed_transition_restores_previous_mode_and_video_file(monkeypatch, tmp_path):
+    _require_window_class()
     video_file = tmp_path / "candidate.mp4"
     video_file.write_bytes(b"video")
     window, edit = _window(monkeypatch)
