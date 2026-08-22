@@ -21,7 +21,7 @@ _WINDOW_CLASS = "ShangBackgroundIpcWindowClass"
 _WM_COPYDATA = 0x004A
 _SMTO_ABORTIFHUNG = 0x0002
 _HWND_MESSAGE = -3
-_LEGACY_FAST_COMMANDS = frozenset({"previous", "next", "random", "jump", "show"})
+_LEGACY_FAST_COMMANDS = frozenset({"previous", "next", "random", "jump", "show", "settings"})
 
 
 class _CopyDataStruct(ctypes.Structure):
@@ -44,6 +44,8 @@ def command_from_argv(argv: Sequence[str]) -> str | None:
         return "jump"
     if "--show" in values:
         return "show"
+    if "--settings" in values:
+        return "settings"
     if "--set-wallpaper" in values:
         index = values.index("--set-wallpaper")
         try:

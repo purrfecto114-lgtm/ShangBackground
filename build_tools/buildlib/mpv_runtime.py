@@ -812,11 +812,13 @@ def verify_runtime_directory(
     metadata = _read_json(metadata_path) if metadata_path.is_file() else {}
     manifest = metadata.get("files")
     if isinstance(manifest, Mapping):
+        manifest_paths: set[str] = set()
         for raw_relative, raw_record in manifest.items():
             relative = _manifest_relative_path(raw_relative)
             if relative is None:
                 errors.append(f"unsafe runtime manifest path: {raw_relative!r}")
                 continue
+            manifest_paths.add(relative.as_posix())
             file_path = path.joinpath(*relative.parts)
             if not file_path.is_file():
                 errors.append(f"manifest file is missing: {relative.as_posix()}")
@@ -832,7 +834,53 @@ def verify_runtime_directory(
             expected_digest = str(raw_record.get("sha256") or "").lower()
             if verify_hashes and expected_digest and _file_sha256(file_path).lower() != expected_digest:
                 errors.append(f"SHA-256 mismatch: {relative.as_posix()}")
+        actual_paths = {
+            item.relative_to(path).as_posix()
+            for item in files
+            if item.relative_to(path).as_posix() != _RUNTIME_METADATA
+        }
+        for relative in sorted(actual_paths - manifest_paths):
+            errors.append(f"manifest file is not listed: {relative}")
     return not errors, tuple(errors)
+
+
+def verify_bundled_runtime_output(
+    output_root: Path,
+    target: str,
+    arch: str,
+    *,
+    verify_hashes: bool = True,
+) -> tuple[bool, tuple[str, ...]]:
+    """Verify the flattened native runtime in a frozen application output.
+
+    Build backends copy the selected source payload to ``bin/mpv``.  This
+    boundary check intentionally requires that stable layout and the generated
+    ``runtime.json`` inventory are present, so a successful source verification
+    cannot mask a packaging-layout or dependency omission.
+    """
+    payload = Path(output_root) / "bin" / "mpv"
+    if not payload.is_dir():
+        return False, (f"flattened MPV directory is missing: {payload}",)
+    errors: list[str] = []
+    if not (payload / _RUNTIME_METADATA).is_file():
+        errors.append(f"runtime manifest is missing: {payload / _RUNTIME_METADATA}")
+    if target == "windows" and not (payload / "mpv.exe").is_file():
+        errors.append(f"mpv.exe is missing from flattened bin/mpv: {payload / 'mpv.exe'}")
+    if target == "windows":
+        nested_native = sorted(
+            item.relative_to(payload).as_posix()
+            for item in payload.rglob("*")
+            if item.is_file() and item.parent != payload and item.suffix.lower() in {".dll", ".exe"}
+        )
+        errors.extend(f"native MPV dependency is not flattened: {relative}" for relative in nested_native)
+    ok, runtime_errors = verify_runtime_directory(
+        payload,
+        target,
+        arch,
+        verify_hashes=verify_hashes,
+    )
+    errors.extend(runtime_errors)
+    return not errors and ok, tuple(dict.fromkeys(errors))
 
 
 def _runtime_id(release: Mapping[str, object], asset_name: str, channel: str) -> tuple[str, str]:
@@ -1239,4 +1287,5 @@ __all__ = [
     "select_installed_runtime",
     "select_release_asset",
     "verify_runtime_directory",
+    "verify_bundled_runtime_output",
 ]

@@ -17,3 +17,5 @@ def test_source_build_verification_writes_report_but_fails_packaged_gate(tmp_pat
     assert payload["schema"] == 1
     assert payload["packaged"] is False
     assert payload["app_version"] == APP_VERSION
+    assert payload["verification"]["mode"] == "source"
+    assert payload["verification"]["executed"] is True

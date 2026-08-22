@@ -202,6 +202,40 @@ def test_dry_run_requirement_install_does_not_create_report_parent(tmp_path: Pat
     assert not report.parent.exists()
 
 
+def test_pyinstaller_flattens_windows_mpv_native_dependencies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from build_tools.buildlib import bundle, pyinstaller
+
+    monkeypatch.setattr(pyinstaller, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(bundle, "PROJECT_ROOT", tmp_path)
+    (tmp_path / "src" / "img").mkdir(parents=True)
+    (tmp_path / "src" / "lang").mkdir(parents=True)
+    payload = tmp_path / "runtime" / "nested"
+    payload.mkdir(parents=True)
+    dependency = payload / "avcodec-61.dll"
+    dependency.write_bytes(b"dll")
+    (payload / "mpv.exe").write_bytes(b"exe")
+    plan = _plan(tmp_path)
+    object.__setattr__(plan, "target", "windows")
+    object.__setattr__(plan, "features", frozenset({"video"}))
+    object.__setattr__(
+        plan,
+        "mpv",
+        MpvBuildSelection(
+            requested_mode="bundled",
+            mode="bundled",
+            target="windows",
+            arch="x86_64",
+            runtime_id="fixture",
+            payload_dir=tmp_path / "runtime",
+            metadata={"version": "fixture"},
+        ),
+    )
+
+    command = pyinstaller.build_args(plan, windows_console_mode="disable", contents_directory="_internal")
+
+    assert f"{dependency}{os.pathsep}bin/mpv" in command
+
+
 def test_publish_retries_on_transient_permission_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Regression: on Windows, antivirus / file watchers can briefly lock
     freshly-built files, causing ``os.replace`` to fail with ``PermissionError``

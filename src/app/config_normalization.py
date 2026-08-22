@@ -83,7 +83,7 @@ _ENUMS = {
     "language": frozenset({"zh", "en"}),
 }
 _COLOR_KEYS = {"solid_color", "gradient_color2", "theme_color"}
-_TRAY_ACTIONS = frozenset({"show", "previous", "next", "random", "bing", "jump", "about", "exit"})
+_TRAY_ACTIONS = frozenset({"show", "previous", "next", "random", "bing", "jump", "settings", "about", "exit"})
 _APP_SHORTCUT_KEYS = ("previous", "next", "random", "bing", "settings", "exit", "hide_to_tray")
 
 
@@ -250,7 +250,13 @@ def normalize_runtime_config(
     normalized["fit_mode"] = normalize_style_key(normalized.get("fit_mode"), str(base["fit_mode"]))
     normalized["html_frame_rate"] = _html_frame_rate(normalized.get("html_frame_rate"), int(base.get("html_frame_rate", 30)))
     normalized["dpi_scale"] = _bounded_float(normalized.get("dpi_scale"), float(base["dpi_scale"]), 0.75, 2.0)
-    normalized["tray_menu_items"] = _tray_items(normalized.get("tray_menu_items"), list(base["tray_menu_items"]))
+    tray_items = normalized.get("tray_menu_items")
+    if _bool(normalized.get("ctx_global_settings"), False):
+        if isinstance(tray_items, list):
+            tray_items = [*tray_items, "settings"]
+        else:
+            tray_items = [*base["tray_menu_items"], "settings"]
+    normalized["tray_menu_items"] = _tray_items(tray_items, list(base["tray_menu_items"]))
     normalized["app_shortcuts"] = _shortcuts(normalized.get("app_shortcuts"), base["app_shortcuts"])
     normalized["recent_folders"] = _string_list(normalized.get("recent_folders"))
 

@@ -66,7 +66,7 @@ def build_default_config() -> dict:
         "tray_icon": True,
         "tray_notify": True,
         "tray_click_action": "next",
-        "tray_menu_items": ["show", "previous", "next", "random", "bing", "jump", "about", "exit"],
+        "tray_menu_items": ["show", "previous", "next", "random", "bing", "jump", "settings", "about", "exit"],
         "dark_mode": False,
         "enable_animations": True,
         "performance_mode": False,

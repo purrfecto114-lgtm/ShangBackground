@@ -22,6 +22,7 @@ from .constants import (
     read_version,
 )
 from .plan import BuildPlan
+from .mpv_runtime import verify_bundled_runtime_output
 
 
 _PYTHON_PROBE_TIMEOUT_SECONDS = 15
@@ -306,6 +307,14 @@ def _validate_manifest(candidate: Path, plan: BuildPlan, errors: list[str]) -> N
         errors.append("bundled build-features.json does not match the selected build plan")
 
 
+def _validate_bundled_mpv_output(root: Path, plan: BuildPlan, errors: list[str]) -> None:
+    if plan.mpv.mode != "bundled":
+        return
+    ok, runtime_errors = verify_bundled_runtime_output(root, plan.target, plan.arch)
+    if not ok:
+        errors.extend(f"bundled MPV runtime: {error}" for error in runtime_errors)
+
+
 def _validate_linux_shared_dependencies(root: Path, errors: list[str]) -> None:
     """Reject a Linux bundle whose Qt GUI plugin cannot load.
 
@@ -413,6 +422,7 @@ def validate_pyinstaller_output(plan: BuildPlan, contents_directory: str) -> tup
         if not (internal / relative).exists():
             errors.append(f"missing bundled resource: {internal / relative}")
     _validate_manifest(internal / "build-features.json", plan, errors)
+    _validate_bundled_mpv_output(app_root, plan, errors)
     if "html" in plan.features:
         webview_dir = internal / "webview"
         if not webview_dir.is_dir():
@@ -440,6 +450,7 @@ def validate_nuitka_output(plan: BuildPlan) -> tuple[str, ...]:
         if not (dist / relative).exists():
             errors.append(f"missing bundled resource: {dist / relative}")
     _validate_manifest(dist / "build-features.json", plan, errors)
+    _validate_bundled_mpv_output(dist, plan, errors)
     report = plan.build_output_dir / "compilation-report.xml"
     if not report.is_file():
         errors.append(f"missing Nuitka compilation report: {report}")
@@ -539,6 +550,9 @@ def validate_frozen_runtime(plan: BuildPlan, executable: Path | None) -> tuple[s
             return tuple(errors)
         if payload.get("schema") != 1:
             errors.append(f"unexpected frozen verification schema: {payload.get('schema')!r}")
+        verification = payload.get("verification")
+        if not isinstance(verification, dict) or verification.get("mode") != "real" or verification.get("executed") is not True:
+            errors.append("frozen verification evidence is not marked as a real executed runtime check")
         if payload.get("app_version") != read_version():
             errors.append(
                 f"frozen runtime version mismatch: expected {read_version()}, found {payload.get('app_version')!r}"

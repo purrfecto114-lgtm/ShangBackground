@@ -18,6 +18,7 @@ from app.config import (
     STYLE_KEYS,
     UPDATE_CHECK_ON_STARTUP,
     UPDATE_CHECK_TIMEOUT_SECONDS,
+    VIDEO_EXTENSIONS,
     get_video_filetypes,
     normalize_mode_key,
     normalize_style_key,
@@ -2241,6 +2242,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             label=t("视频文件"),
             saved_text=t("视频来源已保存"),
             cleared_text=t("已清除视频来源"),
+            suffixes=VIDEO_EXTENSIONS,
             on_changed=lambda _old, _new: self._refresh_video_volume_controls(),
         )
         self.video_browse_btn = QPushButton(t("选择视频"))
@@ -2953,7 +2955,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         tray_menu_layout.setVerticalSpacing(12)
         self.tray_menu_labels = {
             "show": t("打开主界面"), "previous": t("上一张"), "next": t("下一张"), "random": t("随机"),
-"bing": t("同步必应"), "jump": t("跳转壁纸"), "about": t("关于"), "exit": t("退出"),
+"bing": t("同步必应"), "jump": t("跳转壁纸"), "settings": t("全局设置"), "about": t("关于"), "exit": t("退出"),
         }
         if not is_feature_enabled("bing"):
             self.tray_menu_labels.pop("bing", None)
@@ -4538,7 +4540,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                     widget.blockSignals(False)
 
             if hasattr(self, "tray_menu_checks"):
-                menu_items = cfg.get("tray_menu_items") or ["show", "previous", "next", "random", "bing", "jump", "about", "exit"]
+                menu_items = cfg.get("tray_menu_items") or ["show", "previous", "next", "random", "bing", "jump", "settings", "about", "exit"]
                 if menu_items and isinstance(menu_items[0], dict):
                     menu_items = [item.get("action") for item in menu_items if item.get("enabled", True)]
                 for action, cb in self.tray_menu_checks.items():
@@ -4618,6 +4620,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
 
     def update_control_states(self):
         mode = normalize_mode_key(core.config.get("mode", self.mode_combo.currentData() if self._is_qobject_alive(self.mode_combo) else "幻灯片放映"))
+        video_feature_enabled = is_feature_enabled("video")
         is_slide = mode == "幻灯片放映"
         is_image = mode == "图片"
         is_video = mode == "视频"
@@ -4631,9 +4634,9 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         self.single_edit.setEnabled(is_image)
         self.btn_single.setEnabled(is_image)
         if hasattr(self, "video_box"):
-            self.video_box.setEnabled(is_video)
-            self.video_edit.setEnabled(is_video)
-            self.video_browse_btn.setEnabled(is_video)
+            self.video_box.setEnabled(video_feature_enabled)
+            self.video_edit.setEnabled(video_feature_enabled)
+            self.video_browse_btn.setEnabled(video_feature_enabled)
             self.video_start_btn.setEnabled(is_video)
             self.video_stop_btn.setEnabled(is_video)
             self.video_muted_check.setEnabled(is_video)
@@ -4678,7 +4681,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         self.slide_box.setEnabled(is_slide)
         self.single_box.setEnabled(is_image)
         if hasattr(self, "video_box"):
-            self.video_box.setEnabled(is_video)
+            self.video_box.setEnabled(video_feature_enabled)
         # 色彩区域保持可见，只把当前模式不可用的按钮置灰，避免用户误以为配置丢失。
         self.color_box.setEnabled(True)
         self._refresh_color_buttons()
@@ -4786,6 +4789,11 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         try:
             if mode_transition:
                 self._sync_mode_ui_from_config()
+                rollback = getattr(self, "_pending_video_selection_rollback", None)
+                if rollback is not None:
+                    if not ok and self._is_qobject_alive(getattr(self, "video_edit", None)):
+                        self.video_edit.setText(rollback["edit_text"])
+                    self._pending_video_selection_rollback = None
                 if self.tray is not None:
                     QTimer.singleShot(0, self.create_or_update_tray)
             else:
@@ -5025,13 +5033,39 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             ),
         )
 
-    def choose_video_file(self):
+    def _select_video_path(self) -> str:
         filters = ";;".join(f"{desc} ({ext})" for desc, ext in get_video_filetypes(t)) + ";;" + t("所有文件 (*.*)")
         path, _ = QFileDialog.getOpenFileName(self, t("选择视频"), self.video_edit.text() or str(Path.home()), filters)
+        return path or ""
+
+    def _submit_video_selection(self, path: str, previous_text: str) -> None:
+        if self._core_busy:
+            self.set_status(t("已有壁纸操作正在执行，请稍候…"))
+            return
+        self._pending_video_selection_rollback = {
+            "edit_text": previous_text,
+            "mode": core.config.get("mode"),
+            "video_file": core.config.get("video_file", ""),
+        }
+        self._refresh_video_volume_controls()
+        self._run_mode_transition(
+            t("正在切换视频壁纸…"),
+            lambda: core.switch_wallpaper_mode(
+                "视频", updates={"video_file": path}
+            ),
+        )
+
+    def choose_video_file(self):
+        previous_text = self.video_edit.text()
+        path = self._select_video_path()
         if not path:
             return
         self.video_edit.setText(path)
-        self.start_video_wallpaper_from_gui()
+        result = self._video_source.validate(required=True, show_dialog=True)
+        if not result.valid:
+            self.video_edit.setText(previous_text)
+            return
+        self._submit_video_selection(result.value, previous_text)
 
     def _build_html_wallpaper_box(self) -> QGroupBox:
         html_box = QGroupBox(t("HTML 壁纸"))
@@ -5237,9 +5271,18 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             core.log(f"写入 HTML 壁纸选项失败(frame_rate): {exc}")
 
     def start_video_wallpaper_from_gui(self):
+        previous_text = self.video_edit.text()
         result = self._video_source.validate(required=True, show_dialog=True)
         if not result.valid:
             return
+        if self._core_busy:
+            self.set_status(t("已有壁纸操作正在执行，请稍候…"))
+            return
+        self._pending_video_selection_rollback = {
+            "edit_text": previous_text,
+            "mode": core.config.get("mode"),
+            "video_file": core.config.get("video_file", ""),
+        }
         self._refresh_video_volume_controls()
         self._run_mode_transition(
             t("正在切换视频壁纸…"),
@@ -6122,6 +6165,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             return
         callbacks = {
             "show": self.show_from_tray,
+            "settings": self.show_from_tray,
             # Tray clicks should release the native menu immediately.  Route
             # wallpaper actions through the existing coalescing worker instead
             # of entering the main-window operation queue from the menu callback.
@@ -6168,6 +6212,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             "refresh_html": t("刷新 HTML 壁纸"),
             "bing": t("同步必应壁纸"),
             "jump": t("跳转到壁纸"),
+            "settings": t("全局设置"),
             "about": t("关于"),
             "exit": t("退出程序"),
         }
@@ -6175,7 +6220,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             labels.pop("bing", None)
         if not is_feature_enabled("html"):
             labels.pop("refresh_html", None)
-        defaults = [name for name in ("show", "previous", "next", "random", "bing", "jump", "about", "exit") if name in labels]
+        defaults = [name for name in ("show", "previous", "next", "random", "bing", "jump", "settings", "about", "exit") if name in labels]
         actions = core.config.get("tray_menu_items") or defaults
         if isinstance(actions, list) and actions and isinstance(actions[0], dict):
             actions = [item.get("action") for item in actions if item.get("enabled", True)]

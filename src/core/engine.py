@@ -745,10 +745,11 @@ def load_config():
                             new_items.append(action.strip())
                     data["tray_menu_items"] = new_items
                     converted = True
-            # 迁移右键菜单配置：旧版“全局设置/个性化/设置为壁纸”入口已移除。
-            if "ctx_jump_to_wallpaper" not in data:
-                data["ctx_jump_to_wallpaper"] = bool(data.get("ctx_global_settings", False))
-                converted = True
+            # 迁移旧版“全局设置”入口到托盘 action；它不再代表桌面右键跳转。
+            if data.get("ctx_global_settings") and isinstance(data.get("tray_menu_items"), list):
+                if "settings" not in data["tray_menu_items"]:
+                    data["tray_menu_items"].append("settings")
+                    converted = True
             for _stale_ctx_key in ("ctx_personalize", "ctx_global_settings", "ctx_set_wallpaper"):
                 if _stale_ctx_key in data:
                     data.pop(_stale_ctx_key, None)
@@ -1004,7 +1005,7 @@ def save_config() -> bool:
             if "tray_click_action" not in config:
                 config["tray_click_action"] = "next"
             if "tray_menu_items" not in config:
-                config["tray_menu_items"] = ["show", "previous", "next", "random", "bing", "jump", "about", "exit"]
+                config["tray_menu_items"] = ["show", "previous", "next", "random", "bing", "jump", "settings", "about", "exit"]
             if "log_enabled" not in config:
                 config["log_enabled"] = False
             if "log_file_path" not in config:
@@ -1039,7 +1040,7 @@ def save_config() -> bool:
             except Exception:
                 config["dpi_scale"] = 1.0
             # v1.4.7: 不再 pop font_size (现在是新功能的合法 key, 0=跟随系统).
-            config["ctx_jump_to_wallpaper"] = bool(config.get("ctx_jump_to_wallpaper", config.get("ctx_global_settings", False)))
+            config["ctx_jump_to_wallpaper"] = bool(config.get("ctx_jump_to_wallpaper", False))
             for _stale_ctx_key in ("ctx_personalize", "ctx_global_settings", "ctx_set_wallpaper"):
                 config.pop(_stale_ctx_key, None)
             for _key, _default in {"hotkey_previous": "Ctrl+Alt+U", "hotkey_next": "Ctrl+Alt+N", "hotkey_random": "Ctrl+Alt+R", "hotkey_jump": "Ctrl+Alt+J"}.items():
@@ -2281,6 +2282,14 @@ def window_proc(hwnd, msg, wparam, lparam):
                 elif command == "show":
                     request_show_main_window()
                     return 1
+                elif command == "settings":
+                    request_show_main_window()
+                    try:
+                        if root is not None and hasattr(root, "after"):
+                            root.after(0, lambda: root.window.show_from_tray())
+                    except Exception as exc:
+                        log(f"右键菜单全局设置转发失败: {exc}")
+                    return 1
                 elif command == "create_file":
                     return 1
         except Exception as e:
@@ -2429,6 +2438,12 @@ def _desired_context_menu_entries():
             "enabled": bool(config.get("ctx_jump_to_wallpaper", False)),
             "label": "跳转到壁纸",
             "command": _build_context_action_command("--from-context-menu", "--jump-to-wallpaper"),
+        },
+        {
+            "path": r"DesktopBackground\Shell\ShangBackgroundSettings",
+            "enabled": True,
+            "label": "全局设置",
+            "command": _build_context_action_command("--from-context-menu", "--settings"),
         },
     )
 

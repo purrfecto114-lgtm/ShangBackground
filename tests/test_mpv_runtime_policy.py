@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import hashlib
+import json
 from pathlib import Path
 import struct
 import zipfile
@@ -115,3 +117,50 @@ def test_nested_mpv_archive_keeps_safe_extraction_guards(tmp_path: Path):
             channel="stable",
             sha256="test",
         )
+
+
+def test_runtime_manifest_must_list_every_flattened_dependency(tmp_path: Path):
+    payload = tmp_path / "bin" / "mpv"
+    payload.mkdir(parents=True)
+    (payload / "mpv.exe").write_bytes(_fake_pe(0x8664))
+    (payload / "avcodec-61.dll").write_bytes(_fake_pe(0x8664))
+    (payload / "runtime.json").write_text(
+        '{"files": {"mpv.exe": {"size": 134, "sha256": ""}}}\n',
+        encoding="utf-8",
+    )
+
+    ok, errors = mpv_runtime.verify_bundled_runtime_output(tmp_path, "windows", "x86_64")
+
+    assert not ok
+    assert any("manifest file is not listed" in error for error in errors)
+
+
+def test_flattened_runtime_accepts_manifested_exe_and_dependencies(tmp_path: Path):
+    payload = tmp_path / "bin" / "mpv"
+    payload.mkdir(parents=True)
+    exe = payload / "mpv.exe"
+    dependency = payload / "avcodec-61.dll"
+    exe.write_bytes(_fake_pe(0x8664))
+    dependency.write_bytes(_fake_pe(0x8664))
+    records = {
+        item.name: {"size": item.stat().st_size, "sha256": hashlib.sha256(item.read_bytes()).hexdigest()}
+        for item in (exe, dependency)
+    }
+    (payload / "runtime.json").write_text(json.dumps({"files": records}) + "\n", encoding="utf-8")
+
+    ok, errors = mpv_runtime.verify_bundled_runtime_output(tmp_path, "windows", "x86_64")
+
+    assert ok, errors
+
+
+def test_bundled_runtime_requires_flat_mpv_exe_and_matching_pe_architecture(tmp_path: Path):
+    payload = tmp_path / "bin" / "mpv"
+    payload.mkdir(parents=True)
+    (payload / "nested").mkdir()
+    (payload / "nested" / "mpv.exe").write_bytes(_fake_pe(0x014C))
+    (payload / "runtime.json").write_text('{"files": {}}\n', encoding="utf-8")
+
+    ok, errors = mpv_runtime.verify_bundled_runtime_output(tmp_path, "windows", "x86_64")
+
+    assert not ok
+    assert any("mpv.exe is missing" in error for error in errors)

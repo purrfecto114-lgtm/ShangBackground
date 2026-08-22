@@ -165,6 +165,7 @@ Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\LastWallpaper"; Fl
 Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\NextWallpaper"; Flags: dontcreatekey uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\RandomWallpaper"; Flags: dontcreatekey uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\ZJumpToWallpaper"; Flags: dontcreatekey uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\ShangBackgroundSettings"; Flags: dontcreatekey uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\JumpToWallpaper"; Flags: dontcreatekey uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\~~PersonalizeBackground"; Flags: dontcreatekey uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\SystemFileAssociations\image\shell\ShangBackgroundSetWallpaper"; Flags: dontcreatekey uninsdeletekey
@@ -174,6 +175,7 @@ Root: HKLM; Subkey: "Software\Classes\DesktopBackground\Shell\LastWallpaper"; Fl
 Root: HKLM; Subkey: "Software\Classes\DesktopBackground\Shell\NextWallpaper"; Flags: dontcreatekey uninsdeletekey
 Root: HKLM; Subkey: "Software\Classes\DesktopBackground\Shell\RandomWallpaper"; Flags: dontcreatekey uninsdeletekey
 Root: HKLM; Subkey: "Software\Classes\DesktopBackground\Shell\ZJumpToWallpaper"; Flags: dontcreatekey uninsdeletekey
+Root: HKLM; Subkey: "Software\Classes\DesktopBackground\Shell\ShangBackgroundSettings"; Flags: dontcreatekey uninsdeletekey
 Root: HKLM; Subkey: "Software\Classes\DesktopBackground\Shell\JumpToWallpaper"; Flags: dontcreatekey uninsdeletekey
 Root: HKLM; Subkey: "Software\Classes\DesktopBackground\Shell\~~PersonalizeBackground"; Flags: dontcreatekey uninsdeletekey
 Root: HKLM; Subkey: "Software\Classes\SystemFileAssociations\image\shell\ShangBackgroundSetWallpaper"; Flags: dontcreatekey uninsdeletekey

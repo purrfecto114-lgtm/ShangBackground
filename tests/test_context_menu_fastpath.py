@@ -3,6 +3,21 @@ from __future__ import annotations
 from app.context_menu_fastpath import command_from_argv, handle_context_menu_fastpath
 
 
+def test_command_from_argv_accepts_settings():
+    assert command_from_argv(["app.exe", "--from-context-menu", "--settings"]) == "settings"
+
+
+def test_settings_uses_existing_instance_before_spawn():
+    sent: list[str] = []
+    result = handle_context_menu_fastpath(
+        ["app.exe", "--from-context-menu", "--settings"],
+        is_windows=True,
+        sender=lambda command: sent.append(command) or True,
+    )
+    assert result == 0
+    assert sent == ["settings"]
+
+
 def test_context_fastpath_forwards_without_spawning():
     sent: list[str] = []
     spawned: list[list[str]] = []

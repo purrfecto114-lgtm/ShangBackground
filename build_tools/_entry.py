@@ -54,6 +54,10 @@ def run_gui() -> int:
 
 def run_unified(argv: Sequence[str] | None = None) -> int:
     values = list(argv or ())
+    if values and values[0] in {"signing", "sign"}:
+        from build_tools.signing import main
+
+        return _guard_cli(lambda: int(main(values[1:])))
     if values and values[0] == "mpv":
         from build_tools.buildlib.mpv_runtime import main
 

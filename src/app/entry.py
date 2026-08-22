@@ -94,7 +94,7 @@ def main() -> int:
     is_action_launch = _is_action_launch(args)
     direct_action_launch = any((
         args.previous, args.next, args.random, bool(args.set_wallpaper),
-        args.jump_to_wallpaper, args.show, getattr(args, "quit", False),
+        args.jump_to_wallpaper, args.show, args.settings, getattr(args, "quit", False),
     ))
 
     # One cross-platform lock and one authenticated local command channel.
@@ -193,7 +193,7 @@ def main() -> int:
     pending_context_command = str(
         getattr(core, "pending_startup_context_command", "") or ""
     )
-    if pending_context_command and pending_context_command not in {"jump", "show"}:
+    if pending_context_command and pending_context_command not in {"jump", "show", "settings"}:
         core.pending_startup_context_command = None
         core.queue_ipc_wallpaper_command(pending_context_command)
         cold_context_action_started = True
@@ -220,6 +220,8 @@ def main() -> int:
                     window.showNormal()
                     window.raise_()
                     window.activateWindow()
+                elif command == "settings":
+                    window.show_from_tray()
                 elif command == "quit":
                     window.exit_app()
                 elif command == "jump":
@@ -265,6 +267,8 @@ def main() -> int:
                     window.showNormal()
                     window.raise_()
                     window.activateWindow()
+                elif command_text == "settings":
+                    window.show_from_tray()
                 else:
                     core.queue_ipc_wallpaper_command(command_text)
                 window.set_status(t("已响应桌面右键菜单动作"))
