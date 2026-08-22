@@ -2282,6 +2282,14 @@ def window_proc(hwnd, msg, wparam, lparam):
                 elif command == "show":
                     request_show_main_window()
                     return 1
+                elif command == "settings":
+                    request_show_main_window()
+                    try:
+                        if root is not None and hasattr(root, "after"):
+                            root.after(0, lambda: root.window.show_from_tray())
+                    except Exception as exc:
+                        log(f"右键菜单全局设置转发失败: {exc}")
+                    return 1
                 elif command == "create_file":
                     return 1
         except Exception as e:
@@ -2430,6 +2438,12 @@ def _desired_context_menu_entries():
             "enabled": bool(config.get("ctx_jump_to_wallpaper", False)),
             "label": "跳转到壁纸",
             "command": _build_context_action_command("--from-context-menu", "--jump-to-wallpaper"),
+        },
+        {
+            "path": r"DesktopBackground\Shell\ShangBackgroundSettings",
+            "enabled": True,
+            "label": "全局设置",
+            "command": _build_context_action_command("--from-context-menu", "--settings"),
         },
     )
 

@@ -73,6 +73,7 @@ def _is_action_launch(args: argparse.Namespace) -> bool:
         getattr(args, "next", False),
         getattr(args, "random", False),
         getattr(args, "show", False),
+        getattr(args, "settings", False),
         bool(getattr(args, "set_wallpaper", None)),
         getattr(args, "jump_to_wallpaper", False),
         getattr(args, "from_context_menu", False),
@@ -86,6 +87,7 @@ def _parse_early_args() -> argparse.Namespace:
     parser.add_argument("--next", action="store_true")
     parser.add_argument("--random", action="store_true")
     parser.add_argument("--show", action="store_true")
+    parser.add_argument("--settings", action="store_true")
     parser.add_argument("--hide", action="store_true")
     parser.add_argument("--quit", action="store_true", help="Request a clean shutdown of the running instance")
     parser.add_argument("--wait-for-exit", action="store_true", help=argparse.SUPPRESS)
@@ -221,6 +223,8 @@ def _context_command_from_args(args: argparse.Namespace) -> str | None:
         return "quit"
     if getattr(args, "show", False):
         return "show"
+    if getattr(args, "settings", False):
+        return "settings"
     return None
 
 

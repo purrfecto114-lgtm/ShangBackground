@@ -16,7 +16,7 @@ class RelaunchService:
 
     _SKIP_FLAGS = {
         "--previous", "--next", "--random", "--show", "--hide",
-        "--jump-to-wallpaper", "--from-context-menu", "--sync-context-on-start",
+        "--jump-to-wallpaper", "--settings", "--from-context-menu", "--sync-context-on-start",
         "--inherit-session-wallpaper", "--context-menu-dispatched-child",
         "--quit", "--wait-for-exit", "--internal-video-player", "--muted",
     }
