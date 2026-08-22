@@ -6212,6 +6212,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             "refresh_html": t("刷新 HTML 壁纸"),
             "bing": t("同步必应壁纸"),
             "jump": t("跳转到壁纸"),
+            "settings": t("全局设置"),
             "about": t("关于"),
             "exit": t("退出程序"),
         }

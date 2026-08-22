@@ -1,5 +1,6 @@
 from app.config_defaults import build_default_config
 from app.config_normalization import normalize_runtime_config
+import inspect
 
 
 def test_default_tray_items_include_settings():
@@ -28,3 +29,10 @@ def test_old_context_settings_flag_migrates_to_settings_action():
     config = {"ctx_global_settings": True, "tray_menu_items": ["show", "exit"]}
     normalized, _changed = normalize_runtime_config(config)
     assert "settings" in normalized["tray_menu_items"]
+
+
+def test_tray_menu_builder_exposes_settings_label():
+    from ui.main_window import _SharedShangBackgroundWindow
+
+    source = inspect.getsource(_SharedShangBackgroundWindow.create_or_update_tray)
+    assert '"settings": t("全局设置")' in source
