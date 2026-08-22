@@ -139,6 +139,47 @@ CI 之外，开发者也可以在本机生成 `setup.exe`：
 
 当前工作流不执行代码签名或 Apple notarization，因为仓库中没有签名身份和密钥配置。后续加入签名时，应使用 GitHub Environments 和受保护 Secrets，并让签名 Job 独占相应权限。
 
+## 签名探测与验证
+
+Windows 签名通过 `build_tools/signing.py` 提供结构化诊断，避免在缺失前置条件时伪造成功：
+
+```bash
+# 诊断当前环境（无 signtool/证书时报告 unsigned）
+python build_tools/build.py signing check --json
+python build_tools/build.py signing check --input dist-nuitka/windows/full-standalone/ShangBackground/ShangBackground.exe --json
+
+# 尝试签名并验证（前置缺失时仍报告 unsigned，不删除未签名产物）
+python build_tools/build.py signing sign --input dist-nuitka/windows/full-standalone/ShangBackground/ShangBackground.exe --certificate path/to/cert.pfx --json
+```
+
+底层接口 `build_tools.signing.sign_and_verify()` 返回 `SigningResult(status, reason)`：
+
+- `unsigned`：缺少 `signtool`（`SHANGBACKGROUND_SIGNTOOL` 或 PATH 未找到）、缺少证书（`--certificate` 未提供）、或时间戳服务 URL 为空；`reason` 明确包含 `signtool`/`certificate`/`timestamp`，且不会调用签名工具、不删除产物。
+- `signed`：签名命令与 `signtool verify /pa /all` 均返回 0，`reason` 为 `signed and verified`。
+- `failed`：签名或验证命令返回非 0（例如签后 `verify` 失败），`reason` 包含 `sign failed` 或 `verify failed`。
+
+验证已签名产物（工具与证书可用时）：
+
+```bash
+signtool verify /pa /all ShangBackground.exe
+signtool verify /pa /all ShangBackground-*-setup.exe
+```
+
+当前环境无 `signtool`/证书时，诊断必须报告 `{"status": "unsigned", ...}`，结论措辞为“未签名（缺少 signtool/证书）”，不得写作“已签名”或“签名成功”。
+
+## 发布验收表
+
+发布结论必须分项陈述，不合并为单一“通过”：
+
+| 验收项 | 需要证据 | 缺证据时的结论措辞 |
+|---|---|---|
+| 自动化测试 | `python -m pytest -q` 全绿、`python build_tools/build.py self-test` 通过 | 自动化行为已建立 / 自动化行为未验证 |
+| 产物检查 | `dist-nuitka/<target>/.../standalone` 存在、`bin/mpv/mpv.exe` 与依赖清单、`SHA256SUMS.txt`、`build-features.json` 与哈希 | 发行产物已建立 / 发行产物未建立（缺 xxx） |
+| Windows 桌面 smoke test | 真机执行：图片模式“选择视频”切换并播放、取消不改状态、托盘/桌面右键“全局设置”、冷启动不重复常驻、停止/退出清理子进程、进程路径指向安装目录 `mpv.exe` | 真实桌面可用性已建立 / 真实桌面可用性未验证（未在 Windows 真机执行） |
+| 签名验证 | `python build_tools/build.py signing check --json` 输出 `status`；若 `signed` 需附 `signtool verify /pa /all` 对 `exe`、`setup.exe`、关键 DLL 的成功输出；若 `unsigned` 需附 `reason` 含缺失前置 | 签名已建立（已验证） / 未签名（缺少 signtool/证书） / 签名失败（verify 失败） |
+
+`status=unsigned` 不得视为发布阻塞的伪造成功；未签名产物保留原位，便于审计，仅在签名成功后才视为可分发产物。
+
 ## 会话恢复验收
 
 发布前在 Windows 真机至少执行：
