@@ -63,7 +63,7 @@ FONT_EXTENSIONS = (".ttf", ".ttc", ".otf")
 
 VIDEO_EXTENSIONS = (
     ((".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".wmv")
-     if IS_WINDOWS else (".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"))
+     if (IS_WINDOWS or IS_LINUX) else (".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"))
     if is_feature_enabled("video") else ()
 )
 VIDEO_FILETYPES = [("视频文件", "*" + " *".join(VIDEO_EXTENSIONS))]

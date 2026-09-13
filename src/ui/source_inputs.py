@@ -1,6 +1,7 @@
 """Bindings that make editable source fields honest, validated and persistent."""
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
 from typing import Any
@@ -124,7 +125,17 @@ class SourceInputController:
         saved_text: str = "",
         cleared_text: str = "",
         on_changed: ChangedCallback | None = None,
+        suffixes: tuple[str, ...] | None = None,
     ) -> SourceBinding:
+        """Bind one line edit to one validated config value.
+
+        ``suffixes`` restricts an existing-file validator to the given file
+        extensions (case-insensitive, e.g. ``VIDEO_EXTENSIONS``); when
+        provided it is forwarded to the validator as a keyword so the shared
+        validation chain reports ``unsupported_type`` for other files.
+        """
+        if suffixes is not None:
+            validator = functools.partial(validator, suffixes=tuple(suffixes))
         binding = SourceBinding(
             edit=edit,
             config=self._config,
@@ -147,6 +158,7 @@ class SourceInputController:
         return self.bind(edit, validator=validate_existing_directory, **kwargs)
 
     def bind_existing_file(self, edit: QLineEdit, **kwargs) -> SourceBinding:
+        """Bind an existing-file source; forwards ``suffixes`` (and all other keyword arguments) to :meth:`bind`."""
         return self.bind(edit, validator=validate_existing_file, **kwargs)
 
     def bind_html_source(self, edit: QLineEdit, **kwargs) -> SourceBinding:

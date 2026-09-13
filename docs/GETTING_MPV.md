@@ -5,12 +5,16 @@
 Windows 的首选视频路径不是 `python-mpv`，也不再把完整主程序当作首选播放器进程：
 
 1. Windows 优先启动已验证的 `mpv.exe`，传入 WorkerW 的 `--wid`；
-2. 使用 `--no-config` 隔离用户 mpv 配置，并通过 `--input-ipc-server` 的 JSON IPC 调整暂停、静音和音量；
+2. 使用 `--no-config` 隔离用户 mpv 配置，并通过 `--input-ipc-server` 的 JSON IPC 调整暂停、静音和音量，同时上报播放进度/状态（见下文「播放就绪验证」）；
 3. 旧的 libmpv-only bundle 仍可回退到 `--internal-libmpv-player` 兼容路径；
 4. Linux 保留各桌面环境/Wayland 的平台适配路径；
 5. macOS 走 AVFoundation/AppKit，不依赖 libmpv。
 
-这意味着 **v1.5.0 新 Windows 发布包必须包含完整、同架构的 `mpv.exe` 运行时**（及其同目录 DLL 依赖）。运行时代码仍兼容旧安装遗留的 libmpv-only payload，但构建器不再接受它作为新发布包输入，避免再次生成“启动完整 ShangBackground 子进程承载 libmpv”的 bundle。`python-mpv` 包不是运行依赖。
+需要区分两种产物形态：**bundled/auto 构建必须包含完整、同架构的 `mpv.exe` 运行时**（及其同目录 DLL 依赖）；而 GitHub Release 的官方发布包按 `--mpv-runtime system` 构建（见 `.github/workflows/release.yml`），**产物内不含 `mpv.exe`**，Windows 视频壁纸依赖目标机器自行安装、可被程序找到的 mpv。运行时代码仍兼容旧安装遗留的 libmpv-only payload，但构建器不再接受它作为 bundled 构建输入，避免再次生成“启动完整 ShangBackground 子进程承载 libmpv”的 bundle。`python-mpv` 包不是运行依赖。
+
+## 播放就绪验证
+
+视频启动后，程序通过同一 JSON IPC 通道确认 mpv 真的在播放（读取 `time-pos`、`duration`、`pause`、`eof-reached` 等属性），而不是仅检查 IPC 通道是否存在。验证失败会自动拆除播放器并按平台策略回退，避免“启动成功但黑屏”。同一 IPC 层也承担播放进度、暂停/静音和属性的查询与上报。
 
 ## 本地文件优先
 
@@ -32,7 +36,7 @@ bin/ 下的对应结构
 src/bin/mpv/<target>/<arch>/
 ├─ ACTIVE
 ├─ <runtime-id>/
-│  ├─ mpv.exe                  # Windows v1.5.0 新包必需
+│  ├─ mpv.exe                  # bundled/auto 构建必需；system 发布包不携带
 │  ├─ *.dll                    # Windows 同目录依赖（如有）
 │  ├─ libmpv.so.* / mpv       # Linux 本地运行时（按构建策略）
 │  ├─ licenses/
@@ -66,6 +70,8 @@ python build_tools/build.py mpv prune --target windows --arch x86_64 --keep 2
 ```text
 <application>/bin/mpv/
 ```
+
+GitHub Release 的官方发布包统一使用 `--mpv-runtime system`：产物不含 `bin/mpv/`，目标机器需自行安装 mpv 并保证可被程序找到（如加入 `PATH`）。
 
 ### Linux
 

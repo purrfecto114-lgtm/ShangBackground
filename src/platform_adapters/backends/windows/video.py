@@ -5,11 +5,12 @@ from app.paths import (
     external_media_runtime_allowed, is_packaged_runtime, mpv_bundled_exe,
 )
 from app.libmpv_runtime import runtime_available as libmpv_runtime_available
+from app.build_features import use_internal_libmpv
+from app.mpv_backend import PollingPropertyObserver
 
 import argparse
 import ctypes
 import ctypes.wintypes
-import json
 import re
 import os
 import secrets
@@ -18,7 +19,10 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from collections.abc import Callable
+from typing import Any
 
 try:
     import psutil
@@ -27,6 +31,7 @@ except ImportError:  # pragma: no cover - optional dependency
 
 from app.config import IS_WINDOWS
 from platform_adapters import process_state
+from platform_adapters.mpv_ipc import MpvIpcClient, verify_media_playing
 from platform_adapters.windows_job import attach_process_kill_on_close
 
 _DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir(), "ShangBackground")
@@ -41,6 +46,46 @@ _CURRENT_JOB = None
 _CANDIDATE_CACHE: dict[tuple[str, ...], tuple[float, tuple[str, ...]]] = {}
 _CANDIDATE_CACHE_SECONDS = 30.0
 PLAYER_LOG = os.path.join(_DATA_DIR, "video-player.log")
+
+# mpv IPC 专用内核接口（64 位句柄安全）：仅在 Windows 上绑定；其他平台保持
+# None 占位 —— 本模块必须能在任意平台安全导入（契约测试在 Linux 上断言 _KERNEL32 is None）。
+if sys.platform == "win32":
+    _KERNEL32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    def _bind_kernel32_prototypes(kernel32) -> None:
+        """为 mpv IPC 用到的内核函数补齐签名（避免 64 位句柄被截断）。"""
+        kernel32.CreateFileW.argtypes = [
+            ctypes.wintypes.LPCWSTR, ctypes.wintypes.DWORD, ctypes.wintypes.DWORD,
+            ctypes.wintypes.LPVOID, ctypes.wintypes.DWORD, ctypes.wintypes.DWORD,
+            ctypes.wintypes.HANDLE,
+        ]
+        kernel32.CreateFileW.restype = ctypes.wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+        kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
+        kernel32.WriteFile.argtypes = [
+            ctypes.wintypes.HANDLE, ctypes.wintypes.LPCVOID, ctypes.wintypes.DWORD,
+            ctypes.POINTER(ctypes.wintypes.DWORD), ctypes.wintypes.LPVOID,
+        ]
+        kernel32.WriteFile.restype = ctypes.wintypes.BOOL
+        kernel32.ReadFile.argtypes = [
+            ctypes.wintypes.HANDLE, ctypes.wintypes.LPVOID, ctypes.wintypes.DWORD,
+            ctypes.POINTER(ctypes.wintypes.DWORD), ctypes.wintypes.LPVOID,
+        ]
+        kernel32.ReadFile.restype = ctypes.wintypes.BOOL
+        kernel32.PeekNamedPipe.argtypes = [
+            ctypes.wintypes.HANDLE, ctypes.wintypes.LPVOID, ctypes.wintypes.DWORD,
+            ctypes.POINTER(ctypes.wintypes.DWORD), ctypes.POINTER(ctypes.wintypes.DWORD),
+            ctypes.POINTER(ctypes.wintypes.DWORD),
+        ]
+        kernel32.PeekNamedPipe.restype = ctypes.wintypes.BOOL
+        kernel32.WaitNamedPipeW.argtypes = [ctypes.wintypes.LPCWSTR, ctypes.wintypes.DWORD]
+        kernel32.WaitNamedPipeW.restype = ctypes.wintypes.BOOL
+
+    _bind_kernel32_prototypes(_KERNEL32)
+    _INVALID_HANDLE_VALUE = ctypes.wintypes.HANDLE(-1).value
+else:
+    _KERNEL32 = None
+    _INVALID_HANDLE_VALUE = None
 
 
 def validate_video_path(path: str | None) -> bool:
@@ -101,6 +146,7 @@ def _stop_tracked_process() -> None:
 
 
 def stop_video_wallpaper() -> None:
+    _stop_property_observers()
     _stop_tracked_process()
     process_state.terminate_verified(PID_FILE, expected_kind=PROCESS_KIND)
     # Closing the job is the final containment fallback for descendants that
@@ -412,13 +458,9 @@ def _internal_libmpv_command(
     # v1.4.4: Don't spawn the full packaged app as a child process when the
     # build didn't bundle libmpv. The "system" mode means we should use the
     # external mpv.exe, not the internal ctypes player.
-    try:
-        from app.build_features import video_runtime_mode
-        mode = video_runtime_mode()
-        if mode in ("system", "disabled"):
-            return None
-    except Exception:
-        pass
+    # 门控统一：与 linux/video.py 共用 build_features.use_internal_libmpv()。
+    if not use_internal_libmpv():
+        return None
     ipc_path = _mpv_ipc_path()
     if is_packaged_runtime():
         cmd = [app_executable_path()]
@@ -553,6 +595,144 @@ def _terminate_failed_player(process: subprocess.Popen) -> None:
         _close_current_job()
 
 
+class _MpvNamedPipeChannel:
+    """ctypes 命名管道读写通道：为 MpvIpcClient 提供注入式 I/O。
+
+    read_bytes 契约：返回 bytes（可能是不完整分片）、None（超时内无数据）、
+    b""（EOF）或抛异常（管道破裂）。用 PeekNamedPipe 做非阻塞可读字节查询，
+    避免无数据时阻塞在 ReadFile 上。
+    """
+
+    _READ_CHUNK = 65536
+    _POLL_INTERVAL = 0.02  # 50 Hz 足够就绪/属性轮询，避免 200 Hz 忙等空转 CPU
+
+    def __init__(self, handle: int) -> None:
+        self._handle = int(handle)
+
+    def write_bytes(self, payload: bytes) -> int:
+        if _KERNEL32 is None:
+            raise OSError("named pipe is only available on Windows")
+        data = bytes(payload)
+        written = ctypes.wintypes.DWORD(0)
+        ok = _KERNEL32.WriteFile(
+            ctypes.wintypes.HANDLE(self._handle), data, len(data),
+            ctypes.byref(written), None,
+        )
+        if not ok or written.value <= 0:
+            raise OSError(f"WriteFile failed (error={ctypes.get_last_error()})")
+        return int(written.value)
+
+    def read_bytes(self, timeout: float) -> bytes | None:
+        if _KERNEL32 is None:
+            raise OSError("named pipe is only available on Windows")
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        handle = ctypes.wintypes.HANDLE(self._handle)
+        while True:
+            available = ctypes.wintypes.DWORD(0)
+            if not _KERNEL32.PeekNamedPipe(handle, None, 0, None, ctypes.byref(available), None):
+                # 管道已关闭/破裂：交由协议层判死。
+                raise OSError(f"PeekNamedPipe failed (error={ctypes.get_last_error()})")
+            if available.value > 0:
+                to_read = min(int(available.value), self._READ_CHUNK)
+                buffer = ctypes.create_string_buffer(to_read)
+                read = ctypes.wintypes.DWORD(0)
+                if not _KERNEL32.ReadFile(handle, buffer, to_read, ctypes.byref(read), None):
+                    raise OSError(f"ReadFile failed (error={ctypes.get_last_error()})")
+                data = buffer.raw[: read.value]
+                return data if data else b""
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(self._POLL_INTERVAL)
+
+    def close(self) -> None:
+        if _KERNEL32 is None or not self._handle:
+            return
+        try:
+            _KERNEL32.CloseHandle(ctypes.wintypes.HANDLE(self._handle))
+        except Exception:
+            pass
+        self._handle = 0
+
+
+def _open_ipc_pipe(ipc_path: str, timeout: float = 3.0) -> int | None:
+    """以读写模式打开 mpv 命名管道（CreateFileW）。
+
+    mpv 建立管道服务端存在短暂窗口：ERROR_PIPE_BUSY 时用 WaitNamedPipeW 等
+    待空闲实例；其余错误（含管道尚未创建）按固定间隔轮询直至超时。
+    """
+    if _KERNEL32 is None:
+        return None
+    generic_read_write = 0xC0000000  # GENERIC_READ | GENERIC_WRITE
+    open_existing = 3
+    error_pipe_busy = 231
+    deadline = time.monotonic() + max(0.2, float(timeout))
+    while time.monotonic() < deadline:
+        handle = _KERNEL32.CreateFileW(
+            ipc_path, generic_read_write, 0, None, open_existing, 0, None
+        )
+        if handle not in (None, _INVALID_HANDLE_VALUE):
+            return int(handle)
+        if ctypes.get_last_error() == error_pipe_busy:
+            _KERNEL32.WaitNamedPipeW(ipc_path, 200)
+        time.sleep(0.05)
+    return None
+
+
+def _open_ipc_client(ipc_path: str, timeout: float = 3.0) -> MpvIpcClient | None:
+    """打开命名管道并包装为 MpvIpcClient；失败返回 None。"""
+    handle = _open_ipc_pipe(ipc_path, timeout)
+    if not handle:
+        return None
+    channel = _MpvNamedPipeChannel(handle)
+    return MpvIpcClient(channel.write_bytes, channel.read_bytes, close=channel.close)
+
+
+def _mpv_ipc_transact(ipc_path: str, command, timeout: float = 3.0) -> tuple[bool, Any]:
+    """执行一次 JSON IPC 事务：发送命令并等待 mpv 应答。"""
+    client = _open_ipc_client(ipc_path, timeout)
+    if client is None:
+        return False, None
+    try:
+        return client.request(command, timeout=timeout)
+    finally:
+        client.close()
+
+
+def _current_ipc_path() -> str:
+    """读取当前播放器的 IPC 通道路径（随播放器状态持久化）。"""
+    try:
+        return str(_read_state().get("ipc_path") or "")
+    except Exception:
+        return ""
+
+
+def _verify_media_ready(client: MpvIpcClient | None, timeout: float = 5.0) -> bool:
+    """薄包装：转发到平台中立的 verify_media_playing（便于测试替换与平台差分）。"""
+    if client is None:
+        return False
+    return verify_media_playing(client, timeout=timeout)
+
+
+def _verify_started_player(process: subprocess.Popen, ipc_path: str) -> bool:
+    """控制通道建立后再经 JSON IPC 确认媒体真实在播放（防黑屏误报）。
+
+    无 IPC 通道的后端（如 VLC）跳过验证，维持原行为；验证失败由调用方
+    拆除播放器并向上回退到下一个候选后端。
+    """
+    if not ipc_path:
+        return True
+    poll = getattr(process, "poll", None)
+    if poll is not None and poll() is not None:
+        return False
+    client = _open_ipc_client(ipc_path, timeout=2.5)
+    if client is None:
+        return False
+    try:
+        return _verify_media_ready(client, timeout=5.0)
+    finally:
+        client.close()
+
+
 def _wait_for_player_ready(process: subprocess.Popen, ipc_path: str, timeout: float = 3.0) -> bool:
     """Wait until mpv creates its named-pipe endpoint, not merely a live PID."""
     if not ipc_path:
@@ -606,6 +786,11 @@ def _start_player(name: str, cmd: list[str], ipc_path: str = "") -> tuple[bool, 
         _terminate_failed_player(process)
         process_state.remove_state(PID_FILE)
         raise
+    if not _verify_started_player(process, ipc_path):
+        # 通道在而媒体不在播（黑屏风险）：拆除并向上报错，让上层回退到下一个候选。
+        _terminate_failed_player(process)
+        process_state.remove_state(PID_FILE)
+        return False, f"{name} 控制通道已建立但未确认媒体在播放，已自动回退"
     return True, ""
 
 
@@ -666,33 +851,15 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
 
 
 def _send_mpv_ipc_commands(commands: list[dict]) -> bool:
-    state = _read_state()
-    ipc_path = str(state.get("ipc_path") or "")
+    """通过 JSON IPC 逐条发送命令并确认 mpv 应答成功。"""
+    ipc_path = _current_ipc_path()
     if not ipc_path:
         return False
-    try:
-        GENERIC_WRITE = 0x40000000
-        OPEN_EXISTING = 3
-        INVALID_HANDLE_VALUE = -1
-        handle = ctypes.windll.kernel32.CreateFileW(
-            ipc_path, GENERIC_WRITE, 0, None, OPEN_EXISTING, 0, None
-        )
-        if handle == INVALID_HANDLE_VALUE or handle == 0:
+    for command in commands:
+        ok, _response = _mpv_ipc_transact(ipc_path, command, timeout=3.0)
+        if not ok:
             return False
-        try:
-            for obj in commands:
-                payload = (json.dumps(obj) + "\n").encode("utf-8")
-                written = ctypes.wintypes.DWORD(0)
-                ok = ctypes.windll.kernel32.WriteFile(
-                    handle, payload, len(payload), ctypes.byref(written), None
-                )
-                if not ok:
-                    return False
-            return True
-        finally:
-            ctypes.windll.kernel32.CloseHandle(handle)
-    except Exception:
-        return False
+    return True
 
 
 def set_video_volume(muted: bool, volume: int) -> bool:
@@ -709,6 +876,65 @@ def set_video_paused(paused: bool) -> bool:
     return _send_mpv_ipc_commands([
         {"command": ["set_property", "pause", bool(paused)]},
     ])
+
+
+_PROPERTY_OBSERVERS: dict[str, PollingPropertyObserver] = {}
+_OBSERVERS_LOCK = threading.Lock()
+
+
+def _stop_property_observers() -> None:
+    """停止并清空全部属性观察者（stop_video_wallpaper 时调用）。"""
+    with _OBSERVERS_LOCK:
+        observers = list(_PROPERTY_OBSERVERS.values())
+        _PROPERTY_OBSERVERS.clear()
+    for observer in observers:
+        observer.stop()
+
+
+def send_video_ipc(command) -> bool:
+    """向运行中的播放器发送任意 mpv JSON IPC 命令（LegacyModuleMpvBackend.ipc 探测点）。
+
+    返回 mpv 是否确认成功；无 IPC 通道或应答失败一律返回 False。
+    """
+    ipc_path = _current_ipc_path()
+    if not ipc_path:
+        return False
+    ok, _response = _mpv_ipc_transact(ipc_path, command, timeout=3.0)
+    return ok
+
+
+def get_video_property(name: str) -> tuple[bool, Any]:
+    """读取运行中播放器的属性；(False, None) 表示通道或属性不可用。"""
+    ipc_path = _current_ipc_path()
+    if not ipc_path:
+        return False, None
+    ok, response = _mpv_ipc_transact(ipc_path, ["get_property", str(name)], timeout=3.0)
+    if ok and isinstance(response, dict):
+        return True, response.get("data")
+    return False, None
+
+
+def observe_video_property(name: str, callback: Callable[[str, Any], None]) -> bool:
+    """注册属性观察：以 PollingPropertyObserver 轮询 get_video_property 实现。
+
+    callback 以 (属性名, 当前值) 调用，值变化时触发（首次订阅同步一次当前值）；
+    同名属性的重复订阅会替换旧观察者。返回是否注册成功。
+    """
+    key = str(name or "").strip()
+    if not key or not callable(callback):
+        return False
+    with _OBSERVERS_LOCK:
+        previous = _PROPERTY_OBSERVERS.pop(key, None)
+        if previous is not None:
+            previous.stop()
+        observer = PollingPropertyObserver(lambda: get_video_property(key)[1])
+        _PROPERTY_OBSERVERS[key] = observer
+    if not observer.start(lambda value: callback(key, value)):
+        with _OBSERVERS_LOCK:
+            if _PROPERTY_OBSERVERS.get(key) is observer:
+                del _PROPERTY_OBSERVERS[key]
+        return False
+    return True
 
 
 def main() -> None:

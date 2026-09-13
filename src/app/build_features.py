@@ -85,3 +85,14 @@ def video_runtime_mode() -> str:
         return "disabled"
     mode = str(BUILD_VIDEO_RUNTIME.get("mode") or "system").strip().lower()
     return mode if mode in {"bundled", "system", "native", "source"} else "disabled"
+
+
+def use_internal_libmpv() -> bool:
+    """Return whether video playback should use the internal libmpv player.
+
+    Unified gating counterpart of the platform video backends: the internal
+    ctypes player is used for the internal libmpv runtime modes ("bundled",
+    "native", "source"); "system" keeps the external mpv executable and
+    "disabled" means video is unavailable.
+    """
+    return video_runtime_mode() in frozenset({"bundled", "native", "source"})

@@ -53,7 +53,7 @@ class HotkeyService:
             self._generation += 1
             generation = self._generation
             config = self._config
-            if not bool(config.get("global_hotkeys_enabled", False)):
+            if not bool(config.get("global_hotkeys_enabled", True)):
                 self._bindings.clear()
                 self._safe_stop()
                 self._log("全局热键未启用，已跳过系统级注册")

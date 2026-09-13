@@ -11,7 +11,6 @@ src/
 build_tools/            稳定入口、Build Studio、PyInstaller hooks 与共享构建库
 requirements/           平台与功能运行依赖
 docs/                   架构、构建和平台说明
-examples/html/           HTML 壁纸示例
 ```
 
 HTML 壁纸不包含 `src/qml/` 或 Qt WebEngine helper；三端实现位于各平台的 `native_webview_desktop.py`。

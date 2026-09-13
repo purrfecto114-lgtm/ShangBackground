@@ -5,7 +5,6 @@ from app.config import (
     DEFAULT_GRADIENT_COLOR2,
     DEFAULT_SOLID_COLOR,
     DEFAULT_THEME_COLOR,
-    IS_WINDOWS,
 )
 
 
@@ -49,8 +48,11 @@ def build_default_config() -> dict:
         "hotkey_next": "Ctrl+Alt+N",
         "hotkey_random": "Ctrl+Alt+R",
         "hotkey_jump": "Ctrl+Alt+J",
-        "hotkey_focus_guard": bool(IS_WINDOWS),
-        "global_hotkeys_enabled": False,
+        # 焦点保护全平台默认开启（与旧配置迁移填充值一致）：全局热键默认
+        # 开启后，简单热键（如 PgUp/R）在前台非桌面时不应误触发；
+        # Ctrl+Alt 组合键不受该守卫影响，Wayland Portal 投递天然安全。
+        "hotkey_focus_guard": True,
+        "global_hotkeys_enabled": True,
         "app_shortcuts_enabled": True,
         "app_shortcuts": {
             "previous": "PgUp",

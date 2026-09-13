@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.5.1-0ea5e9?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-v1.6.0-0ea5e9?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/PySide6-6.11-41cd52?style=flat-square&logo=qt&logoColor=white" alt="PySide6">
   <img src="https://img.shields.io/badge/License-GPLv3-blue?style=flat-square" alt="GPLv3">
@@ -46,7 +46,7 @@ ShangBackground 使用一份共享源码支持 Windows、Linux 和 macOS。Windo
 |---|:---:|:---:|:---:|
 | 静态壁纸、托盘、设置 | ✅ | ✅ | ✅ |
 | 桌面右键菜单 | ✅ | — | — |
-| 全局热键 | ✅ 原生 | 🟡 X11；Wayland 未接入 Portal | 🟡 需系统权限 |
+| 全局热键 | ✅ 原生 | 🟡 X11；Wayland Portal 已实现（真机验收待） | 🟡 需系统权限 |
 | 视频壁纸 | 🟡 WorkerW | 🟡 X11/桌面环境相关 | 🟡 AppKit/系统环境相关 |
 | HTML 壁纸 | 🟡 WorkerW | 🟡 X11 | 🟡 AppKit |
 | 开机自启 | ✅ | ✅ | ✅ |

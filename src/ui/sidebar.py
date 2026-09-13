@@ -464,7 +464,7 @@ class WallpaperSidebar(QWidget):
 
         if not files:
             _log_sidebar("文件夹中没有图片", log_path)
-            self.show_message("提示喵", "壁纸文件夹中没有图片")
+            self.show_message(t("提示喵"), t("壁纸文件夹中没有图片"))
             QTimer.singleShot(0, self.deleteLater)
             return
 

@@ -1978,14 +1978,14 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             row_layout.setSpacing(8)
             record_button = QPushButton(t("录制"))
             record_button.setProperty("secondary", True)
-            record_button.setMinimumWidth(80)
+            record_button.setFixedWidth(80)
             record_button.clicked.connect(
                 lambda checked=False, action=action: self.record_context_hotkey(action)
             )
             row_layout.addWidget(record_button)
             clear_button = QPushButton(t("清除"))
             clear_button.setProperty("secondary", True)
-            clear_button.setMaximumWidth(64)
+            clear_button.setFixedWidth(80)
             clear_button.clicked.connect(
                 lambda checked=False, action=action: self.on_context_hotkey_clear(action)
             )
@@ -2002,8 +2002,8 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         global_layout = QVBoxLayout(global_box)
         global_layout.setContentsMargins(10, 18, 10, 10)
         global_layout.setSpacing(8)
-        self.global_hotkeys_enabled_check = QCheckBox(t("启用全局热键（默认关闭）"))
-        self.global_hotkeys_enabled_check.setChecked(bool(core.config.get("global_hotkeys_enabled", False)))
+        self.global_hotkeys_enabled_check = QCheckBox(t("启用全局热键"))
+        self.global_hotkeys_enabled_check.setChecked(bool(core.config.get("global_hotkeys_enabled", True)))
         self.global_hotkeys_enabled_check.toggled.connect(self.on_global_hotkeys_enabled_changed)
         global_layout.addWidget(self.global_hotkeys_enabled_check)
 
@@ -2177,7 +2177,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         # Bug 21 fix: 该按钮文字较长（中文8字/英文7字），需要足够宽度避免被截断。
         btn_random_prob.setMinimumWidth(155)
         self.btn_start = btn_start = QPushButton(t("应用并播放"))
-        self.btn_stop = btn_stop = QPushButton(t("暂停"))
+        self.btn_stop = btn_stop = QPushButton(t("停止幻灯片放映"))
         for btn in (btn_prev, btn_next, btn_random, btn_random_prob, btn_start, btn_stop):
             btn.setMinimumHeight(38)
         nav_row.addWidget(btn_prev, 0, 0)
@@ -3151,7 +3151,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             core.config["app_shortcuts"] = dict(defaults.get("app_shortcuts", {}))
             core.save_config()
             try:
-                if bool(core.config.get("global_hotkeys_enabled", False)):
+                if bool(core.config.get("global_hotkeys_enabled", True)):
                     core.refresh_global_hotkeys()
                 else:
                     core.stop_global_hotkeys()
@@ -3367,7 +3367,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                 core.config["font_size"] = int(self.font_size_spin.value())
             except Exception:
                 core.config["font_size"] = 0
-        if hasattr(self, "dark_mode_check"):
+        if hasattr(self, "dark_mode_check") and self._is_qobject_alive(getattr(self, "dark_mode_check", None)):
             core.config["dark_mode"] = bool(self.dark_mode_check.isChecked())
         # Bug 9 同期: 保存界面动画开关
         if hasattr(self, "animations_check") and self._is_qobject_alive(getattr(self, "animations_check", None)):
@@ -3776,16 +3776,16 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             def anchor(href, label):
                 return f'<a href="{href}" style="color:{lnk}">{label}</a>'
             return (
-                f'<span style="color:{fg}">原项目：</span>'
+                f'<span style="color:{fg}">{t("原项目：")}</span>'
                 + anchor("https://github.com/purrfecto114-lgtm/ShangBackground", "xxdz-Official/ShangBackground")
-                + f'<br><span style="color:{fg}">GitHub反馈 / 统一更新源：</span>'
+                + f'<br><span style="color:{fg}">{t("GitHub反馈 / 统一更新源：")}</span>'
                 + anchor("https://github.com/purrfecto114-lgtm/ShangBackground", "purrfecto114-lgtm/ShangBackground")
-                + f'<br><span style="color:{fg}">作者主页：</span>'
-                + anchor("https://space.bilibili.com/3461569935575626?spm_id_from=333.788", "b站@小小电子xxdz")
+                + f'<br><span style="color:{fg}">{t("作者主页：")}</span>'
+                + anchor("https://space.bilibili.com/3461569935575626?spm_id_from=333.788", t("b站@小小电子xxdz"))
                 + '<br>'
-                + anchor("app://shishe", "[施舍]")
-                + '　' + anchor("app://about-window", "关于图片")
-                + '　' + anchor("app://about-dialog", "关于窗口")
+                + anchor("app://shishe", t("[施舍]"))
+                + '　' + anchor("app://about-window", t("关于图片"))
+                + '　' + anchor("app://about-dialog", t("关于窗口"))
             )
         links.setText(_build_links_html(_fg, _lnk))
         self._about_links_label = links
@@ -4404,7 +4404,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             except Exception:
                 pass
         try:
-            core.log(t("日志文件记录已开启") if checked else t("日志文件记录已关闭"))
+            core.log("日志文件记录已开启" if checked else "日志文件记录已关闭")
         except Exception:
             pass
         self.set_status(t("日志文件记录已开启") if checked else t("日志文件记录已关闭"))
@@ -4583,7 +4583,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                 self.dpi_scale_slider.blockSignals(False)
                 if hasattr(self, "dpi_scale_value_label"):
                     self.dpi_scale_value_label.setText(f"{self.dpi_scale_slider.value()}%")
-            if hasattr(self, "dark_mode_check"):
+            if hasattr(self, "dark_mode_check") and self._is_qobject_alive(getattr(self, "dark_mode_check", None)):
                 self.dark_mode_check.setChecked(bool(cfg.get("dark_mode", False)))
             if hasattr(self, "animations_check") and self._is_qobject_alive(getattr(self, "animations_check", None)):
                 self.animations_check.setChecked(bool(cfg.get("enable_animations", True)))
@@ -4591,7 +4591,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                 self.wallpaper_transition_check.setChecked(bool(cfg.get("wallpaper_transition_enabled", True)))
             # v1.4.6: 性能模式从复选框改为三档下拉
             if hasattr(self, "global_hotkeys_enabled_check") and self._is_qobject_alive(getattr(self, "global_hotkeys_enabled_check", None)):
-                self.global_hotkeys_enabled_check.setChecked(bool(cfg.get("global_hotkeys_enabled", False)))
+                self.global_hotkeys_enabled_check.setChecked(bool(cfg.get("global_hotkeys_enabled", True)))
             if hasattr(self, "hotkey_focus_guard_check") and self._is_qobject_alive(getattr(self, "hotkey_focus_guard_check", None)):
                 self.hotkey_focus_guard_check.setChecked(bool(cfg.get("hotkey_focus_guard", True)))
             if hasattr(self, "perf_mode_combo") and self._is_qobject_alive(getattr(self, "perf_mode_combo", None)):
@@ -5552,14 +5552,14 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         core.save_config()
         self._refresh_context_shortcut_labels()
         try:
-            if bool(core.config.get("global_hotkeys_enabled", False)):
+            if bool(core.config.get("global_hotkeys_enabled", True)):
                 core.refresh_global_hotkeys()
             else:
                 core.stop_global_hotkeys()
         except Exception as exc:
             core.log(f"刷新全局热键失败: {exc}")
         if seq_str:
-            prefix = t("已录制全局热键：") if core.config.get("global_hotkeys_enabled", False) else t("已保存快捷键：")
+            prefix = t("已录制全局热键：") if core.config.get("global_hotkeys_enabled", True) else t("已保存快捷键：")
             self.set_status(prefix + seq_str)
         else:
             self.set_status(t("已清除快捷键"))
@@ -5664,7 +5664,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         core.config["hotkey_focus_guard"] = bool(checked)
         core.save_config()
         try:
-            if bool(core.config.get("global_hotkeys_enabled", False)):
+            if bool(core.config.get("global_hotkeys_enabled", True)):
                 core.refresh_global_hotkeys()
         except Exception as exc:
             core.log(f"刷新全局热键失败: {exc}")
@@ -5949,11 +5949,11 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                 pass
             if not os.path.isfile(desktop_path):
                 raise RuntimeError("XDG autostart desktop file was not created")
-            core.log(t("Linux XDG 开机自启动已启用"))
+            core.log("Linux XDG 开机自启动已启用")
         else:
             if os.path.exists(desktop_path):
                 os.remove(desktop_path)
-            core.log(t("Linux XDG 开机自启动已禁用"))
+            core.log("Linux XDG 开机自启动已禁用")
         if os.path.exists(service_path):
             try:
                 subprocess.run(
@@ -6196,7 +6196,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
 
     def create_or_update_tray(self):
         if not QSystemTrayIcon.isSystemTrayAvailable():
-            core.log(t("系统托盘不可用，已跳过"))
+            core.log("系统托盘不可用，已跳过")
             return
         icon = QIcon(self.icon_path) if os.path.exists(self.icon_path) else self.windowIcon()
         if self.tray is None:
@@ -6690,12 +6690,12 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                 if do_delete:
                     count_delete = max(1, min(200, int(core.config.get("bing_auto_delete_count", 1) or 1)))
                     deleted = self._delete_oldest_bing_cached(count_delete)
-                self.bing_result_signal.emit(True, f"启动时已自动删除 {deleted} 张最旧必应缓存壁纸" if do_delete else t("必应启动自动操作准备完成"), "")
+                self.bing_result_signal.emit(True, t("启动时已自动删除 {0} 张最旧必应缓存壁纸").format(deleted) if do_delete else t("必应启动自动操作准备完成"), "")
                 if do_update:
                     count = max(1, min(16, int(core.config.get("bing_auto_update_count", 1) or 1)))
                     QTimer.singleShot(0, lambda: self._start_bing_auto_update(cache_dir, count))
             except Exception as exc:
-                self.bing_result_signal.emit(False, f"必应启动自动操作失败：{exc}", "")
+                self.bing_result_signal.emit(False, t("必应启动自动操作失败：{0}").format(exc), "")
 
         threading.Thread(target=_run_bing_startup_tasks, daemon=True).start()
 
@@ -6830,7 +6830,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             if btn is not None:
                 btn.setEnabled(False)
         self.bing_progress.setValue(0)
-        mode_text = f"正在从第 {start_index + 1} 张开始继续同步必应壁纸..." if continue_from_saved else "正在同步必应壁纸..."
+        mode_text = t("正在从第 {0} 张开始继续同步必应壁纸...").format(start_index + 1) if continue_from_saved else t("正在同步必应壁纸...")
         self.bing_status.setText(mode_text)
         self.begin_operation(mode_text, cancellable=True)
 
@@ -6914,13 +6914,13 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                         f"应用进度：99/{t('正在完成…')}",
                         "",
                     )
-                    cleanup_note = f"；已自动删除 {deleted} 张过量 bing 缓存" if deleted else ""
-                    self._emit_bing_result(True, f"已同步 {len(paths)} 张并设置最新必应壁纸{cleanup_note}，下次可从第 {core.config.get('bing_next_index', 0) + 1} 张继续", latest)
+                    cleanup_note = t("；已自动删除 {0} 张过量 bing 缓存").format(deleted) if deleted else ""
+                    self._emit_bing_result(True, t("已同步 {0} 张并设置最新必应壁纸{1}，下次可从第 {2} 张继续").format(len(paths), cleanup_note, core.config.get('bing_next_index', 0) + 1), latest)
                 else:
-                    cleanup_note = f"；已自动删除 {deleted} 张过量 bing 缓存" if deleted else ""
-                    self._emit_bing_result(True, f"已同步 {len(paths)} 张必应壁纸到缓存目录{cleanup_note}，下次可从第 {core.config.get('bing_next_index', 0) + 1} 张继续", latest)
+                    cleanup_note = t("；已自动删除 {0} 张过量 bing 缓存").format(deleted) if deleted else ""
+                    self._emit_bing_result(True, t("已同步 {0} 张必应壁纸到缓存目录{1}，下次可从第 {2} 张继续").format(len(paths), cleanup_note, core.config.get('bing_next_index', 0) + 1), latest)
             except Exception as e:
-                self._emit_bing_result(False, f"同步必应壁纸失败：{e}", "")
+                self._emit_bing_result(False, t("同步必应壁纸失败：{0}").format(e), "")
 
         self._bing_worker_thread = threading.Thread(target=_work, daemon=True)
         self._bing_worker_thread.start()
@@ -7123,7 +7123,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         if button is not None:
             button.setEnabled(False)
         self.begin_operation(t("正在检查更新…"))
-        self._set_update_status_text("正在检查 GitHub Release 更新源...")
+        self._set_update_status_text(t("正在检查 GitHub Release 更新源..."))
         if hasattr(self, "update_download_btn"):
             self.update_download_btn.setEnabled(False)
         self._update_checker = UpdateChecker()
@@ -8166,7 +8166,7 @@ QWidget[settingsSearchMatch="true"] { border: 2px solid %%visible_accent%%; }
             self.set_status(t("日志路径已设置：") + f"{dest}")
             try:
                 if core.config.get("log_enabled", False):
-                    core.log(t("日志路径已设置：") + f"{dest}")
+                    core.log("日志路径已设置：" + f"{dest}")
             except Exception:
                 pass
             return True
@@ -8278,37 +8278,6 @@ QWidget[settingsSearchMatch="true"] { border: 2px solid %%visible_accent%%; }
                     pass
                 except Exception as exc:
                     core.log(f"删除注册表 Run 键失败: {exc}")
-
-
-    def _show_favorite_context_menu(self, pos) -> None:
-            """右键收藏项 → 弹出菜单 (移除收藏/打开位置)."""
-            try:
-                from PySide6.QtWidgets import QMenu
-                item = self.favorites_list.itemAt(pos)
-                if not item:
-                    return
-                path = item.data(Qt.UserRole) or ""
-                menu = QMenu(self)
-                self._prepare_popup_menu(menu)
-                act_remove = menu.addAction(t("移除收藏"))
-                act_open = menu.addAction(t("打开文件位置"))
-                action = menu.exec(self.favorites_list.viewport().mapToGlobal(pos))
-                if action == act_remove:
-                    try:
-                        if core.remove_favorite(path):
-                            self._refresh_favorites_list()
-                            self._update_favorite_button_state()
-                            self.set_status(t("已从收藏夹移除"))
-                    except Exception as exc:
-                        core.log(f"移除收藏失败: {exc}", level="WARNING", exc_info=True)
-                        QMessageBox.warning(self, t("收藏夹"), t("移除收藏失败：") + str(exc))
-                elif action == act_open:
-                    self._open_file_location(path)
-            except Exception as exc:
-                try:
-                    core.log(f"收藏右键菜单失败: {exc}", level="WARNING")
-                except Exception:
-                    pass
 
 
     def _open_file_location(self, path: str):

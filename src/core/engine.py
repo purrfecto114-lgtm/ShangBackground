@@ -813,7 +813,8 @@ def load_config():
                 data["hotkey_focus_guard"] = True
                 converted = True
             if "global_hotkeys_enabled" not in data:
-                data["global_hotkeys_enabled"] = False
+                # v1.6.0: 全局热键默认由关闭改为开启 (与 build_default_config 对齐).
+                data["global_hotkeys_enabled"] = True
                 converted = True
             # v1.4.7: 应用内热键功能已彻底移除. app_shortcuts_enabled 配置键
             # 保留向后兼容 (旧 settings.json 不报错), 但不再有任何功能.
@@ -1045,7 +1046,7 @@ def save_config() -> bool:
                 config.pop(_stale_ctx_key, None)
             for _key, _default in {"hotkey_previous": "Ctrl+Alt+U", "hotkey_next": "Ctrl+Alt+N", "hotkey_random": "Ctrl+Alt+R", "hotkey_jump": "Ctrl+Alt+J"}.items():
                 config.setdefault(_key, _default)
-            config["global_hotkeys_enabled"] = bool(config.get("global_hotkeys_enabled", False))
+            config["global_hotkeys_enabled"] = bool(config.get("global_hotkeys_enabled", True))
             config["app_shortcuts_enabled"] = bool(config.get("app_shortcuts_enabled", True))
             # v1.4.6: 规范化 performance_level, 同步旧 performance_mode 布尔
             _pl = str(config.get("performance_level", "balanced")).lower()

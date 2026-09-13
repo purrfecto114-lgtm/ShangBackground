@@ -166,20 +166,6 @@ def candidate_library_paths() -> tuple[Path, ...]:
                 result.append(candidate)
     return tuple(result)
 
-def python_mpv_available() -> bool:
-    """Compatibility helper retained for older plugins.
-
-    The application no longer requires or imports ``python-mpv``.  Returning
-    whether it happens to be installed keeps the historical diagnostic API
-    harmless without making it part of runtime availability.
-    """
-    try:
-        import importlib.util
-
-        return importlib.util.find_spec("mpv") is not None
-    except (ImportError, ModuleNotFoundError, ValueError):
-        return False
-
 
 def resolve_libmpv_path() -> str | None:
     candidates = candidate_library_paths()

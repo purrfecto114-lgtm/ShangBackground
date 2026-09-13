@@ -1,26 +1,52 @@
-﻿# Changelog
+# Changelog
 
 本文件记录 ShangBackground 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [1.6.0] - 2026-09-13
+
+> 计划中：以下为本轮开发中的变更，发布时定稿并归入正式版本号。
+
+### 新增
+
+- **mpv IPC 进度/状态上报与播放就绪验证** — 新增共享 JSON IPC 协议层（`src/platform_adapters/mpv_ipc.py`），Windows named pipe 与 Linux Unix socket 复用同一套实现；视频启动后经 IPC 确认媒体真实播放，消除“IPC 通道就绪但画面黑屏”，失败自动拆除并回退；`observe_property` 由 getattr 能力探测升级为真实现（平台通道 + 轮询回退观察器），播放进度、EOF 与状态可上报。Linux 视频扩展名对齐 Windows（补充 `.wmv`），播放器终止改用进程组 SIGTERM→SIGKILL 兜底，无 psutil 也不留孤儿进程。
+
+### 修复
+
+- **视频路径绑定启动崩溃（P0）** — 主窗口构建时向 `bind_existing_file(..., suffixes=...)` 传入的 `suffixes` 在 `bind()` 中无对应形参，启动即 TypeError。现 `bind()` 支持 `suffixes` 关键字并转发到既有扩展名校验链（大小写不敏感，行为不变时保持默认）。
+- **Windows 收藏右键菜单阻塞事件循环** — Windows 平台 mixin 中仍保留阻塞版 `menu.exec()`，属 v1.4.3 修复的回归；现删除阻塞版本，统一走共享实现的 `popup()` 异步菜单。
+- **界面文案国际化补全** — en.json 补齐缺失键（Bing 同步提示、动画开关、静音/音量提示、失败提示、关于页链接等）；修正日志文案误包 `t()` 的方向错误；用户可见的硬编码中文统一包进 `t()`。
+
+### 变更
+
+- **全局热键默认开启** — 工厂默认、旧配置迁移、保存回退与热键服务读取四层一致改为默认启用；设置页文案同步去掉“默认关闭”表述。
+- **构建钉版对齐** — `build_tools/requirements/build-pyinstaller.txt` 由 6.21.0 对齐到 `buildlib/constants.py` 的 **6.22.0**；清理 pyproject.toml 中空的 `per-file-ignores` 配置。
+
+### 文档
+
+- **仓库清理** — 按路线图“不留阶段性报告”原则，删除根目录的一次性审查报告与 TODO 账本两份文件（结论并入 CHANGELOG 与 ROADMAP）；删除 4 个零引用的 `img/` 图片（GitHub Pages 站点引用的资源保留）。
+- **文档与现实对齐** — ROADMAP 勾销已完成的 CI dry-run 与 Wayland Portal 两项，并吸收二轮审查结论（mpv 真机验证矩阵、许可证清单、Qt 行为测试、broad except 审计）；GETTING_MPV 修正“Windows 发布包必须含 mpv.exe”与 release.yml 实际策略的矛盾，并记录播放就绪验证；PROJECT_STRUCTURE 移除指向不存在示例目录的断链引用；README 平台表反映 Wayland Portal 进展。
+
+## [1.5.1] - 2026-08-22
+
+本节补录 PR #2（`fix/mpv-menu-video-pr`）的全部变更与版本号提升。
+
+### Added
+
+- **托盘菜单“设置”入口** — 托盘菜单新增“设置”动作，可直接打开设置窗口。
+- **桌面右键“设置”动作** — Windows 桌面右键菜单新增“设置”动作。
+- **Windows 签名诊断** — 构建发布流程输出结构化的签名诊断结果（unsigned / signed / failed），便于排查发布产物的签名状态。
 
 ### Fixed
 
-- **mpv 静音丢失用户音量** — 旧实现在 `muted=True` 时同时传 `--volume=0 --mute=yes`，导致 IPC 热取消静音后无法恢复用户保存的音量。Windows、Linux X11（xwinwrap+mpv）、Wayland（mpvpaper）和内部 libmpv 现在把 `volume` 与 `mute` 作为独立属性，静音时保留用户音量，热取消静音时只需 IPC `set_property mute false`。
-- **mpvpaper 静音误禁用音轨** — 旧实现在静音时传 `no-audio`，这会禁用整个音轨；IPC `mute=false` 不足以重新启用音轨。现仅使用 `mute=yes`，保留音轨活跃。
-- **mpv MinGW 嵌套 ZIP 资产无法内置** — 官方 MinGW/i686 artifact 的外层 ZIP 内含一个 `mpv-git-<date>-<hash>-i686.zip`，里面才是 `mpv.exe`。旧下载器只解一层，导致 x86/MinGW 资产无法真正内置。现支持受限的单层嵌套解压（最多 4 候选、共享总解压预算、复用路径穿越/符号链接防护）。
-- **构建诊断无界等待** — `_python_probe()` 原无超时，Python 子进程异常卡住时 preflight/self-test 会无限等待。现增加 15 秒硬超时并转为可诊断的 `RuntimeError`。
-- **卸载残留** — 单实例锁目录 `%LOCALAPPDATA%\ShangBackground-<hash>\` 在卸载时未被清理（哈希后缀导致硬编码路径失效）。现 `CurUninstallStepChanged` 扫描 `%LOCALAPPDATA%\ShangBackground-*` 并删除锁文件和目录；旧版 `%TEMP%\ShangBackground_session_wallpaper.json` 同步清理；数据目录增加 `dirifempty` 后备确保目录本身被删除。
-- **Inno Setup 7 编译错误** — `[Code]` 段内多行 `Format()` 调用的数组参数换行到下一行，行首 `[ResultCode, ...]` 被 ISCC 7 误判为段头。现合并到同一行。`FindFirst` 返回 `Boolean` 而非 `Integer` 的类型修正也已应用。
-- **快捷方式 tooltip 与标签不一致** — 旧 `Comment: "{#PRODUCT_NAME}"` 让悬停 tooltip 显示"Previous Desktop Background"而快捷方式标签是"ShangBackground"。现改为 `Comment: "{#APP_NAME} — {#PRODUCT_NAME}"`。
-- **开始菜单快捷方式无可选项** — `DisableProgramGroupPage=yes` 强制隐藏"选择开始菜单文件夹"向导页。现改为 `no` 并新增显式 `startmenu` task，用户可在"附加快捷方式"分组中取消勾选。
+- **视频选择跨模式事务化** — 壁纸/视频选择在所有视频模式下按事务提交，失败即整体回滚，不再留下半应用的壁纸状态（PR #2）。
+- **Windows mpv bundle 平铺校验** — 构建期校验 Windows mpv 运行时为平铺布局（`mpv.exe` 与 DLL 同层），防止嵌套目录产物进入发布。
+- **CI 稳定性** — 移除未使用导入；未安装 PySide6 的环境中 Qt 相关测试自动跳过，与 CI 实际环境一致。
 
 ### Changed
 
-- **文档与运行时规则统一** — Windows v1.5+ 明确以打包的 `mpv.exe + JSON IPC` 为首选，旧 libmpv-only 仅作兼容回退；Linux X11/Wayland 保留各自平台策略。`docs/ARCHITECTURE.md`、`docs/BUILD_SYSTEM.md`、`docs/GETTING_MPV.md`、`requirements/windows-video.txt` 同步更新。
-- **测试可信度提升** — `test_video_system_mode.py` 从源码文本断言改为真实函数调用 + monkeypatch，验证 `_internal_libmpv_command()` 在 system/disabled 模式下真的返回 None；新增嵌套 ZIP、Wayland mpvpaper 静音、构建诊断超时等行为测试。
+- 版本升级到 **1.5.1**，Windows 文件版本同步更新。
 
-## [1.5.0] - 2026-08-09
+## [1.5.0] - 2026-08-21
 
 ### Fixed
 
@@ -36,6 +62,18 @@
 - **PyInstaller 升级残留** — 安装前清理产品自有 `_internal` 目录，避免旧 DLL/PYD 残留，并覆盖 PyInstaller → Nuitka 迁移路径。
 - **安装后校验过弱** — Inno Setup 现在同时检查主程序和对应 `build-features.json`，并默认写安装日志。
 - **性能档语义倒置** — 集中三档调度参数；“流畅”档现在确实比“均衡”档刷新更快并允许更大的缩略图解码/缓存预算，同时保持默认“均衡”档原有参数不变。
+- **CI 安装重试与发布回退** — UPX/Inno Setup 安装步骤增加重试，UPX 下载增加 GitHub Release 回退路径，降低偶发网络抖动导致的构建失败（71c3f86）。
+
+**二轮审查返工补录（随 v1.5.0 标签一并发布）：**
+
+- **mpv 静音丢失用户音量** — 旧实现在 `muted=True` 时同时传 `--volume=0 --mute=yes`，导致 IPC 热取消静音后无法恢复用户保存的音量。Windows、Linux X11（xwinwrap+mpv）、Wayland（mpvpaper）和内部 libmpv 现在把 `volume` 与 `mute` 作为独立属性，静音时保留用户音量，热取消静音时只需 IPC `set_property mute false`。
+- **mpvpaper 静音误禁用音轨** — 旧实现在静音时传 `no-audio`，这会禁用整个音轨；IPC `mute=false` 不足以重新启用音轨。现仅使用 `mute=yes`，保留音轨活跃。
+- **mpv MinGW 嵌套 ZIP 资产无法内置** — 官方 MinGW/i686 artifact 的外层 ZIP 内含一个 `mpv-git-<date>-<hash>-i686.zip`，里面才是 `mpv.exe`。旧下载器只解一层，导致 x86/MinGW 资产无法真正内置。现支持受限的单层嵌套解压（最多 4 候选、共享总解压预算、复用路径穿越/符号链接防护）。
+- **构建诊断无界等待** — `_python_probe()` 原无超时，Python 子进程异常卡住时 preflight/self-test 会无限等待。现增加 15 秒硬超时并转为可诊断的 `RuntimeError`。
+- **卸载残留** — 单实例锁目录 `%LOCALAPPDATA%\ShangBackground-<hash>\` 在卸载时未被清理（哈希后缀导致硬编码路径失效）。现 `CurUninstallStepChanged` 扫描 `%LOCALAPPDATA%\ShangBackground-*` 并删除锁文件和目录；旧版 `%TEMP%\ShangBackground_session_wallpaper.json` 同步清理；数据目录增加 `dirifempty` 后备确保目录本身被删除。
+- **Inno Setup 7 编译错误** — `[Code]` 段内多行 `Format()` 调用的数组参数换行到下一行，行首 `[ResultCode, ...]` 被 ISCC 7 误判为段头。现合并到同一行。`FindFirst` 返回 `Boolean` 而非 `Integer` 的类型修正也已应用。
+- **快捷方式 tooltip 与标签不一致** — 旧 `Comment: "{#PRODUCT_NAME}"` 让悬停 tooltip 显示“Previous Desktop Background”而快捷方式标签是“ShangBackground”。现改为 `Comment: "{#APP_NAME} — {#PRODUCT_NAME}"`。
+- **开始菜单快捷方式无可选项** — `DisableProgramGroupPage=yes` 强制隐藏“选择开始菜单文件夹”向导页。现改为 `no` 并新增显式 `startmenu` task，用户可在“附加快捷方式”分组中取消勾选。
 
 ### Changed
 
@@ -45,6 +83,11 @@
 - PyInstaller 构建固定版本从 6.21.0 更新到 **6.22.0**；Nuitka 4.1.3、PySide6-Essentials 6.11.1 保持不变。
 - 收拢 Windows/macOS UI mixin 中与共享实现等价的图标缓存、侧边栏、Bing 另存和暗色模式覆盖，减少平台补丁分叉；删除 macOS 分支中未使用的 Windows Startup 辅助方法。
 - 继续移除平台 mixin 中可由 AST 证明与共享实现行为等价的重复覆盖，并让 Windows 热键/右键菜单直接复用统一状态机，减少“某平台修了、另一份镜像没修”的回归面。
+
+**二轮审查返工补录：**
+
+- **文档与运行时规则统一** — Windows v1.5+ 明确以打包的 `mpv.exe + JSON IPC` 为首选，旧 libmpv-only 仅作兼容回退；Linux X11/Wayland 保留各自平台策略。`docs/ARCHITECTURE.md`、`docs/BUILD_SYSTEM.md`、`docs/GETTING_MPV.md`、`requirements/windows-video.txt` 同步更新。
+- **测试可信度提升** — `test_video_system_mode.py` 从源码文本断言改为真实函数调用 + monkeypatch，验证 `_internal_libmpv_command()` 在 system/disabled 模式下真的返回 None；新增嵌套 ZIP、Wayland mpvpaper 静音、构建诊断超时等行为测试。
 
 ## [1.4.6] - 2026-07-29
 

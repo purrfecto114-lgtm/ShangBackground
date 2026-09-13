@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import shutil
 import secrets
+import shutil
+import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
+from collections.abc import Callable
+from typing import Any
 
 try:
     import psutil
@@ -17,6 +20,7 @@ except ImportError:  # pragma: no cover - optional dependency
 
 from platform_adapters import process_state
 from platform_adapters.backends.linux.session import is_wayland_session
+from platform_adapters.mpv_ipc import MpvIpcClient, verify_media_playing
 
 try:
     from app.paths import (
@@ -24,6 +28,8 @@ try:
         is_packaged_runtime, mpv_bundled_exe,
     )
     from app.libmpv_runtime import runtime_available as libmpv_runtime_available
+    from app.build_features import use_internal_libmpv
+    from app.mpv_backend import PollingPropertyObserver
 except Exception:  # pragma: no cover - allow import without app package
     def mpv_bundled_exe():
         return None
@@ -37,6 +43,9 @@ except Exception:  # pragma: no cover - allow import without app package
         return sys.executable
     def entry_script_path():
         return sys.argv[0]
+    def use_internal_libmpv():
+        # app 包不可用时内部 libmpv 运行时同样不可用。
+        return False
 
 
 def _user_state_dir() -> str:
@@ -49,7 +58,7 @@ os.makedirs(_DATA_DIR, exist_ok=True)
 PID_FILE = os.path.join(_DATA_DIR, "video_wallpaper.pid")
 # 单独文件保存 IPC socket 路径；与 PID 文件分离，避免破坏旧的纯 int PID 格式。
 IPC_FILE = os.path.join(_DATA_DIR, "video_wallpaper.ipc")
-VIDEO_EXTENSIONS = (".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm")
+VIDEO_EXTENSIONS = (".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".wmv")
 PROCESS_KIND = "video-wallpaper-linux"
 _CURRENT_PROC: subprocess.Popen | None = None
 
@@ -76,23 +85,14 @@ def _stop_tracked_process() -> None:
     _CURRENT_PROC = None
     if proc is None or proc.poll() is not None:
         return
-    try:
-        proc.terminate()
-        proc.wait(timeout=2.0)
-    except subprocess.TimeoutExpired:
-        try:
-            proc.kill()
-            proc.wait(timeout=1.0)
-        except Exception:
-            pass
-    except Exception:
-        pass
+    _terminate_process_tree(proc, grace=2.0)
 
 
 def stop_video_wallpaper() -> None:
     # A live Popen object is an exact capability owned by this process.  For
     # crash recovery, terminate only a process whose persisted identity still
     # matches; legacy PID-only files are deliberately non-destructive.
+    _stop_property_observers()
     _stop_tracked_process()
     process_state.terminate_verified(PID_FILE, expected_kind=PROCESS_KIND)
     process_state.remove_state(PID_FILE)
@@ -123,17 +123,227 @@ def _wait_for_ipc(process: subprocess.Popen, ipc_path: str, timeout: float = 3.0
     return False
 
 
-def _terminate_failed_process(process: subprocess.Popen) -> None:
+class _UnixSocketChannel:
+    """Unix socket 读写通道：为 MpvIpcClient 提供注入式 I/O。
+
+    read_bytes 契约：返回 bytes（可能是不完整分片）、None（超时内无数据）、
+    b""（EOF）或抛异常（连接破裂）。
+    """
+
+    _READ_CHUNK = 65536
+
+    def __init__(self, sock: socket.socket) -> None:
+        self._sock = sock
+
+    def write_bytes(self, payload: bytes) -> int:
+        # sendall 保证全量写出；为贴合协议层契约返回写入长度。
+        self._sock.sendall(payload)
+        return len(payload)
+
+    def read_bytes(self, timeout: float) -> bytes | None:
+        self._sock.settimeout(max(0.01, float(timeout)))
+        try:
+            chunk = self._sock.recv(self._READ_CHUNK)
+        except socket.timeout:
+            return None  # TimeoutError 是 OSError 子类，必须先于 OSError 捕获。
+        if chunk:
+            return chunk
+        return b""  # 对端有序关闭：EOF。
+
+    def close(self) -> None:
+        try:
+            self._sock.close()
+        except OSError:
+            pass
+
+
+def _connect_ipc_socket(ipc_path: str, timeout: float = 3.0) -> socket.socket | None:
+    """连接 mpv IPC Unix socket；文件存在但尚未监听时重试直至超时。"""
+    deadline = time.monotonic() + max(0.2, float(timeout))
+    while time.monotonic() < deadline:
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(min(0.25, max(0.05, deadline - time.monotonic())))
+            sock.connect(ipc_path)
+            return sock
+        except OSError:
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+            time.sleep(0.05)
+    return None
+
+
+def _open_ipc_client(ipc_path: str, timeout: float = 3.0) -> MpvIpcClient | None:
+    """连接 socket 并包装为 MpvIpcClient；失败返回 None。"""
+    sock = _connect_ipc_socket(ipc_path, timeout)
+    if sock is None:
+        return None
+    channel = _UnixSocketChannel(sock)
+    return MpvIpcClient(channel.write_bytes, channel.read_bytes, close=channel.close)
+
+
+def _mpv_ipc_transact(ipc_path: str, command, timeout: float = 3.0) -> tuple[bool, Any]:
+    """执行一次 JSON IPC 事务：发送命令并等待 mpv 应答。"""
+    client = _open_ipc_client(ipc_path, timeout)
+    if client is None:
+        return False, None
+    try:
+        return client.request(command, timeout=timeout)
+    finally:
+        client.close()
+
+
+def _current_ipc_path() -> str:
+    """读取当前播放器的 IPC socket 路径（IPC_FILE 优先，回退状态文件）。"""
+    try:
+        with open(IPC_FILE, "r", encoding="utf-8") as fh:
+            ipc_path = fh.read().strip()
+        if ipc_path:
+            return ipc_path
+    except Exception:
+        pass
+    try:
+        return str(_read_state().get("ipc_path") or "")
+    except Exception:
+        return ""
+
+
+def _verify_media_ready(client: MpvIpcClient | None, timeout: float = 5.0) -> bool:
+    """薄包装：转发到平台中立的 verify_media_playing（便于测试替换与平台差分）。"""
+    if client is None:
+        return False
+    return verify_media_playing(client, timeout=timeout)
+
+
+def _verify_started_player(process: subprocess.Popen, ipc_path: str) -> bool:
+    """控制通道建立后再经 JSON IPC 确认媒体真实在播放（防黑屏误报）。
+
+    无 IPC 通道的后端跳过验证；验证失败由调用方整树拆除并向上回退。
+    """
+    if not ipc_path:
+        return True
+    poll = getattr(process, "poll", None)
+    if poll is not None and poll() is not None:
+        return False
+    client = _open_ipc_client(ipc_path, timeout=2.5)
+    if client is None:
+        return False
+    try:
+        return _verify_media_ready(client, timeout=5.0)
+    finally:
+        client.close()
+
+
+def _group_has_live_members(group_id: int) -> bool | None:
+    """进程组内是否仍有非僵尸成员；无法判定时返回 None（回退 killpg 探测）。
+
+    僵尸成员不代表仍在运行：容器等 PID 1 不收割孤儿的环境里，
+    killpg(0) 会因组内残留僵尸而永远成功，导致终止流程空耗宽限
+    并无谓升级 SIGKILL。直接枚举 /proc 按进程组归属判定。
+    """
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return None
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/stat", "rb") as fh:
+                stat = fh.read()
+        except OSError:
+            continue
+        try:
+            # comm 可含空格与括号：定位最后一个 ')' 之后的字段。
+            # ) 之后依次为 state(0) ppid(1) pgrp(2)。
+            rest = stat[stat.rindex(b")") + 2:].split()
+            if int(rest[2]) != group_id:
+                continue
+            if rest[0] != b"Z":
+                return True
+        except (ValueError, IndexError):
+            continue
+    return False
+
+
+def _process_tree_gone(group_id: int | None, survivors: list) -> bool:
+    """进程树是否已全部退出（psutil 可用时含孙进程检查）。"""
+    for child in survivors:
+        try:
+            if child.is_running() and child.status() != psutil.STATUS_ZOMBIE:
+                return False
+        except Exception:
+            continue
+    if group_id is None:
+        return True
+    live = _group_has_live_members(group_id)
+    if live is not None:
+        return not live
+    try:
+        os.killpg(group_id, 0)  # 信号 0：探测进程组是否仍有成员。
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return True
+    return False
+
+
+def _terminate_process_tree(process: subprocess.Popen, *, grace: float = 2.0) -> None:
+    """终止以 start_new_session=True 启动的播放器及其整棵进程树。
+
+    顺序：SIGTERM 整个进程组（避免 xwinwrap→mpv 之类的子进程沦为孤儿）
+    → 宽限等待 → 仍存活则 SIGKILL 升级。psutil 仅用于更精细的孙进程
+    兕底枚举；缺失时 os.killpg 已覆盖全部组内进程，不留孤儿。
+    """
     global _CURRENT_PROC
+    pid = process.pid
+    survivors: list = []
+    if psutil is not None:
+        try:
+            survivors = psutil.Process(pid).children(recursive=True)
+        except Exception:
+            survivors = []
+    try:
+        group_id = os.getpgid(pid)
+    except OSError:
+        group_id = None
+    own_group = bool(group_id and group_id == pid)
+
+    def _signal(sig: int) -> None:
+        if own_group:
+            try:
+                os.killpg(group_id, sig)
+            except OSError:
+                pass
+
+    _signal(signal.SIGTERM)
     try:
         process.terminate()
-        process.wait(timeout=1.5)
-    except subprocess.TimeoutExpired:
+    except Exception:
+        pass
+    deadline = time.monotonic() + max(0.2, float(grace))
+    while time.monotonic() < deadline:
+        if process.poll() is not None and _process_tree_gone(group_id, survivors):
+            break
+        time.sleep(0.05)
+    if process.poll() is None or not _process_tree_gone(group_id, survivors):
+        # 宽限期内未退净：SIGKILL 升级，确保不留孤儿。
+        _signal(signal.SIGKILL)
         try:
             process.kill()
-            process.wait(timeout=1.0)
         except Exception:
             pass
+        for child in survivors:
+            try:
+                child.kill()
+            except Exception:
+                pass
+    try:
+        process.wait(timeout=1.0)
     except Exception:
         pass
     if _CURRENT_PROC is process:
@@ -153,13 +363,18 @@ def _start_process(cmd: list[str], fail_name: str, ipc_path: str = "") -> tuple[
             if isinstance(ownership, dict) and ownership.get("identity_unavailable"):
                 raise OSError("无法确认新播放器进程身份")
         except Exception as exc:
-            _terminate_failed_process(process)
+            _terminate_process_tree(process, grace=1.5)
             process_state.remove_state(PID_FILE)
             return False, f"{fail_name} 无法记录进程所有权，已终止新进程：{exc}"
         if not _wait_for_ipc(process, ipc_path):
-            _terminate_failed_process(process)
+            _terminate_process_tree(process, grace=1.5)
             process_state.remove_state(PID_FILE)
             return False, f"{fail_name} 未在限定时间内建立控制通道，已自动回退。"
+        if not _verify_started_player(process, ipc_path):
+            # 通道在而媒体不在播（黑屏风险）：整树拆除并向上回退到下一个候选。
+            _terminate_process_tree(process, grace=1.5)
+            process_state.remove_state(PID_FILE)
+            return False, f"{fail_name} 控制通道已建立但未确认媒体在播放，已自动回退。"
         try:
             with open(IPC_FILE, "w", encoding="utf-8") as fh:
                 fh.write(ipc_path or "")
@@ -284,13 +499,9 @@ def _internal_libmpv_x11_command(
         return None
     # v1.4.4: Don't spawn the full packaged app as a child process when the
     # build didn't bundle libmpv. Same fix as Windows video backend.
-    try:
-        from app.build_features import video_runtime_mode
-        mode = video_runtime_mode()
-        if mode in ("system", "disabled"):
-            return None
-    except Exception:
-        pass
+    # 门控统一：与 windows/video.py 共用 build_features.use_internal_libmpv()。
+    if not use_internal_libmpv():
+        return None
     if is_packaged_runtime():
         player = [app_executable_path()]
     else:
@@ -308,7 +519,7 @@ def _internal_libmpv_x11_command(
 
 def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100) -> tuple[bool, str]:
     if not validate_video_path(video_path):
-        return False, "请选择有效的视频文件：mp4/mov/m4v/avi/mkv/webm"
+        return False, "请选择有效的视频文件：mp4/mov/m4v/avi/mkv/webm/wmv"
     stop_video_wallpaper()
     abs_video = os.path.abspath(video_path)
     # Clamp volume to 0-100 once so both backends receive a sane value.
@@ -391,65 +602,96 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
 def set_video_volume(muted: bool, volume: int) -> bool:
     """通过 mpv JSON IPC 实时调整音量/静音，不中断播放。
 
-    返回 True 表示热更新成功；返回 False 表示 socket 不可用或写入失败，
-    GUI 应回退到 stop + start 重新启动播放进程。
+    返回 True 表示 mpv 应答确认成功；返回 False 表示 socket 不可用或命令
+    被拒绝，GUI 应回退到 stop + start 重新启动播放进程。
     """
-    try:
-        ipc_path = ""
-        try:
-            with open(IPC_FILE, "r", encoding="utf-8") as fh:
-                ipc_path = fh.read().strip()
-        except Exception:
-            return False
-        if not ipc_path or not os.path.exists(ipc_path):
-            return False
-        clamped_volume = max(0, min(100, int(volume)))
-        # mpv JSON IPC: 每行一条命令，UTF-8 编码。
-        # See https://mpv.io/manual/stable/#json-ipc
-        cmds = [
-            {"command": ["set_property", "volume", clamped_volume]},
-            {"command": ["set_property", "mute", bool(muted)]},
-        ]
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(0.5)
-        sock.connect(ipc_path)
-        try:
-            for obj in cmds:
-                sock.sendall((json.dumps(obj) + "\n").encode("utf-8"))
-            return True
-        finally:
-            try:
-                sock.close()
-            except Exception:
-                pass
-    except Exception:
+    ipc_path = _current_ipc_path()
+    if not ipc_path:
         return False
+    client = _open_ipc_client(ipc_path, timeout=2.5)
+    if client is None:
+        return False
+    try:
+        clamped_volume = max(0, min(100, int(volume)))
+        if not client.set_property("volume", clamped_volume):
+            return False
+        return client.set_property("mute", bool(muted))
+    finally:
+        client.close()
 
 
 def set_video_paused(paused: bool) -> bool:
-    """通过 mpv JSON IPC 实时暂停/恢复视频壁纸。"""
-    try:
-        ipc_path = ""
-        try:
-            with open(IPC_FILE, "r", encoding="utf-8") as fh:
-                ipc_path = fh.read().strip()
-        except Exception:
-            return False
-        if not ipc_path or not os.path.exists(ipc_path):
-            return False
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(0.5)
-        sock.connect(ipc_path)
-        try:
-            sock.sendall((json.dumps({"command": ["set_property", "pause", bool(paused)]}) + "\n").encode("utf-8"))
-            return True
-        finally:
-            try:
-                sock.close()
-            except Exception:
-                pass
-    except Exception:
+    """通过 mpv JSON IPC 实时暂停/恢复视频壁纸（以 mpv 应答为准）。"""
+    ipc_path = _current_ipc_path()
+    if not ipc_path:
         return False
+    client = _open_ipc_client(ipc_path, timeout=2.5)
+    if client is None:
+        return False
+    try:
+        return client.set_property("pause", bool(paused))
+    finally:
+        client.close()
+
+
+_PROPERTY_OBSERVERS: dict[str, PollingPropertyObserver] = {}
+_OBSERVERS_LOCK = threading.Lock()
+
+
+def _stop_property_observers() -> None:
+    """停止并清空全部属性观察者（stop_video_wallpaper 时调用）。"""
+    with _OBSERVERS_LOCK:
+        observers = list(_PROPERTY_OBSERVERS.values())
+        _PROPERTY_OBSERVERS.clear()
+    for observer in observers:
+        observer.stop()
+
+
+def send_video_ipc(command) -> bool:
+    """向运行中的播放器发送任意 mpv JSON IPC 命令（LegacyModuleMpvBackend.ipc 探测点）。
+
+    返回 mpv 是否确认成功；无 IPC 通道或应答失败一律返回 False。
+    """
+    ipc_path = _current_ipc_path()
+    if not ipc_path:
+        return False
+    ok, _response = _mpv_ipc_transact(ipc_path, command, timeout=3.0)
+    return ok
+
+
+def get_video_property(name: str) -> tuple[bool, Any]:
+    """读取运行中播放器的属性；(False, None) 表示通道或属性不可用。"""
+    ipc_path = _current_ipc_path()
+    if not ipc_path:
+        return False, None
+    ok, response = _mpv_ipc_transact(ipc_path, ["get_property", str(name)], timeout=3.0)
+    if ok and isinstance(response, dict):
+        return True, response.get("data")
+    return False, None
+
+
+def observe_video_property(name: str, callback: Callable[[str, Any], None]) -> bool:
+    """注册属性观察：以 PollingPropertyObserver 轮询 get_video_property 实现。
+
+    callback 以 (属性名, 当前值) 调用，值变化时触发（首次订阅同步一次当前值）；
+    同名属性的重复订阅会替换旧观察者。返回是否注册成功。
+    """
+    key = str(name or "").strip()
+    if not key or not callable(callback):
+        return False
+    with _OBSERVERS_LOCK:
+        previous = _PROPERTY_OBSERVERS.pop(key, None)
+        if previous is not None:
+            previous.stop()
+        observer = PollingPropertyObserver(lambda: get_video_property(key)[1])
+        _PROPERTY_OBSERVERS[key] = observer
+    if not observer.start(lambda value: callback(key, value)):
+        with _OBSERVERS_LOCK:
+            if _PROPERTY_OBSERVERS.get(key) is observer:
+                del _PROPERTY_OBSERVERS[key]
+        return False
+    return True
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()

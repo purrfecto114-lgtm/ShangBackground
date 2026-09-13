@@ -1,6 +1,6 @@
 # 优化路线图
 
-路线图只记录当前未完成工作。已完成内容进入 [`CHANGELOG.md`](../CHANGELOG.md)，不再把阶段交接报告长期留在仓库。
+路线图只记录当前未完成工作。已完成内容进入 [`CHANGELOG.md`](../CHANGELOG.md)，不再把阶段交接报告长期留在仓库。一次性审查报告与 TODO 账本已按此原则并入 CHANGELOG 与本文档后从仓库移除。
 
 ## P0：原生发布闭环
 
@@ -9,6 +9,7 @@
 - 在干净机器检查 Qt Widgets 插件、三端系统 WebView、libmpv/mpv、暂停淡入淡出、中文/空格路径；
 - macOS 完成签名、隔离属性和 Spaces 行为验证；
 - 明确记录 Wayland 当前不支持的能力，不用模拟结果代替真实 Portal。
+- [ ] 建立 mpv 视频路径真机验证矩阵（Windows named pipe IPC、Linux X11 socket、Wayland mpvpaper、bundled/system 模式），覆盖播放就绪验证与进度/状态上报。
 
 完成标准：每个平台都有可复现的构建命令、原生验收记录和已知限制。
 
@@ -29,12 +30,13 @@
 - 提取 Nuitka/PyInstaller 共用 preflight 和 BuildRequest；
 - 统一 artifact manifest、SHA-256、构建命令与环境元数据；
 - 对模块化组合增加最小运行自检；
-- GitHub Actions 恢复后，再启用两工具 × 三平台 dry-run 与各平台原生 standalone；
+- [x] CI dry-run 已恢复：GitHub Actions 重新执行构建计划 dry-run 与全量测试，各平台原生 standalone 由 Release 工作流承担（真机验收仍按 P0 执行）。
 - standalone 作为发布基线，onefile 只在前者通过后评估。
+- [ ] 整理 mpv/libmpv 及第三方运行时组件的许可证清单，并随构建产物分发。
 
 ## P3：平台能力
 
-- 研究并实现 Wayland XDG GlobalShortcuts Portal；
+- [x] Wayland XDG GlobalShortcuts Portal 已实现：Wayland 会话经 Portal 接入全局热键，X11 仍是主路径，真机验收待。
 - 继续收敛 Linux 桌面环境探测和 X11 失败诊断；
 - 完善 macOS 权限说明、签名和窗口层级测试；
 - 将 Capability 显示与实际 Backend 探测统一，避免文案漂移。
@@ -45,7 +47,10 @@
 - 对非关键页面延迟创建；
 - 为大型列表引入 Model/Delegate，避免重复创建控件；
 - 清理仍有版本阶段含义但无运行价值的注释；
-- 定期运行翻译死键审计，并保持用户提示与真实能力一致。
+- 定期运行翻译死键审计，并保持用户提示与真实能力一致；
+- [ ] 为关键 Qt 交互补充行为测试（无 PySide6 的环境目前只能以桩/契约测试覆盖）；
+- [ ] 审计并收敛 src/ 中的 broad except（裸 `except:` 与过宽异常捕获），避免掩盖真实错误。
+- [ ] 启动时全局热键注册失败应在 UI 反映（当前仅日志记录，设置页复选框可能与实际注册状态不符）。
 
 ## 每次发布最低验证
 
