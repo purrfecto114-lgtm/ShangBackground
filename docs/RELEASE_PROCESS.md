@@ -69,7 +69,7 @@ ShangBackground-vX.Y.Z-source.zip
 SHA256SUMS.txt
 ```
 
-Windows 在二进制归档之外，还提供 Inno Setup 安装包（`-setup.exe`）。CI 在 Windows runner 安装 UPX 5.2.0 和 Inno Setup 7 x64，将已验证的 Nuitka full standalone 封装为安装包。
+Windows 在二进制归档之外，还提供 Inno Setup 安装包（`-setup.exe`）。CI 在 Windows runner 安装 UPX 5.2.0 和 Inno Setup（winget 优先安装 Inno Setup 7；winget 不可用或失败时回退 chocolatey 安装 Inno Setup 6.5.5，并使用其 ISCC 封装），将已验证的 Nuitka full standalone 封装为安装包。
 
 二进制归档保留 standalone 目录结构与 Unix 可执行权限。源码 ZIP 只含一个顶层目录，并排除 `.github/`、`tests/`、缓存、构建目录、站点资源和验证产物。工作流会重新解压源码包，然后执行：
 

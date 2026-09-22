@@ -91,7 +91,9 @@ class MpvIpcClient:
             request_id = self._request_counter
             message["request_id"] = request_id
             try:
-                line = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
+                line = json.dumps(
+                    message, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+                )
                 payload = (line + "\n").encode("utf-8")
             except (TypeError, ValueError, UnicodeError):
                 return False, None
@@ -256,22 +258,30 @@ def verify_media_playing(client: MpvIpcClient, timeout: float = 5.0, poll_interv
         return False
     deadline = time.monotonic() + max(0.1, float(timeout))
     interval = max(0.01, float(poll_interval))
+
+    def budget() -> float:
+        """单次请求预算：不越过总截止时间，且单请求至多 1s。
+
+        每次调用重新计算：若沿用轮首旧值，同轮最多 4 个串行
+        get_property 会各自独享这份预算，实际耗时被放大到数倍。
+        """
+        return max(0.0, min(deadline - time.monotonic(), 1.0))
+
     while True:
         if client.dead or client.closed:
             return False
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return False
-        request_timeout = min(remaining, 1.0)
-        ok, position = client.get_property("time-pos", timeout=request_timeout)
+        ok, position = client.get_property("time-pos", timeout=budget())
         if ok and isinstance(position, (int, float)) and position > 0:
             return True
-        ok, ended = client.get_property("eof-reached", timeout=request_timeout)
+        ok, ended = client.get_property("eof-reached", timeout=budget())
         if not (ok and ended is True):
             # 未到文件末尾（或属性不可用）：用 duration + pause 综合判定。
-            ok, duration = client.get_property("duration", timeout=request_timeout)
+            ok, duration = client.get_property("duration", timeout=budget())
             if ok and isinstance(duration, (int, float)) and duration > 0:
-                ok_pause, paused = client.get_property("pause", timeout=request_timeout)
+                ok_pause, paused = client.get_property("pause", timeout=budget())
                 if ok_pause and paused is False:
                     return True
         remaining = deadline - time.monotonic()

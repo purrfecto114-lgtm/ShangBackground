@@ -49,8 +49,9 @@ def build_default_config() -> dict:
         "hotkey_random": "Ctrl+Alt+R",
         "hotkey_jump": "Ctrl+Alt+J",
         # 焦点保护全平台默认开启（与旧配置迁移填充值一致）：全局热键默认
-        # 开启后，简单热键（如 PgUp/R）在前台非桌面时不应误触发；
-        # Ctrl+Alt 组合键不受该守卫影响，Wayland Portal 投递天然安全。
+        # 开启后，用户自配的单修饰键全局组合（如 Ctrl+R、Alt+F4）在前台
+        # 非桌面时不应误触发应用动作；Ctrl+Alt 等双修饰键组合与 Wayland
+        # Portal 投递不受该守卫影响。
         "hotkey_focus_guard": True,
         "global_hotkeys_enabled": True,
         "app_shortcuts_enabled": True,

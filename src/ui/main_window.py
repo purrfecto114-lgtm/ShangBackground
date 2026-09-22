@@ -1978,14 +1978,14 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             row_layout.setSpacing(8)
             record_button = QPushButton(t("录制"))
             record_button.setProperty("secondary", True)
-            record_button.setFixedWidth(80)
+            record_button.setMinimumWidth(80)
             record_button.clicked.connect(
                 lambda checked=False, action=action: self.record_context_hotkey(action)
             )
             row_layout.addWidget(record_button)
             clear_button = QPushButton(t("清除"))
             clear_button.setProperty("secondary", True)
-            clear_button.setFixedWidth(80)
+            clear_button.setMinimumWidth(80)
             clear_button.clicked.connect(
                 lambda checked=False, action=action: self.on_context_hotkey_clear(action)
             )
@@ -5493,7 +5493,7 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
         parts = [p.strip() for p in raw.replace("-", "+").split("+") if p.strip()]
         names = {"ctrl": "Ctrl", "control": "Ctrl", "alt": "Alt", "shift": "Shift", "win": "Win", "meta": "Win"}
         display = "+".join(names.get(p.lower(), p.upper() if len(p) == 1 else p) for p in parts)
-        return f"当前：{display}"
+        return t("当前：") + display
 
     def _refresh_context_shortcut_labels(self):
         for action, label, _default_key, _cfg_key, widget_name in self._context_action_defs():

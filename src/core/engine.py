@@ -566,11 +566,11 @@ def restart_application(extra_args=None):
 def restart_as_admin(extra_args=None):
     """以管理员身份重启当前应用。"""
     if not IS_WINDOWS:
-        log(t("非 Windows 平台，改为普通重启"))
+        log("非 Windows 平台，改为普通重启")
         return restart_application(extra_args=extra_args)
     service = _get_relaunch_service()
     if service.is_windows_admin():
-        log(t("当前已是管理员权限，执行普通重启"))
+        log("当前已是管理员权限，执行普通重启")
         return service.restart(extra_args)
     return service.restart_as_admin(extra_args)
 

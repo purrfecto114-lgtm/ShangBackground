@@ -186,10 +186,36 @@ def _open_ipc_client(ipc_path: str, timeout: float = 3.0) -> MpvIpcClient | None
     return MpvIpcClient(channel.write_bytes, channel.read_bytes, close=channel.close)
 
 
-def _mpv_ipc_transact(ipc_path: str, command, timeout: float = 3.0) -> tuple[bool, Any]:
-    """执行一次 JSON IPC 事务：发送命令并等待 mpv 应答。"""
+# 运行时 IPC（音量/暂停/属性读写）的打开预算：通道应已存在，缺失即快速
+# 失败；启动期就绪验证仍用长预算（见 _verify_started_player）。
+_RUNTIME_IPC_OPEN_TIMEOUT = 0.5
+
+
+def _heal_dead_player_state() -> None:
+    """播放器进程已死亡但状态残留时清理状态，使后续运行时 IPC 快速失败。
+
+    mpv 非 stop 路径自行退出（崩溃/被杀）时状态文件仍含 ipc_path；若继续
+    按启动期预算轮询连接 socket，GUI 线程每次调用会空耗整个超时窗口。
+    """
+    global _CURRENT_PROC
+    proc = _CURRENT_PROC
+    if proc is None or proc.poll() is None:
+        return
+    _CURRENT_PROC = None
+    process_state.remove_state(PID_FILE)
+
+
+def _mpv_ipc_transact(
+    ipc_path: str, command, timeout: float = _RUNTIME_IPC_OPEN_TIMEOUT
+) -> tuple[bool, Any]:
+    """执行一次 JSON IPC 事务：发送命令并等待 mpv 应答。
+
+    运行时路径默认短超时：socket 缺失（播放器已退出）时快速失败并自愈状态，
+    不按启动期预算在 GUI 线程长时间轮询。
+    """
     client = _open_ipc_client(ipc_path, timeout)
     if client is None:
+        _heal_dead_player_state()
         return False, None
     try:
         return client.request(command, timeout=timeout)
@@ -608,8 +634,9 @@ def set_video_volume(muted: bool, volume: int) -> bool:
     ipc_path = _current_ipc_path()
     if not ipc_path:
         return False
-    client = _open_ipc_client(ipc_path, timeout=2.5)
+    client = _open_ipc_client(ipc_path, timeout=_RUNTIME_IPC_OPEN_TIMEOUT)
     if client is None:
+        _heal_dead_player_state()
         return False
     try:
         clamped_volume = max(0, min(100, int(volume)))
@@ -625,8 +652,9 @@ def set_video_paused(paused: bool) -> bool:
     ipc_path = _current_ipc_path()
     if not ipc_path:
         return False
-    client = _open_ipc_client(ipc_path, timeout=2.5)
+    client = _open_ipc_client(ipc_path, timeout=_RUNTIME_IPC_OPEN_TIMEOUT)
     if client is None:
+        _heal_dead_player_state()
         return False
     try:
         return client.set_property("pause", bool(paused))
@@ -655,7 +683,7 @@ def send_video_ipc(command) -> bool:
     ipc_path = _current_ipc_path()
     if not ipc_path:
         return False
-    ok, _response = _mpv_ipc_transact(ipc_path, command, timeout=3.0)
+    ok, _response = _mpv_ipc_transact(ipc_path, command, timeout=_RUNTIME_IPC_OPEN_TIMEOUT)
     return ok
 
 
@@ -664,7 +692,7 @@ def get_video_property(name: str) -> tuple[bool, Any]:
     ipc_path = _current_ipc_path()
     if not ipc_path:
         return False, None
-    ok, response = _mpv_ipc_transact(ipc_path, ["get_property", str(name)], timeout=3.0)
+    ok, response = _mpv_ipc_transact(ipc_path, ["get_property", str(name)], timeout=_RUNTIME_IPC_OPEN_TIMEOUT)
     if ok and isinstance(response, dict):
         return True, response.get("data")
     return False, None
@@ -681,16 +709,17 @@ def observe_video_property(name: str, callback: Callable[[str, Any], None]) -> b
         return False
     with _OBSERVERS_LOCK:
         previous = _PROPERTY_OBSERVERS.pop(key, None)
-        if previous is not None:
-            previous.stop()
         observer = PollingPropertyObserver(lambda: get_video_property(key)[1])
-        _PROPERTY_OBSERVERS[key] = observer
-    if not observer.start(lambda value: callback(key, value)):
-        with _OBSERVERS_LOCK:
-            if _PROPERTY_OBSERVERS.get(key) is observer:
-                del _PROPERTY_OBSERVERS[key]
-        return False
-    return True
+        # start() 必须在锁内完成：若放到锁外，并发同名注册可能在
+        # store→start 间隙 pop 并 stop 本观察者，随后的 start() 会把它
+        # 复活成注册表再也引用不到的泄漏线程。
+        started = observer.start(lambda value: callback(key, value))
+        if started:
+            _PROPERTY_OBSERVERS[key] = observer
+    if previous is not None:
+        # stop() 内部有界 join，放锁外避免阻塞并发注册方。
+        previous.stop()
+    return started
 
 
 def main() -> None:

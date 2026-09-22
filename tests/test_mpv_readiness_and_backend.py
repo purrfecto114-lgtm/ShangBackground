@@ -13,6 +13,7 @@ from __future__ import annotations
 import collections
 import contextlib
 import json
+import re
 import signal
 import socket
 import subprocess
@@ -21,8 +22,12 @@ import threading
 import time
 from pathlib import Path
 
-import psutil
 import pytest
+
+try:  # 发布流水线（ci.yml / release.yml）只装 pytest，不装 psutil
+    import psutil
+except ModuleNotFoundError:  # pragma: no cover - 轻量 CI 环境
+    psutil = None
 
 from app.mpv_backend import LegacyModuleMpvBackend, PollingPropertyObserver
 from platform_adapters.mpv_ipc import MpvIpcClient, verify_media_playing
@@ -92,6 +97,7 @@ def test_verify_media_playing_confirms_by_duration_and_unpaused():
     assert verify_media_playing(_ipc_client(fake), timeout=2.0) is True
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="AF_UNIX 文件系统套接字在 Windows 不可用")
 def test_linux_ipc_readiness_end_to_end_over_real_unix_socket(tmp_path):
     """Linux 端到端：真实 AF_UNIX 假 mpv（accept → 读请求 → 延迟 ~0.2s →
     应答 time-pos=1.5），经 linux/video.py 的 _connect_ipc_socket +
@@ -159,6 +165,8 @@ def _process_gone_or_zombie(pid: int, deadline: float = 5.0) -> bool:
     return False
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="start_new_session/SIGTERM 组语义仅 POSIX")
+@pytest.mark.skipif(psutil is None, reason="psutil unavailable (lightweight CI runner)")
 def test_terminate_process_tree_reaps_parent_and_grandchild_without_sigkill():
     """真实父/孙 sleeper 进程树：SIGTERM 整组收割——父进程 returncode 为
     -SIGTERM（SIGKILL 升级会是 -9），孙进程在窗口内消失，不留孤儿。"""
@@ -181,7 +189,9 @@ def test_terminate_process_tree_reaps_parent_and_grandchild_without_sigkill():
         grandchild_pid = int(parent.stdout.readline().strip())
         assert grandchild_pid > 0
 
-        linux_video._terminate_process_tree(parent, grace=2.0)
+        # grace=5.0：慢 CI 上 SIGTERM 默认处置不应被误升级为 SIGKILL；
+        # 乖巧进程约 0.05s 退出，实际耗时不受该上限影响。
+        linux_video._terminate_process_tree(parent, grace=5.0)
 
         assert parent.returncode == -signal.SIGTERM  # 未升级 SIGKILL
         assert _process_gone_or_zombie(grandchild_pid)
@@ -299,7 +309,10 @@ def test_platform_capability_contract():
         "src/platform_adapters/backends/windows/video.py",
     ):
         source = (repo_root / relative).read_text(encoding="utf-8")
-        assert "if not use_internal_libmpv():" in source, f"{relative} 未接线统一门控"
+        # 用正则而非字面串：对括号/空白等价重构稳健，仍要求接线真实存在。
+        assert re.search(r"if\s+not\s+use_internal_libmpv\(\)\s*:", source), (
+            f"{relative} 未接线统一门控"
+        )
 
 
 def test_verify_media_ready_thin_wrapper_passes_arguments_through(monkeypatch: pytest.MonkeyPatch):
