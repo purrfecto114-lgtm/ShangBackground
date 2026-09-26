@@ -407,6 +407,17 @@ def _prime_explorer_wallpaper_host() -> bool:
             return False
 
 
+def prime_desktop_wallpaper_host() -> bool:
+    """Public facade entry for the Explorer desktop-host warm-up.
+
+    ``core.engine`` must not import platform backends directly (architecture
+    dependency rule); the shared ``platform_adapters.integration`` facade
+    re-exports this function, so the private helper stays an implementation
+    detail while shared code calls a stable public name.
+    """
+    return _prime_explorer_wallpaper_host()
+
+
 def _set_wallpaper_via_com(path: str) -> bool:
     """Set one wallpaper through IDesktopWallpaper in this calling thread."""
     api_path = _wallpaper_api_path(path)

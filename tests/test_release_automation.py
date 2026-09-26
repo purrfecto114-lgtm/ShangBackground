@@ -242,16 +242,27 @@ def test_release_workflow_skips_upx_on_macos():
     assert "args+=(--upx)" in build_step
 
 
-def test_release_workflow_installer_step_has_chocolatey_fallback():
-    """``release.yml`` must fall back to chocolatey when winget fails to
-    install Inno Setup, so transient winget source issues do not block
-    the Windows setup.exe build."""
+def test_release_workflow_installer_step_has_github_release_fallback():
+    """``release.yml`` must fall back to the official Inno Setup 7 GitHub
+    release when winget fails, so transient winget source issues do not block
+    the Windows setup.exe build. v1.6.1: the fallback must also install
+    Inno Setup 7 — the .iss uses the IS7-only ``SetupArchitecture``
+    directive, so an Inno Setup 6 fallback (old chocolatey 6.5.5 pin) could
+    never compile the installer."""
     release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
     installer_step = release_workflow.split("- name: Install Inno Setup + UPX", 1)[1]
     installer_step = installer_step.split("- name: Run tests on native runner", 1)[0]
     assert "winget install" in installer_step
-    assert "choco install innosetup" in installer_step
-    assert "Inno Setup 6" in installer_step
+    assert "JRSoftware.InnoSetup.7" in installer_step
+    # Fallback must install Inno Setup 7 from the official GitHub release.
+    assert "api.github.com/repos/jrsoftware/issrc/releases/latest" in installer_step
+    # Acceptance fix: pin the REAL asset naming (jrsoftware/issrc publishes
+    # `innosetup-7.x.y-x64.exe` / `-x86.exe`; there is no suffix-less exe).
+    # A generic "innosetup-7" substring would be satisfied by the temp file
+    # name alone and let a zero-match regex slip through again.
+    assert r"^innosetup-7\.[0-9.]+-x64\.exe$" in installer_step
+    assert "choco install innosetup" not in installer_step
+    assert "Inno Setup 6\\" not in installer_step
 
 
 def test_release_workflow_upx_install_has_retry_and_github_fallback():
@@ -272,14 +283,78 @@ def test_release_workflow_upx_install_has_retry_and_github_fallback():
     assert r"upx-[\d.]+-win64\.zip" in installer_step
 
 
-def test_release_workflow_inno_setup_chocolatey_has_retry():
-    """``release.yml`` must retry the chocolatey Inno Setup install to
-    handle transient chocolatey.org 504 errors."""
+def test_release_workflow_inno_setup_github_fallback_has_retry():
+    """``release.yml`` must retry the Inno Setup 7 GitHub-release install to
+    handle transient GitHub/network errors (replaces the old chocolatey
+    retry, which installed IS 6.5.5 and could not compile the .iss)."""
     release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
     installer_step = release_workflow.split("- name: Install Inno Setup + UPX", 1)[1]
     installer_step = installer_step.split("- name: Run tests on native runner", 1)[0]
-    # The Inno Setup chocolatey fallback must have a retry loop (count >= 2)
-    # Find the block after "winget install failed"
+    # The Inno Setup GitHub-release fallback must have a retry loop (count >= 2)
     fallback_block = installer_step.split("if (-not $iscc)", 1)[1]
     assert "for ($attempt" in fallback_block
-    assert "choco install innosetup" in fallback_block
+    assert "api.github.com/repos/jrsoftware/issrc/releases/latest" in fallback_block
+    assert "choco install innosetup" not in fallback_block
+
+
+# ---------------------------------------------------------------------------
+# v1.6.1: release-archive hygiene — byte-compilation leftovers must never
+# enter a published source archive.
+# ---------------------------------------------------------------------------
+
+
+def _make_dirty_source_tree(tmp_path: Path) -> Path:
+    """Build a miniature source tree that looks like a CI workdir after
+    pytest ran: real modules plus __pycache__ byte-compilation leftovers."""
+    source = tmp_path / "workdir"
+    (source / "src").mkdir(parents=True)
+    (source / "src" / "app.py").write_text("APP = 1\n", encoding="utf-8")
+    cache = source / "src" / "__pycache__"
+    cache.mkdir()
+    (cache / "app.cpython-312.pyc").write_bytes(b"\x00compiled")
+    (cache / "app.cpython-312.pyo").write_bytes(b"\x00compiled-opt")
+    nested = source / "build_tools" / "__pycache__"
+    nested.mkdir(parents=True)
+    (nested / "tool.cpython-312.pyc").write_bytes(b"\x00compiled")
+    (source / "build_tools" / "tool.py").write_text("TOOL = 1\n", encoding="utf-8")
+    return source
+
+
+def _archive_names_zip(path: Path) -> set[str]:
+    with zipfile.ZipFile(path) as archive:
+        return {item.filename for item in archive.infolist()}
+
+
+def _archive_names_tar(path: Path) -> set[str]:
+    with tarfile.open(path) as archive:
+        return {member.name for member in archive.getmembers()}
+
+
+def test_zip_directory_excludes_pycache_and_bytecode(tmp_path: Path):
+    source = _make_dirty_source_tree(tmp_path)
+    destination = tmp_path / "source.zip"
+    release._zip_directory(source, destination, "ShangBackground-v1.6.1")
+    names = _archive_names_zip(destination)
+    assert "ShangBackground-v1.6.1/src/app.py" in names
+    assert "ShangBackground-v1.6.1/build_tools/tool.py" in names
+    offenders = {
+        name
+        for name in names
+        if "__pycache__" in name or name.endswith((".pyc", ".pyo"))
+    }
+    assert not offenders, f"byte-compilation leftovers leaked into zip: {sorted(offenders)}"
+
+
+def test_tar_directory_excludes_pycache_and_bytecode(tmp_path: Path):
+    source = _make_dirty_source_tree(tmp_path)
+    destination = tmp_path / "source.tar.gz"
+    release._tar_directory(source, destination, "ShangBackground-v1.6.1")
+    names = _archive_names_tar(destination)
+    assert "ShangBackground-v1.6.1/src/app.py" in names
+    assert "ShangBackground-v1.6.1/build_tools/tool.py" in names
+    offenders = {
+        name
+        for name in names
+        if "__pycache__" in name or name.endswith((".pyc", ".pyo"))
+    }
+    assert not offenders, f"byte-compilation leftovers leaked into tar: {sorted(offenders)}"

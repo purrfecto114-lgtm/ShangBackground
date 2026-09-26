@@ -313,3 +313,14 @@ def _detect_desktop_foreground_uncached() -> bool:
         return not bundle or bundle in {"com.apple.finder", "com.apple.dock"} or "shangbackground" in bundle
     except Exception:
         return True
+
+
+def prime_desktop_wallpaper_host() -> bool:
+    """No-op: only Windows needs the Explorer desktop-host warm-up.
+
+    The shared ``platform_adapters.integration`` facade exposes one public
+    name across all platforms so ``core.engine`` can call it without
+    importing a specific backend.  macOS desktop-picture changes go through
+    NSWorkspace and have no desktop host to prime.
+    """
+    return False

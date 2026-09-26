@@ -36,7 +36,7 @@ jobs:
             build_tools/requirements/*.txt
 
       - name: Install quality tools
-        run: python -m pip install --upgrade "pip>=25" "pytest>=8,<10" "ruff>=0.12,<1"
+        run: python -m pip install --upgrade "pip>=25" -r requirements/test.txt
 
       - name: Validate release metadata
         run: python .github/scripts/release.py metadata
@@ -116,14 +116,16 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           cache: pip
-          cache-dependency-path: pyproject.toml
+          cache-dependency-path: |
+            pyproject.toml
+            requirements/test.txt
 
       - name: Install Linux test prerequisites
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --yes xvfb xauth python3-tk
 
       - name: Install test dependencies
-        run: python -m pip install --upgrade "pip>=25" "pytest>=8,<10"
+        run: python -m pip install --upgrade "pip>=25" -r requirements/test.txt
 
       - name: Run tests
         run: python -m pytest -q

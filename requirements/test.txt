@@ -1,0 +1,11 @@
+# Test and lint tooling for CI and local development.
+#
+# Kept separate from runtime requirements so packaged builds never pull
+# these in, and pinned in one place instead of inline version constraints
+# scattered across workflow files (v1.6.1).
+#
+# Note: pyright is intentionally NOT listed — CI does not run it; the
+# pyrightconfig.json only serves local IDE checks. Adding an unused pin
+# here would misrepresent the actual release gate.
+pytest>=8,<10
+ruff>=0.12,<1

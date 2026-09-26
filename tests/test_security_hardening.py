@@ -162,3 +162,32 @@ def test_config_save_uses_rlock():
     from core import engine
     source = inspect.getsource(engine)
     assert "RLock" in source, "Config must use RLock for thread safety"
+
+
+# ---------------------------------------------------------------------------
+# v1.6.1: custom ports are intentionally allowed — the old code's comment
+# claimed "Reject non-standard ports" while the branch was a no-op ``pass``.
+# This test pins the *actual* contract so comment and behavior cannot drift
+# apart again.
+# ---------------------------------------------------------------------------
+
+
+def test_html_url_allows_custom_ports():
+    from app.source_validation import validate_html_source
+
+    for url in (
+        "http://localhost:3000/live-wallpaper.html",
+        "http://localhost:9999/dashboard.html",
+        "https://example.com:8443/index.html",
+    ):
+        result = validate_html_source(url)
+        assert result.valid, f"{url} should be accepted (custom ports are allowed by design)"
+        assert result.error == ""
+
+
+def test_html_url_still_rejects_structurally_invalid_urls():
+    from app.source_validation import validate_html_source
+
+    result = validate_html_source("http://")
+    assert not result.valid
+    assert result.error == "invalid_url"

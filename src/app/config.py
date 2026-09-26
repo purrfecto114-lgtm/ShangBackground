@@ -98,7 +98,11 @@ DEPENDENCIES = [
 if is_feature_enabled("hotkeys"):
     if IS_LINUX:
         try:
-            from platform_adapters.backends.linux.session import is_wayland_session
+            # v1.6.1: shared layers must not import platform backends
+            # directly; the session facade is the legal entry point and does
+            # not import app.config, so this module-scope use stays circular-
+            # import safe.
+            from platform_adapters.session import is_wayland_session
             _linux_wayland = is_wayland_session()
         except Exception:
             _linux_wayland = False
@@ -153,7 +157,11 @@ if is_feature_enabled("html"):
             }
         )
 
-STYLE_MAP = {"填充": 10, "适应": 6, "拉伸": 2, "平铺": 1, "居中": 0}
+# v1.6.1 fix: "平铺" now maps to the Explorer-documented pair
+# (WallpaperStyle=0 + TileWallpaper=1, set at the call site); the previous
+# value 1 for WallpaperStyle is an undocumented combination that only worked
+# by accident alongside TileWallpaper=1.
+STYLE_MAP = {"填充": 10, "适应": 6, "拉伸": 2, "平铺": 0, "居中": 0}
 STYLE_KEYS = ["填充", "适应", "拉伸", "居中", "平铺"]
 MODE_KEYS = ["幻灯片放映", "图片", "纯色", "渐变"]
 if is_feature_enabled("video"):

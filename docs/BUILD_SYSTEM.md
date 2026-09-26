@@ -117,6 +117,10 @@ python build_tools/build.py self-test
 python build_tools/build.py --tool nuitka --target <host> --skip-install --dry-run
 python build_tools/build.py --tool pyinstaller --target <host> --skip-install --dry-run
 # PyInstaller 命令预览中应出现：--contents-directory _internal
+# HTML 壁纸原生 WebView 运行器自检（v1.6.1：src/ 不在默认模块搜索路径，
+# 必须从仓库根目录以 PYTHONPATH 方式运行；Windows cmd 用
+# 'set "PYTHONPATH=src" && python -m ...'，PowerShell 用 $env:PYTHONPATH="src"）
+PYTHONPATH=src python -m platform_adapters.native_html_runner --self-test
 ```
 
 随后必须在干净的目标系统完成真实 standalone 构建、启动/退出、视频和 HTML helper、中文路径、签名及依赖缺失测试。onefile 应在 standalone 验收后再评估。

@@ -824,11 +824,14 @@ def _detect_desktop_foreground_wayland() -> bool:
     if shutil.which("gdbus"):
         try:
             # GNOME Shell Eval runs JavaScript in the shell process.
-            # Returns "true" if any window on the active workspace has
-            # window_type == DESKTOP.
+            # v1.6.1 fix: the previous script tested "a DESKTOP-type window
+            # exists on the active workspace", which is always true on every
+            # normal session, so the "desktop lost focus -> pause video"
+            # policy never triggered. Check the *focused* window instead.
             script = (
-                "global.workspace_manager.get_active_workspace()"
-                ".list_windows().some(w => w.window_type == Meta.WindowType.DESKTOP)"
+                "global.display.get_focus_window()"
+                " && global.display.get_focus_window().window_type"
+                " == Meta.WindowType.DESKTOP"
             )
             rc, out, _err = _run_args(
                 [
@@ -841,12 +844,22 @@ def _detect_desktop_foreground_wayland() -> bool:
                 timeout=3,
             )
             if rc == 0 and out:
-                # Output format: ('true', '"<js_result>"')  or  ('false', '')
-                # The second element is the JS expression's value as a string.
-                if "'true'" in out and "true" in out.split(",", 1)[-1].lower():
-                    return True
-                if "'true'" in out and "false" in out.split(",", 1)[-1].lower():
-                    return False
+                # Real gdbus output (verified against a live mock service):
+                #   `(true, <'true'>)` / `(true, <'false'>)` (ov signature)
+                #   `(true, 'true')` / `(true, 'false')` (bs signature)
+                # v1.6.1 acceptance fix: the previous guard looked for a
+                # QUOTED 'true' success flag, which never appears — the
+                # success element is the bare word `true`. Both the old and
+                # the focus-based scripts therefore always fell through to
+                # the conservative True. Parse robustly instead: the call
+                # succeeded iff it starts with "(true", and the JS result is
+                # the second element.
+                if out.strip().startswith("(true"):
+                    result_part = out.split(",", 1)[1] if "," in out else ""
+                    if "true" in result_part.lower():
+                        return True
+                    if "false" in result_part.lower():
+                        return False
         except Exception:
             pass
     # Try KWin scripting.
@@ -875,3 +888,14 @@ def _detect_desktop_foreground_wayland() -> bool:
     # can't reliably detect the desktop).  The video focus policy is opt-in
     # so this only affects users who explicitly enabled "桌面失焦时暂停".
     return True
+
+
+def prime_desktop_wallpaper_host() -> bool:
+    """No-op: only Windows needs the Explorer desktop-host warm-up.
+
+    The shared ``platform_adapters.integration`` facade exposes one public
+    name across all platforms so ``core.engine`` can call it without
+    importing a specific backend.  Linux window managers have no equivalent
+    single desktop host to prime.
+    """
+    return False

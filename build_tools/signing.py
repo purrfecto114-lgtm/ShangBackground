@@ -15,7 +15,11 @@ import shutil
 import subprocess
 from pathlib import Path
 
-DEFAULT_TIMESTAMP_URL = "http://timestamp.digicert.com"
+# v1.6.1 security fix: use the HTTPS endpoint. The plain-HTTP RFC3161
+# endpoint allowed a man-in-the-middle to block timestamp requests or replay
+# stale tokens; the response is CA-signed either way, but HTTPS removes the
+# interference vector.
+DEFAULT_TIMESTAMP_URL = "https://timestamp.digicert.com"
 
 # Candidate well-known Windows SDK locations (no I/O beyond existence check).
 _SDK_CANDIDATES = [

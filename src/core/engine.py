@@ -291,6 +291,11 @@ def log_error(context: str, exc: BaseException | None = None) -> None:
 # "操作失败" 类通用提示前可读取该字段，把具体原因一起带给用户。
 last_operation_error: str = ""
 
+# v1.6.1: 最近一次模式切换失败的结构化报告（None 表示最近一次切换
+# 成功，或尚未发生过模式切换）。成功路径不产生报告——补偿回滚只在
+# 失败时运行，UI 只在失败提示时消费该字段。
+last_mode_switch_report = None
+
 
 # v1.4.6: 移除 apply_image_fit_mode —— 三端定义但零调用.
 # 壁纸适应模式现在由 Windows IDesktopWallpaper::SetPosition / 注册表 WallpaperStyle 处理,
@@ -1141,6 +1146,16 @@ def _set_last_operation_error(message: str) -> None:
     last_operation_error = str(message or "")
 
 
+def _set_last_mode_switch_report(report) -> None:
+    """Store the structured outcome of the last failed mode switch (v1.6.1).
+
+    Mirrors ``last_operation_error``: module-level, single-writer behind the
+    serialized wallpaper-operation lock, consumed by the GUI failure path.
+    """
+    global last_mode_switch_report
+    last_mode_switch_report = report
+
+
 def _service_slideshow_anchor(path: str, cfg) -> str | None:
     if normalize_mode_key(cfg.get("mode")) != "幻灯片放映":
         return None
@@ -1206,7 +1221,7 @@ def _build_application_services() -> ApplicationServices:
         session_get_style=get_windows_wallpaper_style,
         session_restore_style=restore_windows_wallpaper_style,
         refresh_shell=refresh_shell_ui,
-        mode_order=tuple(MODE_KEYS) + ("HTML",),
+        mode_order=tuple(MODE_KEYS),
         apply_solid=apply_solid,
         apply_gradient=apply_gradient,
         weighted_choice=lambda folder, current: random_copy.weighted_choice(folder, current),
@@ -1254,6 +1269,17 @@ def initialize_application(*, load_user_config: bool = True, force: bool = False
             log(f"随机概率配置目录初始化失败: {exc}")
         if load_user_config:
             config = load_config()
+            # v1.6.1 fix: re-apply the persisted UI language now that the real
+            # user config is loaded. The import-time init_i18n() call in
+            # app.support only ever sees module-level defaults (language=zh),
+            # so without this the saved "English" preference was ignored on
+            # every restart.
+            try:
+                from app.i18n import init_i18n
+
+                init_i18n(config)
+            except Exception as exc:
+                log(f"恢复界面语言设置失败: {exc}")
         reset_application_services()
         _get_application_services()
         _SERVICE_REGISTRY.initialized = True
@@ -1264,8 +1290,12 @@ def initialize_application(*, load_user_config: bool = True, force: bool = False
         # with IDesktopWallpaper's own transition policy.
         if IS_WINDOWS:
             try:
-                from platform_adapters.backends.windows.integration import _prime_explorer_wallpaper_host
-                _prime_explorer_wallpaper_host()
+                # v1.6.1: route through the platform facade instead of
+                # importing the Windows backend directly — shared layers
+                # (core/, app/) must not depend on a concrete backend module.
+                from platform_adapters.integration import prime_desktop_wallpaper_host
+
+                prime_desktop_wallpaper_host()
             except Exception as exc:
                 log(f"Explorer desktop host prime failed: {exc}")
         return config
@@ -1566,10 +1596,14 @@ def _remember_slideshow_wallpaper(path: str, *, persist: bool = False) -> bool:
 def switch_wallpaper_mode(target: str | None = "next", *, updates=None) -> bool:
     """Compatibility facade for WallpaperModeService."""
     _set_last_operation_error("")
+    _set_last_mode_switch_report(None)
     try:
         return _get_application_services().modes.switch(target, updates=updates)
     except WallpaperModeError as exc:
         _set_last_operation_error(str(exc))
+        report = getattr(exc, "report", None)
+        if report is not None:
+            _set_last_mode_switch_report(report)
         log_error("switch wallpaper mode failed", exc)
         return False
 
@@ -2072,6 +2106,13 @@ def _dispatch_global_hotkey_action(action: str):
     }
     fn = action_map.get(action)
     if fn is not None:
+        # v1.6.1 fix: route previous/next/random through the same coalescing
+        # IPC command queue used by tray/context-menu actions. Spawning one
+        # unbounded thread per key press made rapid repeats queue up full
+        # wallpaper transactions and could flip wallpapers for ~20s.
+        if action in {"previous", "next", "random"}:
+            queue_ipc_wallpaper_command(action)
+            return
         threading.Thread(
             target=_run_wallpaper_action,
             args=(fn, action),
@@ -2246,6 +2287,23 @@ WNDPROC = _WINFUNCTYPE(
 ) if IS_WINDOWS else (lambda func: func)
 
 
+def handle_system_setting_change() -> None:
+    """React to an external wallpaper change (WM_SETTINGCHANGE broadcast).
+
+    v1.6.1 fix: this logic previously lived only inside ``window_proc`` for a
+    message-only window. Per Win32 rules message-only windows never receive
+    broadcast messages such as WM_SETTINGCHANGE, so the branch was dead code
+    and the "record system wallpaper change into history" feature never
+    fired. It is now also driven by a Qt native event filter on the GUI
+    thread (see app.entry), which does receive the broadcast.
+    """
+    current = get_current_wallpaper()
+    if current and current != config.get("current_wallpaper", ""):
+        log(f"系统壁纸已改变: {os.path.basename(current)}")
+        push_wallpaper(current)
+        _queue_ui_preview_update(current)
+
+
 @WNDPROC
 def window_proc(hwnd, msg, wparam, lparam):
     hwnd_i = _win_int(hwnd)
@@ -2254,11 +2312,10 @@ def window_proc(hwnd, msg, wparam, lparam):
     lparam_i = _win_int(lparam)
     if msg_i == WM_SETTINGCHANGE:
         log("检测到系统设置变化，检查壁纸")
-        current = get_current_wallpaper()
-        if current and current != config.get("current_wallpaper", ""):
-            log(f"系统壁纸已改变: {os.path.basename(current)}")
-            push_wallpaper(current)
-            _queue_ui_preview_update(current)
+        try:
+            handle_system_setting_change()
+        except Exception as exc:
+            log_error("处理系统设置变化失败", exc)
         return 0
     elif msg_i == WM_COPYDATA:
         try:

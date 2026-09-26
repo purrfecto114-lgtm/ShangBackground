@@ -51,10 +51,22 @@ def send_command(*, target: Any, command: str, copydata_type: type, hwnd_type: t
         data.cbData = len(payload)
         data.lpData = ctypes.cast(buffer, ctypes.c_void_p)
         lparam = lparam_type(ctypes.addressof(data))
-        result = ctypes.windll.user32.SendMessageW(
-            hwnd_type(win_int(target)), uint_type(wm_copydata), wparam_type(0), lparam
+        # v1.6.1 fix: SendMessageW blocks without a timeout. If the primary
+        # instance's GUI thread is busy (exit transaction, long wallpaper
+        # switch), a second launch forwarding a tray/context-menu action hung
+        # indefinitely. Use SendMessageTimeoutW with SMTO_ABORTIFHUNG (same
+        # pattern as the context-menu fastpath) and a 1s budget.
+        result = ctypes.c_size_t(0)
+        sent = ctypes.windll.user32.SendMessageTimeoutW(
+            hwnd_type(win_int(target)), uint_type(wm_copydata), wparam_type(0), lparam,
+            0x0002,  # SMTO_ABORTIFHUNG
+            1000,    # timeout in ms
+            ctypes.byref(result),
         )
-        return int(result or 0) == 1
+        if not sent:
+            log("发送命令到已有实例超时或目标无响应")
+            return False
+        return int(result.value or 0) == 1
     except Exception as exc:
         log(f"发送命令到已有实例失败: {exc}")
         return False

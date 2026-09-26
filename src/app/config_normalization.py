@@ -280,6 +280,16 @@ def normalize_runtime_config_in_place(
     """Normalize ``target`` without replacing references held by services/UI."""
     normalized, changed = normalize_runtime_config(target, defaults=defaults)
     if changed:
-        target.clear()
+        # v1.6.1 fix: apply the diff key-by-key instead of clear()+update().
+        # clear() briefly emptied the shared dict, so concurrent readers
+        # outside _config_lock could observe (and serialize) an empty config.
+        # NOTE (acceptance review): this removes the empty-dict window but is
+        # only a partial mitigation of the lost-update race — writers that
+        # mutate keys directly without _config_lock can still be overwritten
+        # by the normalized snapshot. Fully closing that requires those
+        # writers to take _config_lock as well.
+        for key in list(target.keys()):
+            if key not in normalized:
+                del target[key]
         target.update(normalized)
     return changed

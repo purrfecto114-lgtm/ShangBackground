@@ -26,6 +26,12 @@ def _dispatch_internal_mode() -> int | None:
         try:
             video_path = sys.argv[index + 1]
         except IndexError:
+            # v1.6.1: bare exit 2 with no message made this failure
+            # undiagnosable from a terminal or a crash log.
+            print(
+                f"错误：{video_flag} 需要一个视频文件路径参数",
+                file=sys.stderr,
+            )
             return 2
         from platform_adapters.video import run_player
 
@@ -43,7 +49,20 @@ def _dispatch_internal_mode() -> int | None:
                 volume = int(rest[vol_idx + 1])
             except (IndexError, ValueError):
                 volume = 100
-        run_player(video_path, muted=muted, volume=volume)
+        # v1.6.1 fix: --volume-ipc was silently dropped by this dispatcher,
+        # so the macOS AVPlayer subprocess never started its volume/pause IPC
+        # socket server and every volume change degraded into a costly
+        # stop+start restart of the video wallpaper.
+        volume_ipc = ""
+        if "--volume-ipc" in rest:
+            ipc_idx = rest.index("--volume-ipc")
+            try:
+                candidate = rest[ipc_idx + 1]
+            except IndexError:
+                candidate = ""
+            if candidate and not candidate.startswith("--"):
+                volume_ipc = candidate
+        run_player(video_path, muted=muted, volume=volume, volume_ipc=volume_ipc)
         return 0
 
     libmpv_flag = "--internal-libmpv-player"
@@ -107,6 +126,12 @@ def main() -> int:
         try:
             report_path = sys.argv[index + 1]
         except IndexError:
+            # v1.6.1: bare exit 2 with no message made this failure
+            # undiagnosable from a terminal or a crash log.
+            print(
+                f"错误：{verification_flag} 需要一个报告输出路径参数",
+                file=sys.stderr,
+            )
             return 2
         from app.build_verification import write_build_verification
 

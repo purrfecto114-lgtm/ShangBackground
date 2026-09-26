@@ -101,6 +101,29 @@ def _publish_dir(plan: BuildPlan) -> Path:
     return plan.output_dir
 
 
+def _list_existing_variants(tool: str) -> list[str]:
+    """List standalone outputs that actually exist for ``tool``.
+
+    v1.6.1: used by the installer error path so a mismatched default variant
+    (e.g. a bundled-mpv full build vs the hardcoded system-mpv expectation)
+    tells the user which directories are available instead of a bare
+    "missing" message.
+    """
+    dist_name = TOOL_DIST_DIR.get(tool)
+    if not dist_name:
+        return []
+    results: list[str] = []
+    try:
+        tool_root = PROJECT_ROOT / dist_name
+        for windows_dir in sorted(tool_root.glob("windows")):
+            for standalone in sorted(windows_dir.glob("*/standalone")):
+                if standalone.is_dir():
+                    results.append(str(standalone))
+    except Exception:
+        return []
+    return results
+
+
 def _detect_source_layout(source: Path) -> str | None:
     """Return ``"pyinstaller"`` or ``"nuitka"`` based on the directory
     structure of ``source``, or ``None`` if neither layout matches.
@@ -436,6 +459,21 @@ def main(argv: list[str] | None = None) -> int:
             print("Installer source layout is invalid:", file=sys.stderr)
             for error in errors:
                 print(f"  - {error}", file=sys.stderr)
+            # v1.6.1 fix: the default source root is computed from a
+            # hardcoded mpv_runtime="system" variant. When the user ran a
+            # default full build (mpv_runtime="auto" -> bundled) the expected
+            # directory differs, and the bare "missing" error gave no clue
+            # which build actually exists. List the real candidates here.
+            if not args.input and not plan.source_root.is_dir():
+                suggestions = _list_existing_variants(plan.plan.tool)
+                if suggestions:
+                    print(
+                        "  Existing standalone outputs for this tool "
+                        "(pass --input or match the variant flags):",
+                        file=sys.stderr,
+                    )
+                    for suggestion in suggestions:
+                        print(f"    - {suggestion}", file=sys.stderr)
             return 1
 
     command = render_iscc_command(plan)

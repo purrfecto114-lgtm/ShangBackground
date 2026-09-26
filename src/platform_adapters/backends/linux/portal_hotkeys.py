@@ -182,7 +182,25 @@ class PortalGlobalShortcuts:
                 {bind_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
             )
             if bind_task in done:
-                bind_task.result()
+                # v1.6.1 fix: BindShortcuts is what actually asks the user for
+                # authorization; a rejection raised here after start() had
+                # already returned True left the service believing hotkeys
+                # were active when they would never fire. Record the failure
+                # so is_running()/last_error reflect reality.
+                try:
+                    bind_task.result()
+                except Exception as bind_exc:
+                    self.last_error = f"GlobalShortcuts bind failed: {bind_exc}"
+                    self._available = False
+                    self._ready.set()
+                    for task in pending:
+                        task.cancel()
+                    for task in pending:
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+                    return
                 await stop_task
             for task in pending:
                 task.cancel()

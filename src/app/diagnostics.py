@@ -25,6 +25,10 @@ class DiagnosticCheck:
     status: str
     detail: str
     required: bool = False
+    # v1.6.1: actionable next step shown for fail/warn checks — both in the
+    # human-readable report and in the --doctor-json payload, so a user who
+    # hits a missing dependency knows what to run instead of just "FAIL".
+    hint: str = ""
 
 
 @dataclass(slots=True)
@@ -52,6 +56,8 @@ def _module_check(
     *,
     required: bool,
     load: bool = False,
+    install: str = "",
+    missing_hint: str = "",
 ) -> DiagnosticCheck:
     try:
         if load:
@@ -61,21 +67,38 @@ def _module_check(
             available = importlib.util.find_spec(module) is not None
     except (ImportError, ModuleNotFoundError, OSError, RuntimeError, ValueError):
         available = False
+    hint = ""
+    if not available:
+        if install:
+            hint = f"python -m pip install {install}"
+        elif missing_hint:
+            hint = missing_hint
+        elif required:
+            hint = "see README 依赖说明 for installation options"
     return DiagnosticCheck(
         name=label,
         status="pass" if available else ("fail" if required else "warn"),
         detail=f"{module}: {'available' if available else 'missing'}",
         required=required,
+        hint=hint,
     )
 
 
 def _command_check(commands: tuple[str, ...], label: str, *, required: bool = False) -> DiagnosticCheck:
     found = [command for command in commands if shutil.which(command)]
+    hint = ""
+    if not found:
+        hint = (
+            "install via your system package manager, then re-run --doctor"
+            if required
+            else "optional — the app automatically falls back to another wallpaper backend when this command is missing"
+        )
     return DiagnosticCheck(
         name=label,
         status="pass" if found else ("fail" if required else "warn"),
         detail=("found: " + ", ".join(found)) if found else "not found: " + ", ".join(commands),
         required=required,
+        hint=hint,
     )
 
 
@@ -136,9 +159,9 @@ def collect_diagnostics() -> DiagnosticReport:
         _directory_check(Path(LANG_DIR), "language-resources"),
         _writable_directory_check(data_dir),
         _config_check(data_dir),
-        _module_check("PIL", "Pillow", required=True),
-        _module_check("PySide6", "PySide6 Essentials", required=True),
-        _module_check("psutil", "process safety", required=False),
+        _module_check("PIL", "Pillow", required=True, install="pillow"),
+        _module_check("PySide6", "PySide6 Essentials", required=True, install="PySide6-Essentials"),
+        _module_check("psutil", "process safety", required=False, install="psutil"),
     ]
     if is_feature_enabled("html"):
         from platform_adapters.native_html_runner import dependency_probe
@@ -219,7 +242,10 @@ def collect_diagnostics() -> DiagnosticReport:
             )
         )
     elif PLATFORM_ID == "linux":
-        from platform_adapters.backends.linux.session import (
+        # v1.6.1: shared layers must not import platform backends directly;
+        # the session facade dispatches to the Linux backend's canonical
+        # fallback chain while staying import-safe on every platform.
+        from platform_adapters.session import (
             detect_session_type,
             session_bus_available,
         )
@@ -235,14 +261,18 @@ def collect_diagnostics() -> DiagnosticReport:
             )
         )
         if session == "wayland":
-            module = _module_check("dbus_next", "Wayland global shortcuts", required=False)
+            module = _module_check(
+                "dbus_next", "Wayland global shortcuts", required=False, install="dbus-next"
+            )
             if module.status == "pass" and not session_bus_available():
                 module.status = "warn"
                 module.detail += "; no D-Bus session bus endpoint detected"
             checks.append(module)
             checks.append(_command_check(("mpvpaper",), "Wayland video embedding"))
         elif session == "x11":
-            checks.append(_module_check("pynput", "X11 global hotkeys", required=False))
+            checks.append(
+                _module_check("pynput", "X11 global hotkeys", required=False, install="pynput")
+            )
             checks.append(_command_check(("xwinwrap",), "X11 desktop video embedding"))
         else:
             checks.append(
@@ -254,9 +284,15 @@ def collect_diagnostics() -> DiagnosticReport:
     else:
         checks.extend(
             [
-                _module_check("pynput", "global hotkeys", required=False),
-                _module_check("AppKit", "macOS AppKit", required=False),
-                _module_check("Quartz", "macOS Quartz", required=False),
+                _module_check("pynput", "global hotkeys", required=False, install="pynput"),
+                _module_check(
+                    "AppKit", "macOS AppKit", required=False,
+                    missing_hint="part of the macOS system Python (python.org or Homebrew builds include it)",
+                ),
+                _module_check(
+                    "Quartz", "macOS Quartz", required=False,
+                    missing_hint="part of the macOS system Python (python.org or Homebrew builds include it)",
+                ),
             ]
         )
 
@@ -281,6 +317,8 @@ def render_human(report: DiagnosticReport) -> str:
     ]
     for check in report.checks:
         lines.append(f"[{icons.get(check.status, check.status.upper())}] {check.name}: {check.detail}")
+        if check.hint and check.status in {"fail", "warn"}:
+            lines.append(f"        hint: {check.hint}")
     lines.append("")
     lines.append("result=healthy" if report.healthy else "result=missing required components")
     return "\n".join(lines)

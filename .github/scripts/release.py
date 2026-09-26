@@ -201,11 +201,32 @@ def _validate_symlink(path: Path, root: Path) -> None:
         raise ReleaseError(f"Archive symbolic link escapes its bundle: {path} -> {target}") from error
 
 
+_EXCLUDED_DIRECTORY_NAMES = frozenset({"__pycache__"})
+_EXCLUDED_FILE_SUFFIXES = (".pyc", ".pyo")
+
+
+def _is_packaging_artifact(relative: PurePosixPath) -> bool:
+    """Byte-compilation leftovers must never enter an archive.
+
+    This guards the ``_zip_directory``/``_tar_directory`` bundle archives:
+    CI runs ``pytest`` before packaging, which can populate ``__pycache__``
+    directories near staged sources, and the bundle builders had no filter
+    of their own (the separate source-archive path already excluded these).
+    Added in v1.6.1 as defense-in-depth with regression tests.
+    """
+    return (
+        any(part in _EXCLUDED_DIRECTORY_NAMES for part in relative.parts)
+        or relative.suffix in _EXCLUDED_FILE_SUFFIXES
+    )
+
+
 def _zip_directory(source: Path, destination: Path, top_level: str) -> None:
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for path in sorted(source.rglob("*"), key=lambda item: item.as_posix().casefold()):
-            _validate_symlink(path, source)
             relative = _safe_relative(path, source)
+            if _is_packaging_artifact(relative):
+                continue
+            _validate_symlink(path, source)
             archive_name = PurePosixPath(top_level) / relative
             if path.is_dir():
                 info = zipfile.ZipInfo(f"{archive_name.as_posix().rstrip('/')}/")
@@ -230,8 +251,10 @@ def _tar_directory(source: Path, destination: Path, top_level: str) -> None:
         root_info = archive.gettarinfo(os.fspath(source), arcname=top_level)
         archive.addfile(root_info)
         for path in sorted(source.rglob("*"), key=lambda item: item.as_posix().casefold()):
-            _validate_symlink(path, source)
             relative = _safe_relative(path, source)
+            if _is_packaging_artifact(relative):
+                continue
+            _validate_symlink(path, source)
             archive.add(path, arcname=(PurePosixPath(top_level) / relative).as_posix(), recursive=False)
 
 

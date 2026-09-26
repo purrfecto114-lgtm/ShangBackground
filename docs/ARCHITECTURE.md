@@ -43,8 +43,12 @@ HTML 只有一条运行链：`platform_adapters.native_html_runner` 强制选择
 ## UI 与线程
 
 - View 到 Controller 使用语义明确的 Qt Signal；
-- 长期 Worker 使用 `QObject.moveToThread(QThread)`；
-- 短时 Python 任务使用共享线程池；
+- 后台 Worker 现状（v1.6.1 如实化，替代原先与实现不符的声明）：
+  - 更新检查（`services/updates.py`）继承 `QThread`，经 `finished` Signal 回 UI；
+  - 长时核心操作（模式切换事务、Bing 同步、壁纸启停）运行在 `threading.Thread`（daemon）中，Worker 体内不触碰任何 Qt 控件，结果一律经 `core_result_signal`、`bing_result_signal` 等 Qt Signal（跨线程即 queued）回到主线程；
+  - IPC 命令合并 worker、Win32 消息循环、进程清理与 fire-and-forget 后台任务属于非 Qt 关注点，允许使用 Python 线程；
+- Worker 线程的硬性规则（新增代码必须遵守）：Worker 线程内禁止直接操作 Qt 控件；回到 UI 必须经 Qt Signal 或主线程调度；
+- 目标态（路线图，未达成）：长期 Worker 迁移到 `QObject.moveToThread(QThread)` 以获得 `quit()`/`wait()`/`finished` 生命周期管理；迁移必须逐场景进行并伴随真机回归验收，不一次性全量替换；
 - 不新增全局万能事件总线；
 - 主 Widgets UI 不嵌入网页控件。
 

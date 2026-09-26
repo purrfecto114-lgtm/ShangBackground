@@ -118,9 +118,20 @@ def create_plan(
         raise RuntimeError("macOS releases use standalone .app bundles")
     selected = frozenset(features)
     arch = normalize_arch(arch)
-    require_bundled = "video" in selected and (
+    # v1.6.1 fix: compute the real-build requirement independently of
+    # ``dry_run``. Previously a Windows full+video build passed --dry-run
+    # without an installed mpv runtime (showing a system-fallback plan and
+    # exit code 0) while the identical real invocation hard-failed. Dry-runs
+    # still succeed, but now emit an explicit warning so the preview matches
+    # the real behavior.
+    require_bundled_real = "video" in selected and (
         mpv_runtime == "bundled"
-        or (not dry_run and target == "windows" and profile == "full" and mpv_runtime == "auto")
+        or (target == "windows" and profile == "full" and mpv_runtime == "auto")
+    )
+    require_bundled = (
+        require_bundled_real
+        if not dry_run
+        else ("video" in selected and mpv_runtime == "bundled")
     )
     mpv = resolve_build_runtime(
         PROJECT_ROOT,
@@ -132,6 +143,18 @@ def create_plan(
         version=mpv_version,
         require_bundled=require_bundled,
     )
+    # Acceptance follow-up: warn only when the resolved runtime is NOT
+    # actually bundled — on a machine that already ran `mpv download`, the
+    # auto resolution picks the installed bundled runtime and the real build
+    # would succeed, so a warning there was a false alarm.
+    if dry_run and require_bundled_real and mpv.mode != "bundled":
+        print(
+            "WARNING: dry-run shows a system-mpv fallback plan, but the real "
+            "build (Windows full profile with video) requires a bundled mpv "
+            "runtime and will fail. Run 'python build_tools/build.py mpv "
+            "download --target windows --arch x86_64 --channel stable' first.",
+            file=sys.stderr,
+        )
     variant = f"{output_profile_name(profile, selected)}-{arch}"
     if mpv.mode == "bundled":
         variant += f"-mpv-{mpv.output_tag}"

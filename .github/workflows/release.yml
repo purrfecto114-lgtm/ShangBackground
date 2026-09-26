@@ -54,7 +54,7 @@ jobs:
 
       - name: Run release gate tests
         run: |
-          python -m pip install --upgrade "pip>=25" "pytest>=8,<10"
+          python -m pip install --upgrade "pip>=25" -r requirements/test.txt
           python -m pytest -q
           python build_tools/build.py self-test
 
@@ -136,6 +136,11 @@ jobs:
       - name: Install Inno Setup + UPX (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          # Lets the Inno Setup GitHub-release fallback authenticate its
+          # api.github.com call (avoids the anonymous 60 req/h limit that is
+          # routinely exhausted on shared Azure runner IPs).
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -155,7 +160,9 @@ jobs:
           }
           if (-not $upx) {
             Write-Host "chocolatey failed after 3 attempts; falling back to GitHub release download"
-            $upxRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/upx/upx/releases/latest" -Headers @{ "User-Agent" = "ShangBackground-CI" }
+            $upxHeaders = @{ "User-Agent" = "ShangBackground-CI" }
+            if ($env:GITHUB_TOKEN) { $upxHeaders["Authorization"] = "Bearer $env:GITHUB_TOKEN" }
+            $upxRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/upx/upx/releases/latest" -Headers $upxHeaders
             $asset = $upxRelease.assets | Where-Object { $_.name -match "upx-[\d.]+-win64\.zip$" } | Select-Object -First 1
             if (-not $asset) { throw "Could not find UPX win64 asset in latest GitHub release" }
             Write-Host "Downloading UPX from: $($asset.browser_download_url)"
@@ -169,7 +176,12 @@ jobs:
           Write-Host "UPX binary: $upx"
           & $upx --version | Select-Object -First 2
 
-          # Prefer winget (Inno Setup 7); fall back to chocolatey if winget is unavailable or fails.
+          # Prefer winget (Inno Setup 7); fall back to the official GitHub
+          # release of Inno Setup 7. v1.6.1 fix: the previous chocolatey
+          # fallback installed Inno Setup 6.5.5, whose ISCC cannot compile
+          # the installer script (it uses the IS7-only ``SetupArchitecture``
+          # directive) — whenever the fallback fired, the Windows setup.exe
+          # build failed. Both paths now install Inno Setup 7.
           $iscc = $null
           try {
             winget install --id JRSoftware.InnoSetup.7 -e -s winget --silent `
@@ -181,19 +193,50 @@ jobs:
               ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
             }
           } catch {
-            Write-Host "winget install failed: $_; falling back to chocolatey"
+            Write-Host "winget install failed: $_; falling back to the official Inno Setup 7 GitHub release"
           }
           if (-not $iscc) {
             for ($attempt = 1; $attempt -le 3; $attempt++) {
-              Write-Host "Inno Setup chocolatey install attempt $attempt..."
-              choco install innosetup --version=6.5.5 -y --no-progress --limit-output
-              if ($LASTEXITCODE -eq 0) { break }
-              Start-Sleep -Seconds 10
+              Write-Host "Inno Setup 7 GitHub release download attempt $attempt..."
+              try {
+                $releaseHeaders = @{ "User-Agent" = "ShangBackground-CI" }
+                if ($env:GITHUB_TOKEN) {
+                  # Authenticated requests get a much higher rate limit than
+                  # the anonymous 60/h shared by Azure runner IPs.
+                  $releaseHeaders["Authorization"] = "Bearer $env:GITHUB_TOKEN"
+                }
+                $innoRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/jrsoftware/issrc/releases/latest" -Headers $releaseHeaders
+                # Acceptance fix: jrsoftware/issrc release assets are named
+                # `innosetup-7.x.y-x64.exe` / `-x86.exe` (verified on real
+                # releases). Prefer x64; the suffix-less pattern is only a
+                # defensive fallback for hypothetical future renames.
+                $asset = $innoRelease.assets |
+                  Where-Object { $_.name -match '^innosetup-7\.[0-9.]+-x64\.exe$' } |
+                  Select-Object -First 1
+                if (-not $asset) {
+                  $asset = $innoRelease.assets |
+                    Where-Object { $_.name -match '^innosetup-7\.[0-9.]+\.exe$' } |
+                    Select-Object -First 1
+                }
+                if (-not $asset) { throw "Could not find an innosetup-7.x(-x64)?.exe asset in the latest jrsoftware/issrc release" }
+                Write-Host "Downloading Inno Setup from: $($asset.browser_download_url)"
+                $installerPath = "$env:TEMP\innosetup-7.exe"
+                Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installerPath
+                # Official silent install flags for innosetup-*.exe (Inno Setup
+                # installer itself supports /VERYSILENT /SUPPRESSMSGBOXES).
+                $proc = Start-Process -FilePath $installerPath -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+                if ($proc.ExitCode -ne 0) { throw "Inno Setup 7 installer exited with code $($proc.ExitCode)" }
+                break
+              } catch {
+                Write-Host "Inno Setup 7 download/install attempt $attempt failed: $_"
+                if ($attempt -eq 3) { throw }
+                Start-Sleep -Seconds 10
+              }
             }
-            if ($LASTEXITCODE -ne 0) { throw "Inno Setup chocolatey install failed after 3 attempts" }
             $iscc = @(
-              "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
-              "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+              "$env:ProgramFiles(x86)\Inno Setup 7\ISCC.exe",
+              "$env:ProgramFiles\Inno Setup 7\ISCC.exe",
+              "$env:LOCALAPPDATA\Programs\Inno Setup 7\ISCC.exe"
             ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
           }
           if (-not $iscc) { throw "Inno Setup ISCC.exe was not found after installation" }
@@ -204,7 +247,7 @@ jobs:
 
       - name: Run tests on native runner
         run: |
-          python -m pip install --upgrade "pip>=25" "pytest>=8,<10"
+          python -m pip install --upgrade "pip>=25" -r requirements/test.txt
           python -m pytest -q
 
       - name: Build validated full standalone package (Nuitka + UPX)

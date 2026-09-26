@@ -138,10 +138,12 @@ def validate_html_source(value: object, *, optional: bool = False) -> SourceVali
     if parsed.scheme.casefold() in {"http", "https"}:
         if not parsed.netloc:
             return SourceValidation(text, "invalid_url")
-        # Reject non-standard ports that could be used for SSRF
-        if parsed.port is not None and parsed.port not in (80, 443, 8080, 8443, 3000, 5000):
-            # Allow custom ports but flag obvious typos — this is advisory, not blocking
-            pass
+        # Custom ports are intentionally allowed (v1.6.1 comment fix). The
+        # webview runs on the user's own desktop and the URL is entered by
+        # the user — commonly a local dev server such as localhost:3000 —
+        # so a port allowlist would break legitimate workflows without
+        # adding real SSRF protection here. The structural and dangerous-
+        # pattern checks above (_is_safe_html_url) remain fully enforced.
         return SourceValidation(text)
     # file:// is allowed only for local files (not network shares)
     if parsed.scheme.casefold() == "file":

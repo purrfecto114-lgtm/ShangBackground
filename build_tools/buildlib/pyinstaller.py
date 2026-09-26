@@ -93,6 +93,16 @@ def _execute(args: argparse.Namespace) -> int:
     features = resolve_features(args.profile, args.features, args.exclude_features)
     if args.skip_validate and not args.dry_run:
         raise RuntimeError("--skip-validate cannot be used for a publishable build")
+    # v1.6.1 fix: --upx/--no-upx are declared on the shared parser but the
+    # PyInstaller backend has no UPX integration. Failing loudly here is
+    # safer than silently shipping an uncompressed build the user believes
+    # was compressed.
+    if getattr(args, "upx", None) is True:
+        raise RuntimeError(
+            "--upx is only supported with --tool nuitka; the PyInstaller "
+            "backend does not apply UPX compression. Re-run without --upx or "
+            "switch to the Nuitka toolchain."
+        )
     ensure_build_python_environment(dry_run=args.dry_run)
     plan = create_plan(
         tool="pyinstaller",

@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.6.0-0ea5e9?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-v1.6.1-0ea5e9?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/PySide6-6.11-41cd52?style=flat-square&logo=qt&logoColor=white" alt="PySide6">
   <img src="https://img.shields.io/badge/License-GPLv3-blue?style=flat-square" alt="GPLv3">
@@ -153,7 +153,7 @@ python build_tools/build.py --tool pyinstaller --target windows --profile full \
 - `CodeQL`：在推送、Pull Request 和每周计划任务中执行 Python 安全分析；
 - `Dependency review`：阻止 Pull Request 引入已知高危依赖，并由 Dependabot 每周维护 Python 与 Action 版本。
 
-自动发布生成 Windows x86_64、Linux x86_64、macOS x86_64、macOS arm64 的 Nuitka full standalone、Windows Inno Setup 安装包（CI 优先使用 Inno Setup 7，不可用时回退 6.5.5）、源码包和 `SHA256SUMS.txt`。Windows/Linux 强制使用 UPX，macOS 按平台约束禁用 UPX。完整流程见 [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md)。
+自动发布生成 Windows x86_64、Linux x86_64、macOS x86_64、macOS arm64 的 Nuitka full standalone、Windows Inno Setup 安装包（两条安装路径均为 Inno Setup 7：优先 winget，不可用时回退官方 GitHub Release 静默安装）、源码包和 `SHA256SUMS.txt`。Windows/Linux 强制使用 UPX，macOS 按平台约束禁用 UPX。完整流程见 [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md)。
 
 ## 文档
 

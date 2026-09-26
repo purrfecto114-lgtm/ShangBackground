@@ -84,13 +84,19 @@ def _try_windows_mutex() -> bool | None:
         import ctypes
         import ctypes.wintypes
 
-        kernel32 = ctypes.windll.kernel32
+        # v1.6.1 fix: ctypes.windll.kernel32 GetLastError() is unreliable —
+        # intermediate ctypes calls may clobber the last error before we read
+        # it. Use WinDLL(use_last_error=True) + ctypes.get_last_error() as
+        # documented, so ERROR_ALREADY_EXISTS (183) cannot be missed. A missed
+        # detection let a second process believe it owned the mutex, punching
+        # through the file-lock fallback and yielding two primary instances.
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.wintypes.BOOL, ctypes.wintypes.LPCWSTR]
         kernel32.CreateMutexW.restype = ctypes.wintypes.HANDLE
         handle = kernel32.CreateMutexW(None, False, _windows_mutex_name())
         if not handle:
             return None
-        if int(kernel32.GetLastError()) == 183:  # ERROR_ALREADY_EXISTS
+        if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
             kernel32.CloseHandle(handle)
             return False
         _win_mutex_handle = handle

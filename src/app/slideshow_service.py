@@ -76,15 +76,18 @@ class SlideshowService:
             if self._is_cancelled():
                 self._log("幻灯片启动已终止")
                 return False
-            if self._stop_dynamic is not None:
-                try:
-                    self._stop_dynamic()
-                except Exception as exc:
-                    self._log("停止动态壁纸失败: " + str(exc))
+            # v1.6.1 fix: validate mode/folder/images BEFORE stopping the
+            # currently running dynamic wallpaper, and surface the root
+            # cause in the log (previously both were silent). Scope note
+            # (acceptance review): this makes the slideshow service itself
+            # side-effect-free on validation failure; the caller's generic
+            # compensation may still restart the previous dynamic mode
+            # end-to-end, which remains open as a follow-up.
             if self._normalize_mode(str(config.get("mode", ""))) != "幻灯片放映":
                 return False
             folder = normalize_wallpaper_path(config.get("slide_folder", ""))
             if not folder or not os.path.isdir(folder):
+                self._log(f"幻灯片启动失败：图片文件夹不可用: {folder}")
                 return False
             try:
                 images = [normalize_wallpaper_path(path) for path in self._image_source(folder)]
@@ -93,7 +96,13 @@ class SlideshowService:
                 return False
             images = [path for path in images if path]
             if not images:
+                self._log(f"幻灯片启动失败：文件夹中没有可用图片: {folder}")
                 return False
+            if self._stop_dynamic is not None:
+                try:
+                    self._stop_dynamic()
+                except Exception as exc:
+                    self._log("停止动态壁纸失败: " + str(exc))
             if bool(config.get("shuffle", False)):
                 self._shuffle(images)
 

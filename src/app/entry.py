@@ -41,6 +41,102 @@ else:  # pragma: no cover - names are guarded by PYSIDE_AVAILABLE in main()
     QApplication = QIcon = QMessageBox = QTimer = None
     apply_application_font = None
 
+def _notify_second_instance_blocked() -> None:
+    """Show a real "already running" notice from a second process.
+
+    v1.6.1 fix: previously this branch called core.show_message(), which
+    requires core.root (the main window shim). In a second process root is
+    always None, so the notice silently degraded to a log line and a
+    double-click during the primary instance's cold start appeared to do
+    nothing. Uses a short-lived QApplication + QMessageBox; falls back to
+    stdout/logging on headless systems or if Qt is unavailable.
+    """
+    title = t("不要重复运行")
+    message = t("不要重复运行，已有主界面正在运行。")
+    if not PYSIDE_AVAILABLE:
+        print(f"{title}: {message}")
+        return
+    try:
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication, QMessageBox
+
+        # QApplication is a process-wide singleton: once constructed it is
+        # owned by Qt (QApplication.instance() returns it forever), so no
+        # local reference is needed to keep it alive.
+        QApplication.instance() or QApplication([APP_PROCESS_NAME])
+        box = QMessageBox()
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle(title)
+        box.setText(message)
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        box.exec()
+        # Do not take over the session: this is a notice-only QApplication;
+        # exec() returns once the user dismisses the dialog. Keep the app
+        # alive until this function returns so the QMessageBox outlives it
+        # (deleting QApplication before its widgets is undefined behavior).
+    except Exception as exc:
+        # Headless / display-less environments must not crash here.
+        print(f"{title}: {message} ({exc})")
+
+
+class _WallpaperSettingChangeFilter:
+    """Native event filter forwarding WM_SETTINGCHANGE to core.
+
+    v1.6.1 fix: the engine's message-only window never receives broadcast
+    messages (Win32 rule), so wallpaper changes made from Windows settings
+    were never recorded into history. Top-level Qt windows do receive the
+    broadcast, so we observe it here on the GUI thread.
+    """
+
+    # Owner for the installed Qt filter instance; PySide6 keeps no Python
+    # reference of its own (see install()).
+    _INSTALLED_SETTING_CHANGE_FILTER = None
+
+    def __init__(self) -> None:
+        if PYSIDE_AVAILABLE:
+            from PySide6.QtCore import QAbstractNativeEventFilter
+
+            class _Filter(QAbstractNativeEventFilter):
+                def nativeEventFilter(self, eventType, message):
+                    try:
+                        if eventType == "windows_generic_MSG":
+                            import ctypes
+
+                            msg_ptr = int(message)
+                            # MSG layout: hwnd (pointer-sized, offset 0),
+                            # message (UINT, right after hwnd). The offset is
+                            # sizeof(void*) — 8 on x64/arm64, 4 on x86 builds.
+                            message_offset = ctypes.sizeof(ctypes.c_void_p)
+                            message_id = ctypes.c_uint.from_address(
+                                msg_ptr + message_offset
+                            ).value
+                            if message_id == 0x001A:  # WM_SETTINGCHANGE
+                                core.handle_system_setting_change()
+                    except Exception:
+                        pass
+                    return False, 0
+
+            self._qt_filter = _Filter()
+        else:
+            self._qt_filter = None
+
+    def install(self, app) -> None:
+        if self._qt_filter is None:
+            return
+        try:
+            app.installNativeEventFilter(self._qt_filter)
+            # v1.6.1 fix (acceptance follow-up): PySide6 does NOT keep a
+            # Python reference to installed native event filters (unlike
+            # QObject children). Without an owner the wrapper could be
+            # garbage-collected, leaving either a dangling C++ pointer in
+            # Qt's filter chain (crash on the first native message) or a
+            # silently dead filter. Keep the instance alive for the whole
+            # application lifetime via a class-level owner slot.
+            _WallpaperSettingChangeFilter._INSTALLED_SETTING_CHANGE_FILTER = self._qt_filter
+        except Exception as exc:
+            core.log(f"安装壁纸变更监听失败: {exc}")
+
+
 def _read_log_enabled_from_config() -> bool:
     """Read the ``log_enabled`` flag from settings.json BEFORE the rest of
     ``core.engine`` is initialized, so we can pass it to ``configure_logging``
@@ -104,7 +200,11 @@ def main() -> int:
         if not forwarded:
             core.log("现有实例尚未接受本地 IPC 命令；未在第二进程执行破坏性动作")
             if not direct_action_launch and not is_action_launch:
-                core.show_message(t("不要重复运行"), t("不要重复运行，已有主界面正在运行。"))
+                # v1.6.1 fix: core.show_message() depends on core.root, which is
+                # always None in a second process, so the "already running"
+                # notice silently degraded to a log line and the double-click
+                # appeared to do nothing. Show a real lightweight dialog here.
+                _notify_second_instance_blocked()
         if getattr(args, "quit", False) and getattr(args, "wait_for_exit", False):
             return 0 if forwarded else 1
         if direct_action_launch and not forwarded:
@@ -159,6 +259,12 @@ def main() -> int:
     except Exception as _qt_handler_exc:
         sys.stderr.write(f"[entry] Qt message handler install failed: {_qt_handler_exc}\n")
     _install_qt_chinese_translator(app)
+    # v1.6.1 fix: watch for external wallpaper changes (WM_SETTINGCHANGE) on
+    # the GUI thread. The engine's message-only window cannot receive the
+    # broadcast, so this filter restores the "record system wallpaper change
+    # into history" feature. No-op on non-Windows platforms.
+    if core.IS_WINDOWS:
+        _WallpaperSettingChangeFilter().install(app)
     icon_name = "LOGO.ico" if core.IS_WINDOWS else "LOGO.png"
     icon_path = os.path.join(core.BASE_DIR, "img", icon_name)
     if not os.path.exists(icon_path):
@@ -229,13 +335,12 @@ def main() -> int:
                 elif command == "set_wallpaper":
                     target = os.path.abspath(os.path.expanduser(str(payload or "")))
                     if os.path.isfile(target):
-                        if not core.switch_wallpaper_mode(
-                            "图片", updates={"single_image": target}
-                        ):
-                            core.log(
-                                "IPC 切换图片模式失败: "
-                                + (getattr(core, "last_operation_error", "") or target)
-                            )
+                        # v1.6.1 fix: run the full mode-switch transaction on the
+                        # coalescing IPC worker thread (same path as the legacy
+                        # WM_COPYDATA channel). Executing switch_wallpaper_mode
+                        # synchronously on the GUI thread froze the UI for the
+                        # duration of the registry/COM call and history write.
+                        core.queue_ipc_wallpaper_command(f"set_wallpaper|{target}")
                     else:
                         core.log(f"拒绝不存在的 IPC 壁纸路径: {target}")
                 elif command in {"previous", "next", "random"}:

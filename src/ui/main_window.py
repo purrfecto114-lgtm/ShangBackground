@@ -151,6 +151,7 @@ class _TouchScrollFilter(QObject):
 
 class _SharedShangBackgroundWindow(QMainWindow):
     bing_result_signal = Signal(bool, str, str)
+    bing_auto_update_signal = Signal(str, int)
     core_result_signal = Signal(bool, str, object)
     hotkey_recorded_signal = Signal(str, str)
 
@@ -214,6 +215,14 @@ class _SharedShangBackgroundWindow(QMainWindow):
         # self._setup_app_shortcuts()
         self._apply_button_sizes()
         self.bing_result_signal.connect(self._on_bing_finished, Qt.ConnectionType.QueuedConnection)
+        # v1.6.1 rework (16-b S2): the startup Bing worker used to call
+        # QTimer.singleShot(0, ...) from inside its own thread — PySide6
+        # starts the timer in the calling thread, which has no event loop,
+        # so the auto-update never ran. Route through a queued signal so the
+        # slot executes on the UI thread, matching ARCHITECTURE.md rules.
+        self.bing_auto_update_signal.connect(
+            self._start_bing_auto_update, Qt.ConnectionType.QueuedConnection
+        )
         self.core_result_signal.connect(self._on_core_finished, Qt.ConnectionType.QueuedConnection)
         self.hotkey_recorded_signal.connect(self.set_context_hotkey, Qt.ConnectionType.QueuedConnection)
         self._preview_refresh_timer = QTimer(self)
@@ -4813,7 +4822,19 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             fallback_reason = getattr(core, "last_operation_error", "") or ""
             self.finish_operation(message or (t("操作失败") + (f"：{fallback_reason}" if fallback_reason else "")))
         if not ok and not cancelled:
-            self._show_non_modal_warning(t("错误"), message or t("操作失败"))
+            warning_text = str(message or t("操作失败"))
+            # v1.6.1: 模式切换失败时把补偿回滚的结构化结果一起告诉用户
+            # （配置是否恢复 / 旧模式是否恢复运行 / 恢复结果是否已落盘），
+            # 而不是只给一句通用失败提示。仅模式切换操作读取该报告，
+            # 避免无关操作失败时拼上一次切换残留的陈旧摘要（16-b S1）。
+            if mode_transition:
+                report = getattr(core, "last_mode_switch_report", None)
+                rollback = getattr(report, "rollback", None)
+                if rollback is not None:
+                    summary = rollback.summary()
+                    if summary and summary not in warning_text:
+                        warning_text = f"{warning_text}\n{summary}"
+            self._show_non_modal_warning(t("错误"), warning_text)
         pending_queue = getattr(self, "_pending_core_actions", None)
         if pending_queue and not self._core_busy:
             try:
@@ -4935,7 +4956,9 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
             canonical = normalize_mode_key(item)
             if canonical and canonical not in order:
                 order.append(canonical)
-        if "HTML" not in order:
+        # v1.6.1 fix: do not force-append a ghost "HTML" mode in feature-gated
+        # builds; MODE_KEYS already includes HTML when the feature is on.
+        if "HTML" not in order and is_feature_enabled("html"):
             order.append("HTML")
         current = normalize_mode_key(core.config.get("mode") or self._current_mode_key())
         try:
@@ -6693,7 +6716,10 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                 self.bing_result_signal.emit(True, t("启动时已自动删除 {0} 张最旧必应缓存壁纸").format(deleted) if do_delete else t("必应启动自动操作准备完成"), "")
                 if do_update:
                     count = max(1, min(16, int(core.config.get("bing_auto_update_count", 1) or 1)))
-                    QTimer.singleShot(0, lambda: self._start_bing_auto_update(cache_dir, count))
+                    # v1.6.1 rework: emit a queued signal instead of
+                    # QTimer.singleShot — the timer would start in this
+                    # worker thread (no event loop) and never fire.
+                    self.bing_auto_update_signal.emit(cache_dir, count)
             except Exception as exc:
                 self.bing_result_signal.emit(False, t("必应启动自动操作失败：{0}").format(exc), "")
 

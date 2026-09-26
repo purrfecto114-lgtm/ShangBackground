@@ -1,6 +1,7 @@
 # Qt compatibility shim with explicit dependencies.
 from __future__ import annotations
 
+from threading import Lock
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
@@ -26,12 +27,19 @@ class QtRootShim(QObject):
         self.window = window
         self._timers: dict[str, QTimer] = {}
         self._seq = 0
+        # v1.6.1 fix: after() is called concurrently from worker threads
+        # (IPC callbacks, slideshow timers, hotkey threads). The unlocked
+        # ``self._seq += 1`` could hand out duplicate ids, which made
+        # _schedule_after drop one of the two callbacks (e.g. a missed
+        # "bring window to front" that needed a second click).
+        self._seq_lock = Lock()
         self._after_requested.connect(self._schedule_after, Qt.ConnectionType.QueuedConnection)
         self._cancel_requested.connect(self._cancel_after, Qt.ConnectionType.QueuedConnection)
 
     def after(self, ms: int, func=None, *args):
-        self._seq += 1
-        timer_id = f"qt-after-{self._seq}"
+        with self._seq_lock:
+            self._seq += 1
+            timer_id = f"qt-after-{self._seq}"
         try:
             delay = max(0, int(ms))
         except Exception:

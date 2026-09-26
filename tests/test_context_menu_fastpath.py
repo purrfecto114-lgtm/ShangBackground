@@ -140,6 +140,12 @@ def test_primary_local_ipc_set_wallpaper_uses_mode_transaction():
     local_block = text.split('elif command == "set_wallpaper":', 1)[1].split(
         'elif command in {"previous", "next", "random"}:', 1
     )[0]
-    assert "core.switch_wallpaper_mode" in local_block
-    assert 'updates={"single_image": target}' in local_block
+    # v1.6.1: the GUI-thread handler must NOT run the mode transaction
+    # synchronously (it froze the UI); it forwards to the coalescing IPC
+    # worker, whose _execute_ipc_wallpaper_command performs the very same
+    # switch_wallpaper_mode("图片", updates={"single_image": ...}) transaction
+    # (covered by test_ipc_set_wallpaper_routes_through_mode_transaction).
+    assert "core.queue_ipc_wallpaper_command" in local_block
+    assert 'set_wallpaper|{target}' in local_block
+    assert "core.switch_wallpaper_mode" not in local_block
     assert "core.set_wallpaper(" not in local_block

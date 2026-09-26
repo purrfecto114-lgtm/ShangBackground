@@ -329,7 +329,10 @@ def _candidate_paths_uncached(*names: str) -> list[str]:
 
     base_dirs = [
         os.path.dirname(sys.executable),
-        os.getcwd(),
+        # v1.6.1 security fix: removed os.getcwd(). Resolving players from the
+        # current working directory let a dropped "mpv.exe"/"vlc.exe" in a
+        # download folder (typical portable-launch scenario) execute silently
+        # whenever the app started from that folder in system mode.
         os.fspath(RESOURCE_ROOT),
         os.fspath(PROJECT_ROOT),
         os.environ.get("ProgramFiles"),
@@ -401,8 +404,23 @@ def _rotate_player_log() -> None:
 def _find_workerw() -> int:
     """Create/find the hidden WorkerW window behind desktop icons."""
     user32 = ctypes.windll.user32
+    # v1.6.1 fix: declare full Win64-safe signatures. Previously
+    # FindWindowW/FindWindowExW returned truncated c_int HWNDs and
+    # SendMessageTimeoutW received a 4-byte c_ulong buffer where the API
+    # writes an 8-byte DWORD_PTR on x64 (stack/heap corruption risk).
+    user32.FindWindowW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
+    user32.FindWindowW.restype = ctypes.c_void_p
+    user32.FindWindowExW.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p
+    ]
+    user32.FindWindowExW.restype = ctypes.c_void_p
+    user32.SendMessageTimeoutW.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t,
+        ctypes.c_uint, ctypes.c_uint, ctypes.POINTER(ctypes.c_size_t),
+    ]
+    user32.SendMessageTimeoutW.restype = ctypes.c_size_t
     progman = user32.FindWindowW("Progman", None)
-    result = ctypes.c_ulong(0)
+    result = ctypes.c_size_t(0)
     try:
         user32.SendMessageTimeoutW(progman, 0x052C, 0, 0, 0x0002, 1000, ctypes.byref(result))
     except Exception:
@@ -412,9 +430,9 @@ def _find_workerw() -> int:
     EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
 
     def _enum(hwnd, _lparam):
-        shell = user32.FindWindowExW(hwnd, 0, "SHELLDLL_DefView", None)
+        shell = user32.FindWindowExW(hwnd, None, "SHELLDLL_DefView", None)
         if shell:
-            candidate = user32.FindWindowExW(0, hwnd, "WorkerW", None)
+            candidate = user32.FindWindowExW(None, hwnd, "WorkerW", None)
             if candidate:
                 workerw.value = candidate
                 return False

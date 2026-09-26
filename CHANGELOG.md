@@ -2,6 +2,29 @@
 
 本文件记录 ShangBackground 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.6.1] - 2026-09-24
+
+### 修复
+
+- **共享层平台反向依赖（P0）** — 架构文档规定 `core/`、`app/` 不得直接导入平台后端，但存在三处违反：`core/engine.py` 直连 Windows 后端私有函数 `_prime_explorer_wallpaper_host`，`app/diagnostics.py` 与 `app/config.py` 直连 Linux 后端 `session` 模块。现全部收敛：Windows/共享侧经 `platform_adapters.integration` 门面新增公共 `prime_desktop_wallpaper_host()`（三平台后端统一暴露，非 Windows 为 no-op）；会话探测经新建的 `platform_adapters/session.py` 门面（零 `app.*` 依赖，`app.config` 模块级导入不构成环；非 Linux 主机返回惰性默认值）。新增 `tests/test_layering.py`：AST 级依赖方向守护（含探测器自检），回归即 CI 失败。
+- **发布源码包混入字节码（P0）** — CI 在打包前运行 pytest，`src/**/__pycache__/*.pyc` 随 `rglob("*")` 无过滤进入 zip/tar 发布包。`_zip_directory`/`_tar_directory` 现排除 `__pycache__` 目录与 `.pyc`/`.pyo` 后缀，并新增两个归档卫生回归测试（构造带 pycache 的迷你工作区，断言归档内零泄漏）。
+- **模式切换补偿失败对用户不可见（P1）** — 新模式启动失败且旧模式恢复/旧配置持久化也失败时，补偿结果只进日志，调用方只拿到一句通用异常。新增 `ModeSwitchReport`/`ModeRollbackOutcome` 结构化报告：`_compensate` 返回回滚实况（配置是否恢复/旧模式是否恢复运行/是否落盘/错误清单），`WallpaperModeError` 携带 report，engine 门面镜像为 `core.last_mode_switch_report`（与 `last_operation_error` 同模式），主窗口失败警告现附带一行回滚摘要（如"配置已恢复；旧模式恢复失败；恢复结果保存失败"）。成功路径行为与返回类型完全不变。
+- **HTML 来源校验注释与行为不符（P1）** — `source_validation.py` 注释声称"Reject non-standard ports (SSRF)"，实际分支为 `pass` 死代码。删除死代码并如实注明：自定义端口属有意允许（用户本机 webview + 本地开发服务器场景），结构性与危险模式校验（凭据注入/CRLF/UNC/SMB/设备名）保持不变；新增端口契约测试钉住真实行为。
+- **内部参数错误静默退出（P2）** — `--internal-video-player` 与 `--build-verify-file` 缺参数时返回 2 但无任何输出，终端与崩溃日志均无法定位。现向 stderr 输出明确的中文错误说明。
+
+### 变更
+
+- **测试依赖单源固定（P0 部分）** — pytest/ruff 版本约束原先内联散落在 ci.yml（两处）与 release.yml（一处），易漂移。新增 `requirements/test.txt`（pytest>=8,<10 + ruff>=0.12,<1），三个 workflow 安装步骤统一改为 `-r requirements/test.txt`（pip 缓存键已自动覆盖）。pyright 有意不列入：CI 从不运行它，pyrightconfig.json 仅供本地 IDE，列入即伪门禁。
+- **`--doctor`/`--doctor-json` 输出可操作修复指引（P2）** — `DiagnosticCheck` 新增 `hint` 字段：缺失依赖给出 `python -m pip install <package>`，可选命令缺失说明自动降级行为，macOS 系统框架缺失说明来源；human 报告在 WARN/FAIL 行下输出 `hint:`，JSON 载荷同步携带（新增字段，旧消费者不受影响）。
+- **架构文档线程模型如实化（P1）** — `ARCHITECTURE.md` 原声明"长期 Worker 使用 `QObject.moveToThread(QThread)`；短时 Python 任务使用共享线程池"，与实现不符（全库 0 处 moveToThread、无共享线程池；实际为 `threading.Thread` worker + Qt Signal queued 回 UI，`services/updates.py` 为唯一 QThread 用户）。现改为如实描述现状 + 新增 Worker 硬性规则（线程内禁触 Qt 控件、回 UI 必经 Signal）+ moveToThread 列为需真机验收掩护的路线图目标，消除"文档撒谎"这一 P1 的实质。
+- **PySide6 维持 6.11.1（评估结论）** — 6.11.2 已于 2026-08 发布，但检索未发现其修复影响本项目的安全或崩溃问题（项目仅用 QtWidgets/QtCore/QtGui 成熟面）；且 6.11.x 系列存在 teardown segfault 的第三方报告线索。无真机验收环境下盲升 patch 版本风险大于收益，维持 6.11.1，升级列入真机验收轮的专项检查项。
+- **版本号 1.6.0 → 1.6.1** — v1.6.0 最终版从未发布（远程仅存在指向审计基线的 v1.6.0-rc1 标签），本轮全部修复随 1.6.1 发布；`src/app/version.py`、`src/main_version_info.txt`、README 徽章三处同步，`release.py metadata` 校验通过。合并回默认分支时 version.py 的变更将按设计自动触发发布流水线。
+
+### 文档
+
+- **新增 `docs/REFACTOR_ROADMAP.md`** — `main_window.py`（约 8400 行）God Object 的四阶段拆分路线图：基于 v1.6.1 实测方法聚类给出各职责块行区间与独立性评估（含日志/About 区间嵌套的前置剥离标注），阶段 1（日志查看器/About 动画/SVG 渲染，约 -750 行）零风险可先行，阶段 4（core worker 调度/模式编排/退出流程）必须三平台真机冒烟掩护；每阶段的行为不变原则、Controller 边界规则与回滚策略成文。
+- **`docs/BUILD_SYSTEM.md`** — 发布前最低验证补入 HTML 壁纸运行器自检命令：`PYTHONPATH=src python -m platform_adapters.native_html_runner --self-test`（含 Windows cmd/PowerShell 等价形式；原命令在仓库根目录因 `src/` 不在模块搜索路径而必然失败，且此前无任何文档给出可运行形式）。
+
 ## [1.6.0] - 2026-09-22
 
 ### 新增
