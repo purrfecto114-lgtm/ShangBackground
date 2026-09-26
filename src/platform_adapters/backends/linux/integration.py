@@ -115,6 +115,59 @@ def _is_kde_session() -> bool:
     return "kde" in tokens or "plasma" in tokens
 
 
+KDE_RESTOREABLE_PLUGIN = "org.kde.image"
+
+
+def kde_wallpaper_restore_scope() -> dict:
+    """探测 KDE 会话的壁纸恢复范围（诊断专用，v1.6.2 审查必须修复项 2）。
+
+    REVIEW_REPORT_V1.6.1 指出：``SessionWallpaperService`` 仅保存一个本地
+    壁纸路径（schema=2），而设置路径无条件写 ``org.kde.image``——用户原本
+    使用 slideshow/color/第三方插件时，退出恢复会丢失插件和配置。
+
+    本函数选择报告给出的"明确降级范围"路线：如实上报当前每个 containment
+    的 wallpaperPlugin，让诊断/文档明确声明恢复范围限定为"本地静态图片"，
+    而不是伪造插件配置可恢复。
+
+    返回 dict（所有平台/会话安全，永不抛异常）：
+      applicable -- 是否 KDE 会话（False 时调用方应跳过本检查）
+      reachable  -- plasmashell 脚本通道是否可达
+      plugins    -- 每个 containment 的 wallpaperPlugin 去重列表
+      restorable -- 全部 containment 是否均为 org.kde.image
+      detail     -- 人类可读说明（含失败原因）
+    """
+    try:
+        if not _is_kde_session():
+            return {"applicable": False, "reachable": False, "plugins": [], "restorable": False, "detail": "not a KDE session"}
+        script = r'''
+var allDesktops = desktops();
+for (var i = 0; i < allDesktops.length; i++) {
+    print("PLUGIN:" + (allDesktops[i].wallpaperPlugin || "org.kde.image"));
+}
+'''
+        ok, out, detail = _run_plasma_script(script, timeout=8)
+        if not ok:
+            return {"applicable": True, "reachable": False, "plugins": [], "restorable": False, "detail": detail}
+        plugins: list[str] = []
+        for line in out.splitlines():
+            text = line.strip()
+            if text.startswith("PLUGIN:"):
+                name = text.split(":", 1)[1].strip()
+                if name and name not in plugins:
+                    plugins.append(name)
+        restorable = bool(plugins) and all(p == KDE_RESTOREABLE_PLUGIN for p in plugins)
+        summary = ", ".join(plugins) if plugins else "(no containment reported a plugin)"
+        return {
+            "applicable": True,
+            "reachable": True,
+            "plugins": plugins,
+            "restorable": restorable,
+            "detail": f"wallpaper plugins: {summary}",
+        }
+    except Exception as exc:  # pragma: no cover - 防御：诊断路径不允许抛异常
+        return {"applicable": True, "reachable": False, "plugins": [], "restorable": False, "detail": f"probe error: {exc}"}
+
+
 def _is_xfce_session() -> bool:
     return "xfce" in _desktop_session_tokens()
 
@@ -300,6 +353,36 @@ def _verify_kde_wallpaper(abs_path: str, *, timeout: float = 0.5) -> tuple[bool,
     return False, detail
 
 
+# v1.6.2 审查建议项 1：把“命令返回 0”（accepted）与“桌面已显示”（verified）
+# 拆成两种可观测状态。不改变 set_wallpaper 的 (bool, str) 公共契约（调用链
+# engine→UI 不动），提供事后查询供诊断/日志区分“Plasma 接受了请求但读回
+# 未验证”（Plasma 6 已知 readConfig 空值行为）与“读回确认一致”。
+# 线程安全（验收轮修正）：GUI/核心 worker/IPC 壁纸命令三类线程都可能调用
+# 设置路径，采用不可变快照整体替换（单次字节码 STORE_GLOBAL，GIL 下原子）
+# 而非 dict.update（多键分次写入，并发读者可观察到撕裂状态）。
+_LAST_KDE_SET_OUTCOME: dict[str, object] = {
+    "accepted": False,
+    "verified": False,
+    "method": "",
+    "detail": "",
+}
+
+
+def _record_kde_set_outcome(*, accepted: bool, verified: bool, method: str, detail: str) -> None:
+    global _LAST_KDE_SET_OUTCOME
+    _LAST_KDE_SET_OUTCOME = {
+        "accepted": accepted,
+        "verified": verified,
+        "method": method,
+        "detail": detail,
+    }
+
+
+def last_kde_set_outcome() -> dict[str, object]:
+    """返回上次 KDE 静态壁纸设置的结构化结果副本（诊断/测试用）。"""
+    return dict(_LAST_KDE_SET_OUTCOME)
+
+
 def _set_kde_wallpaper(path: str, *, fill_mode: int | None = None) -> tuple[bool, str]:
     """Set a real static KDE/Plasma wallpaper.
 
@@ -324,6 +407,12 @@ def _set_kde_wallpaper(path: str, *, fill_mode: int | None = None) -> tuple[bool
         if rc == 0:
             # Best-effort read-back — do NOT fail if empty. The wallpaper is set.
             verified, current = _verify_kde_wallpaper(abs_path)
+            _record_kde_set_outcome(
+                accepted=True,
+                verified=verified,
+                method="plasma-apply-wallpaperimage",
+                detail="read-back confirmed" if verified else "accepted (rc=0); read-back unconfirmed (known Plasma 6 behavior)",
+            )
             if verified:
                 return True, current
             # Read-back empty or mismatched — but rc=0 means success on Plasma 6.
@@ -343,11 +432,23 @@ def _set_kde_wallpaper(path: str, *, fill_mode: int | None = None) -> tuple[bool
         # Trust it — do NOT fail on empty read-back.
         if "SHANGBACKGROUND_KDE_SET_DONE" in (out or ""):
             verified, current = _verify_kde_wallpaper(abs_path)
+            _record_kde_set_outcome(
+                accepted=True,
+                verified=verified,
+                method="evaluateScript",
+                detail="read-back confirmed" if verified else "accepted (script done); read-back unconfirmed (known Plasma 6 behavior)",
+            )
             if verified:
                 return True, current
             return True, abs_path
         errors.append(f"evaluateScript({image_value!r}) output={_summarize_command_output(out)}")
 
+    _record_kde_set_outcome(
+        accepted=False,
+        verified=False,
+        method="",
+        detail=" | ".join(errors[-6:]) or "KDE wallpaper command could not be executed",
+    )
     return False, " | ".join(errors[-6:]) or "KDE wallpaper command could not be executed"
 
 

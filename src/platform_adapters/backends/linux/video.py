@@ -334,7 +334,10 @@ def _terminate_process_tree(process: subprocess.Popen, *, grace: float = 2.0) ->
         except Exception:
             survivors = []
     try:
-        group_id = os.getpgid(pid)
+        # os.getpgid 是 POSIX-only：Windows 上抛 AttributeError（非 OSError），
+        # 会穿透 except OSError 直接毁掉终止流程本身。CI 矩阵在 Windows 上
+        # 以 monkeypatch 方式运行本模块的失败路径测试，必须平台安全。
+        group_id = os.getpgid(pid) if hasattr(os, "getpgid") else None
     except OSError:
         group_id = None
     own_group = bool(group_id and group_id == pid)
@@ -357,8 +360,11 @@ def _terminate_process_tree(process: subprocess.Popen, *, grace: float = 2.0) ->
             break
         time.sleep(0.05)
     if process.poll() is None or not _process_tree_gone(group_id, survivors):
-        # 宽限期内未退净：SIGKILL 升级，确保不留孤儿。
-        _signal(signal.SIGKILL)
+        # 宽限期内未退净：SIGKILL 升级，确保不留孤儿。Windows 的 signal
+        # 模块没有 SIGKILL 属性（AttributeError 在实参求值时即抛出，先于
+        # own_group 检查）——回退 SIGTERM 占位，Windows 上 own_group 恒为
+        # False，信号永远不会真正发送，仅保证属性访问不崩。
+        _signal(getattr(signal, "SIGKILL", signal.SIGTERM))
         try:
             process.kill()
         except Exception:
@@ -503,9 +509,14 @@ def _resolve_mpv() -> str | None:
 
 
 def _wayland_layer_shell_session() -> bool:
-    """Whether mpvpaper's layer-shell model is plausible for this session."""
-    if os.environ.get("SHANGBACKGROUND_ALLOW_MPVPAPER", "").strip() == "1":
-        return True
+    """Whether mpvpaper's layer-shell model is plausible for this session.
+
+    v1.6.2 审查修正：mpvpaper 官方定位是 wlroots 系合成器（Sway/Hyprland/
+    Wayfire/river）。KDE/KWin 会话默认不再自动视为可运行——KWin 的
+    layer-shell 兼容性未经真机验证，仅当用户显式设置
+    ``SHANGBACKGROUND_ALLOW_MPVPAPER=1`` 实验开关时才允许尝试。该开关
+    只影响启动尝试，不改变 capabilities.py 的能力声明（报告要求 3）。
+    """
     tokens = " ".join(
         filter(None, (
             os.environ.get("XDG_CURRENT_DESKTOP", ""),
@@ -515,7 +526,11 @@ def _wayland_layer_shell_session() -> bool:
     ).lower()
     if any(os.environ.get(name) for name in ("SWAYSOCK", "HYPRLAND_INSTANCE_SIGNATURE", "WAYFIRE_SOCKET")):
         return True
-    return any(name in tokens for name in ("sway", "hyprland", "wayfire", "river", "wlroots", "kde", "plasma"))
+    if any(name in tokens for name in ("sway", "hyprland", "wayfire", "river", "wlroots")):
+        return True
+    if any(name in tokens for name in ("kde", "plasma")):
+        return os.environ.get("SHANGBACKGROUND_ALLOW_MPVPAPER", "").strip() == "1"
+    return False
 
 
 def _internal_libmpv_x11_command(
@@ -554,11 +569,33 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
     ipc_path = _mpv_ipc_path()
     if is_wayland_session():
         if not _wayland_layer_shell_session():
-            desktop = os.environ.get("XDG_CURRENT_DESKTOP") or os.environ.get("XDG_SESSION_DESKTOP") or "unknown"
+            # 与 _wayland_layer_shell_session 同源的三令牌判定（验收轮修正：
+            # 仅 DESKTOP_SESSION=plasma 的会话此前会落到通用文案，错过实验开关指引）。
+            desktop_tokens = " ".join(
+                filter(None, (
+                    os.environ.get("XDG_CURRENT_DESKTOP", ""),
+                    os.environ.get("XDG_SESSION_DESKTOP", ""),
+                    os.environ.get("DESKTOP_SESSION", ""),
+                ))
+            ).lower()
+            desktop = (
+                os.environ.get("XDG_CURRENT_DESKTOP")
+                or os.environ.get("XDG_SESSION_DESKTOP")
+                or os.environ.get("DESKTOP_SESSION")
+                or "unknown"
+            )
+            if "kde" in desktop_tokens or "plasma" in desktop_tokens:
+                return False, (
+                    "KDE/KWin 会话默认不启用 mpvpaper 视频壁纸：mpvpaper 面向"
+                    " wlroots 系合成器，KWin 的 layer-shell 兼容性未经真机验证。"
+                    "如需自行实验，请设置环境变量 SHANGBACKGROUND_ALLOW_MPVPAPER=1 "
+                    "后重试；后果自负（可能黑屏或无首帧）。"
+                )
             return False, (
                 "当前 Wayland 桌面不提供本项目已实现的通用视频壁纸层。"
-                f"检测到桌面：{desktop}。mpvpaper 仅适用于兼容 layer-shell 的合成器；"
-                "GNOME Wayland 仍需要桌面扩展/插件后端；KDE/KWin 与 wlroots 会话可尝试 layer-shell。"
+                f"检测到桌面：{desktop}。mpvpaper 仅适用于兼容 layer-shell 的"
+                " wlroots 系合成器（Sway/Hyprland/Wayfire/river）；"
+                "GNOME Wayland 需要桌面扩展/插件后端。"
             )
         mpvpaper = shutil.which("mpvpaper") if external_media_runtime_allowed() else None
         if mpvpaper:

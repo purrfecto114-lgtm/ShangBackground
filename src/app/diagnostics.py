@@ -247,6 +247,7 @@ def collect_diagnostics() -> DiagnosticReport:
         # fallback chain while staying import-safe on every platform.
         from platform_adapters.session import (
             detect_session_type,
+            kde_wallpaper_restore_scope,
             session_bus_available,
         )
 
@@ -260,6 +261,35 @@ def collect_diagnostics() -> DiagnosticReport:
                 "static wallpaper backend",
             )
         )
+        # v1.6.2 审查必须修复项 2：KDE 恢复范围降级声明——非图片插件
+        # （slideshow/color/第三方）不会被退出恢复还原，必须在诊断中
+        # 显式告知用户，而不是静默丢失后让人意外。
+        scope = kde_wallpaper_restore_scope()
+        if scope.get("applicable"):
+            if not scope.get("reachable"):
+                checks.append(
+                    DiagnosticCheck(
+                        "kde-wallpaper-restore", "warn",
+                        f"无法读取 Plasma 壁纸插件状态：{scope.get('detail', 'unknown')}",
+                    )
+                )
+            elif scope.get("restorable"):
+                checks.append(
+                    DiagnosticCheck(
+                        "kde-wallpaper-restore", "pass",
+                        f"恢复范围：本地静态图片（{scope.get('detail', '')}）",
+                    )
+                )
+            else:
+                checks.append(
+                    DiagnosticCheck(
+                        "kde-wallpaper-restore", "warn",
+                        f"当前 Plasma 壁纸插件超出恢复范围：{scope.get('detail', '')}。"
+                        "退出恢复仅支持本地静态图片（org.kde.image）",
+                        hint="slideshow/color/第三方壁纸插件的配置不会被还原；"
+                        "如需保留请在退出前自行记录插件设置（完整插件恢复见 docs/KDE_SUPPORT_PLAN.md 任务 2）",
+                    )
+                )
         if session == "wayland":
             module = _module_check(
                 "dbus_next", "Wayland global shortcuts", required=False, install="dbus-next"

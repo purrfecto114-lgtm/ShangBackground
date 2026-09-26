@@ -105,7 +105,19 @@ def test_linux_ipc_readiness_end_to_end_over_real_unix_socket(tmp_path):
     证明就绪验证真的在轮询 IPC，而不是只看 socket 文件存在。"""
     from platform_adapters.backends.linux import video as linux_video
 
-    sock_path = tmp_path / "fake-mpv.sock"
+    # AF_UNIX sun_path 上限：Linux 108 字节、macOS 104 字节（含 NUL）。
+    # GitHub 托管 runner 上 pytest 的 tmp_path（/private/var/folders/...
+    # 嵌套临时目录）在 macOS 可超过 104 导致 bind 抛 "AF_UNIX path too long"
+    # （CI 实测）。先尝试 tmp_path，超限时回退 tempfile.mkdtemp()（跟随
+    # TMPDIR，macOS 真机 /var/folders/.../T/ 下最坏 ~78 字节，仍 <95 安全）。
+    sock_dir = tmp_path
+    if len(str(sock_dir / "fake-mpv.sock")) > 95:
+        import tempfile
+
+        sock_dir = Path(tempfile.mkdtemp(prefix="sb-sock-"))
+        if len(str(sock_dir / "fake-mpv.sock")) > 95:  # pragma: no cover - 极端环境
+            pytest.skip("找不到足够短的 AF_UNIX 套接字路径")
+    sock_path = sock_dir / "fake-mpv.sock"
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(str(sock_path))
     server.listen(1)
@@ -148,6 +160,10 @@ def test_linux_ipc_readiness_end_to_end_over_real_unix_socket(tmp_path):
             client.close()
         server.close()
         thread.join(timeout=2.0)
+        if sock_dir is not tmp_path:
+            import shutil as _shutil
+
+            _shutil.rmtree(sock_dir, ignore_errors=True)  # 回退目录由本测试自管
 
 
 def _process_gone_or_zombie(pid: int, deadline: float = 5.0) -> bool:

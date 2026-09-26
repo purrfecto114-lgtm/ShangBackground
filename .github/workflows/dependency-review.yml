@@ -22,7 +22,27 @@ jobs:
         with:
           persist-credentials: false
 
+      # dependency-review-action 依赖仓库开启 Dependency graph；未启用时
+      # action 以 error 终止（PR #3 实测），无法与"发现高危依赖"区分。
+      # 先用 SBOM 端点探测：200=已启用；404/403=未启用 → 跳过并明确警告。
+      # 仓库管理员启用后（Settings → Code security → Dependency graph），
+      # 本检查自动恢复生效，无需改工作流。
+      - name: Check dependency graph availability
+        id: depgraph
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/dependency-graph/sbom" || echo 000)
+          echo "status=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" != "200" ]; then
+            echo "::warning::Dependency graph probe returned HTTP $code (404/403 = not enabled or token lacks access; 000 = network error). Dependency review is skipped. Enable it in repository Settings → Code security → Dependency graph to activate this check."
+          fi
+
       - name: Review dependency changes
+        if: steps.depgraph.outputs.status == '200'
         uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high

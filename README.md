@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.6.1-0ea5e9?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-v1.6.2-0ea5e9?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/PySide6-6.11-41cd52?style=flat-square&logo=qt&logoColor=white" alt="PySide6">
   <img src="https://img.shields.io/badge/License-GPLv3-blue?style=flat-square" alt="GPLv3">
@@ -52,6 +52,12 @@ ShangBackground 使用一份共享源码支持 Windows、Linux 和 macOS。Windo
 | 开机自启 | ✅ | ✅ | ✅ |
 
 `✅` 表示主路径已实现；`🟡` 表示实现存在，但仍依赖桌面环境、权限或目标系统真机验证。非本机 dry-run 只能验证构建参数，不能代替原生验收。
+
+### Linux/KDE 恢复范围声明
+
+- **退出恢复仅支持本地静态图片（`org.kde.image`）**：KDE 会话中，`slideshow`/`color`/第三方 Plasma 壁纸插件的配置**不会**在退出恢复时被还原——应用会按保存的本地图片路径恢复为静态壁纸。运行 `--doctor` 可检测当前插件是否在恢复范围内（超出范围时给出 WARN 与指引）。
+- **KDE Wayland 视频壁纸不默认启用**：mpvpaper 面向 wlroots 系合成器（Sway/Hyprland 等），KWin 的 layer-shell 兼容性未经真机验证。如需实验性尝试，设置环境变量 `SHANGBACKGROUND_ALLOW_MPVPAPER=1`（后果自负）。
+- 完整的插件级恢复与 KDE 动态壁纸路线见 [`docs/KDE_SUPPORT_PLAN.md`](docs/KDE_SUPPORT_PLAN.md)。
 
 ## 快速开始
 

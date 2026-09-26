@@ -2,6 +2,28 @@
 
 本文件记录 ShangBackground 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.6.2] - 2026-09-26
+
+针对 v1.6.1 审查报告（`docs/REVIEW_REPORT_V1.6.1.md`）的两项"必须修复"与 CI（PR #3）三平台失败。
+
+### 修复
+
+- **KDE Wayland 视频能力探测误报（审查必须修复项 1）** — `capabilities.py` 原先只要桌面令牌含 `kde`/`plasma` 且 PATH 中有 `mpvpaper`，就把视频壁纸标为 `runtime_ready=True`。但 mpvpaper 官方定位是 wlroots 系合成器（Sway/Hyprland 等，以 wlroots 为依赖），把 KWin 会话按同一后端标记为 ready 属于把"命令存在"当成"后端可运行"。现 KDE Wayland 一律 `runtime_ready=False`：有 mpvpaper 时 `state=best_effort`（backend 如实注明"experimental, untested on KWin"与实验开关用法），无则 `unsupported`；`_layer_shell_session` 令牌集移除 kde/plasma，新增 `_kde_session` 分流；sway/hyprland 等 wlroots 会话行为不变。启动路径（`video.py`）同步收紧：KDE 会话默认拒绝 mpvpaper，`SHANGBACKGROUND_ALLOW_MPVPAPER=1` 只作为显式实验开关放行启动尝试且不改变能力声明（错误信息指导用户如何开启）。新增契约测试 `tests/test_kde_capability_contract.py`（9 项：报告原型断言/开关不改声明/wlroots 不受影响/静态与热键不殃及/X11 不受影响等），`test_linux_wayland_backends.py` 与 `test_platform_runtime_regressions.py` 中 4 处旧"KDE 自动 ready"断言翻转为失败契约（mpvpaper 参数类测试改用 sway 会话验证，与桌面令牌解耦）。
+- **KDE 退出恢复的插件丢失未告知用户（审查必须修复项 2，选"明确降级范围"路线）** — `SessionWallpaperService`（schema=2）仅保存本地壁纸路径，设置脚本无条件写 `org.kde.image`：用户原本使用 slideshow/color/第三方 Plasma 插件时，退出恢复会静默丢失插件与配置。按报告给出的二选一，本版选择明确降级而非实现 schema=3：新增 `integration.kde_wallpaper_restore_scope()`（经 session 门面暴露，惰性加载），读取每个 containment 的 `wallpaperPlugin`；`--doctor` 对超范围插件显式 WARN + hint（"slideshow/color/第三方壁纸插件的配置不会被还原；如需保留请自行记录插件设置"），全部为 `org.kde.image` 时 PASS，Plasma 不可达时 WARN。完整插件级恢复（schema=3）保留为 `docs/KDE_SUPPORT_PLAN.md` 任务 2 的后续目标。新增 `tests/test_kde_restore_scope.py`（16 项）。
+- **Windows 测试矩阵失败（CI）** — `_terminate_process_tree` 中两处 POSIX-only 泄漏：`os.getpgid(pid)` 抛 `AttributeError`（非 `OSError`，穿透 `except OSError`）；同函数后续的 `signal.SIGKILL` 在 Windows 的 signal 模块中不存在（实参在调用点求值，先于 own_group 检查）——getpgid 报错在执行序上先炸，掩盖了后者（验收轮子进程模拟实证）。CI 在 Windows 3.10/3.13 上运行 Linux 失败路径的跨平台模拟测试时即崩。分别改为 `hasattr` 守卫与 `getattr(signal, "SIGKILL", signal.SIGTERM)` 占位（Windows 上 own_group 恒为 False，信号永不发送）。
+- **macOS 测试矩阵失败（CI）** — `test_linux_ipc_readiness_end_to_end_over_real_unix_socket` 用 pytest `tmp_path` 拼 socket 路径，GitHub 托管 runner 上（`/private/var/folders/…` 嵌套目录）超过 macOS AF_UNIX 的 104 字节 `sun_path` 上限，`bind` 抛 "AF_UNIX path too long"。现超限（>95 字节）时回退到系统级短临时目录并在 finally 自行清理，极端环境 skip。
+- **Dependency review 工作流红叉（CI）** — 仓库未启用 Dependency graph 时 `dependency-review-action` 以 error 终止，无法与"发现高危依赖"区分，PR 被无关红叉阻塞。现先用 SBOM 端点探测（200=已启用）：未启用时输出明确的 `::warning::` 并跳过审查（管理员在 Settings → Code security 启用后自动恢复生效，无需改工作流）。
+
+### 变更
+
+- **KDE 静态壁纸设置结果的结构化可观测（审查建议项 1，轻量版）** — `_set_kde_wallpaper` 把"命令返回 0"（accepted）与"读回确认"（verified）合并为单一成功返回，掩盖了 Plasma 6 已知的 readConfig 空值行为。新增 `last_kde_set_outcome()` 事后查询（accepted/verified/method/detail 四字段），不改变 `set_wallpaper` 的 `(bool, str)` 公共契约（engine→UI 调用链零改动），诊断与日志可据此区分"Plasma 接受了请求但读回未验证"与"读回确认一致"。配套 4 项行为测试。
+- **版本号 1.6.1 → 1.6.2** — 审计基线（v1.6.1 源码包及其 SHA-256）已在下载页分发，本轮行为变更以新版本号区分；`src/app/version.py`、`src/main_version_info.txt`、README 徽章三处同步，`release.py metadata` 校验通过。
+
+### 文档
+
+- **入库 v1.6.1 审查报告与 KDE 实现计划** — `docs/REVIEW_REPORT_V1.6.1.md`（审查结论与证据）与 `docs/KDE_SUPPORT_PLAN.md`（任务 1–5 计划）随版本入库；计划文件的任务 1（冻结 KDE 行为契约）已勾选并附 v1.6.2 实施记录（任务 2 的 schema=3 路线与任务 3–5 仍为待办）。
+- **README 恢复范围声明（审查必须修复项 2 的文档面）** — Linux/KDE 平台说明明确标注："退出恢复仅支持本地静态图片（org.kde.image）；slideshow/color/第三方壁纸插件的配置不会被还原"。
+
 ## [1.6.1] - 2026-09-24
 
 ### 修复

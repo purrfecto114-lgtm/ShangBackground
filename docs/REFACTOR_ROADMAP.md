@@ -109,3 +109,15 @@ Controller 生命周期管理、`update_control_states` 一类的状态展示 �
 - 阶段 3：Windows + Linux 双平台冒烟。
 - 阶段 4：三平台矩阵冒烟（含 macOS 权限弹窗路径）。
 - 任何阶段失败即回滚该 PR，不携带半迁移状态进入下一阶段。
+
+## 后续架构项（v1.6.2 审查建议，未排期）
+
+- **Linux 后端选择器统一**（REVIEW_REPORT_V1.6.1 建议项 2）：当前
+  `capabilities.py`（能力探测）、`video.py::_wayland_layer_shell_session`
+  （启动路径）与 `integration.py::_is_kde_session`（静态壁纸链）各自判定
+  KDE/Wayland。目标：先产生统一的 `CapabilityStatus`，再由启动器消费，
+  消除"诊断说 ready、启动器只说可尝试"的分裂状态。前置条件：KDE 真机
+  矩阵（`docs/KDE_SUPPORT_PLAN.md` 任务 5）提供各状态的实测锚点。
+- **KDE 插件级会话恢复（schema=3）**：按 containment 保存 plugin、
+  配置组、Image/FillMode 与输出关联（`docs/KDE_SUPPORT_PLAN.md` 任务 2）。
+  v1.6.2 已交付降级声明与 doctor 探测，schema=3 为其替代目标。

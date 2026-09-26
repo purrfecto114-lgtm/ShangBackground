@@ -34,6 +34,16 @@ if sys.platform.startswith("linux"):
     detect_session_type = _backend.detect_session_type
     is_wayland_session = _backend.is_wayland_session
     session_bus_available = _backend.session_bus_available
+
+    def kde_wallpaper_restore_scope() -> dict:
+        """KDE 壁纸恢复范围探测（诊断专用，v1.6.2 审查必须修复项 2）。
+
+        惰性加载 integration 模块：门面自身保持轻量（session 模块零重依赖），
+        只有真正调用本函数时才付出 integration 的导入代价。
+        """
+        integration = importlib.import_module("platform_adapters.backends.linux.integration")
+        return integration.kde_wallpaper_restore_scope()
+
 else:  # pragma: no cover - exercised only on non-Linux hosts
     _backend = None
 
@@ -50,4 +60,13 @@ else:  # pragma: no cover - exercised only on non-Linux hosts
         del env
         return False
 
-__all__ = ["detect_session_type", "is_wayland_session", "session_bus_available"]
+    def kde_wallpaper_restore_scope() -> dict:
+        """非 Linux 主机：不适用（诊断调用方据此跳过本检查）。"""
+        return {"applicable": False, "reachable": False, "plugins": [], "restorable": False, "detail": "linux-only"}
+
+__all__ = [
+    "detect_session_type",
+    "is_wayland_session",
+    "session_bus_available",
+    "kde_wallpaper_restore_scope",
+]

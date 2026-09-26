@@ -36,7 +36,9 @@ def test_capabilities_accept_runtime_bus_without_address(monkeypatch: pytest.Mon
         which=lambda name: f"/usr/bin/{name}" if name in {"mpvpaper", "qdbus6"} else None,
     )
     assert result["global_hotkeys"]["runtime_ready"] is True
-    assert result["video_wallpaper"]["runtime_ready"] is True
+    # v1.6.2 审查修正：KDE Wayland 不再因 mpvpaper 在 PATH 而宣称视频 ready。
+    assert result["video_wallpaper"]["runtime_ready"] is False
+    assert result["video_wallpaper"]["state"] == "best_effort"
 
 
 def test_wayland_video_uses_current_mpvpaper_selector_and_safe_options(
@@ -48,7 +50,9 @@ def test_wayland_video_uses_current_mpvpaper_selector_and_safe_options(
 
     monkeypatch.delenv("XDG_SESSION_TYPE", raising=False)
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
-    monkeypatch.setenv("XDG_CURRENT_DESKTOP", "KDE")
+    # v1.6.2：参数正确性用 sway 会话验证（mpvpaper 官方支持平台），
+    # 避免与 KDE 默认拒绝的新行为耦合。
+    monkeypatch.setenv("XDG_CURRENT_DESKTOP", "sway")
     monkeypatch.delenv("SHANGBACKGROUND_MPVPAPER_OUTPUT", raising=False)
     monkeypatch.setattr(video, "stop_video_wallpaper", lambda: None)
     monkeypatch.setattr(video, "_mpv_ipc_path", lambda: "/tmp/shangbg-test.sock")
@@ -79,7 +83,7 @@ def test_wayland_mpvpaper_muting_keeps_audio_track_and_saved_volume(
     captured: dict[str, object] = {}
 
     monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
-    monkeypatch.setenv("XDG_CURRENT_DESKTOP", "KDE")
+    monkeypatch.setenv("XDG_CURRENT_DESKTOP", "sway")
     monkeypatch.setattr(video, "stop_video_wallpaper", lambda: None)
     monkeypatch.setattr(video, "_mpv_ipc_path", lambda: "/tmp/shangbg-test.sock")
     monkeypatch.setattr(video, "external_media_runtime_allowed", lambda: True)
@@ -103,7 +107,7 @@ def test_wayland_video_output_can_be_selected(monkeypatch: pytest.MonkeyPatch, t
     media.write_bytes(b"test")
     seen: list[str] = []
     monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
-    monkeypatch.setenv("XDG_CURRENT_DESKTOP", "KDE")
+    monkeypatch.setenv("XDG_CURRENT_DESKTOP", "sway")
     monkeypatch.setenv("SHANGBACKGROUND_MPVPAPER_OUTPUT", "DP-1")
     monkeypatch.setattr(video, "stop_video_wallpaper", lambda: None)
     monkeypatch.setattr(video, "_mpv_ipc_path", lambda: "/tmp/shangbg-test.sock")
@@ -273,6 +277,40 @@ def test_windows_video_prefers_mpv_process_before_full_app_libmpv_child(
 
     assert (ok, message) == (True, "ok")
     assert calls == ["mpv"]
+
+
+def test_terminate_process_tree_survives_windows_module_surface(monkeypatch: pytest.MonkeyPatch):
+    """验收轮（v1.6.2）发现的第二处 POSIX-only 泄漏：signal.SIGKILL 在
+    Windows 的 signal 模块不存在，且实参在调用点求值（先于 own_group
+    检查）即抛 AttributeError——getpgid 报错在执行序上先炸，掩盖了它。
+    模拟 Windows 模块表面（无 getpgid/killpg/SIGKILL），宽限期走满进入
+    SIGKILL 升级路径，_terminate_process_tree 必须完整走通而不抛异常。"""
+    from platform_adapters.backends.linux import video as linux_video
+
+    class FakeProcess:
+        pid = 2469
+
+        def poll(self):
+            return None  # 恒存活：走满宽限期 → 触发 SIGKILL 升级分支
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.delattr(linux_video.os, "getpgid", raising=False)
+    monkeypatch.delattr(linux_video.os, "killpg", raising=False)
+    monkeypatch.delattr(linux_video.signal, "SIGKILL", raising=False)
+    monkeypatch.setattr(linux_video, "psutil", None)
+    monkeypatch.setattr(linux_video.time, "sleep", lambda _seconds: None)
+    process = FakeProcess()
+    # 唯一断言：在 Windows 模块表面下完整走通终止流程而不抛异常
+    # （修复前此处抛 AttributeError: module 'signal' has no attribute 'SIGKILL'）。
+    linux_video._terminate_process_tree(process, grace=0.05)
 
 
 def test_linux_video_terminates_child_when_state_persistence_fails(monkeypatch: pytest.MonkeyPatch):

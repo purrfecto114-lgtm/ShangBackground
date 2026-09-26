@@ -33,10 +33,22 @@ def _tokens(env: dict[str, str]) -> str:
 
 
 def _layer_shell_session(env: dict[str, str]) -> bool:
+    """mpvpaper 官方定位的 wlroots 系合成器会话（显式 socket 或桌面令牌证据）。
+
+    v1.6.2 审查修正：kde/plasma 令牌不再计入。mpvpaper 以 wlroots 为依赖、
+    面向 Sway 等合成器；KWin 的 layer-shell 实现未经独立探针验证前，
+    KDE 会话必须走 ``_kde_session`` 的显式未验证分支。
+    """
     tokens = _tokens(env)
     if any(env.get(name) for name in ("SWAYSOCK", "HYPRLAND_INSTANCE_SIGNATURE", "WAYFIRE_SOCKET")):
         return True
-    return any(name in tokens for name in ("sway", "hyprland", "wayfire", "river", "wlroots", "kde", "plasma"))
+    return any(name in tokens for name in ("sway", "hyprland", "wayfire", "river", "wlroots"))
+
+
+def _kde_session(env: dict[str, str]) -> bool:
+    """KDE/Plasma 会话令牌检测（与静态壁纸判定同源）。"""
+    tokens = _tokens(env)
+    return "kde" in tokens or "plasma" in tokens
 
 
 def probe_capabilities(env: dict[str, str] | None = None, which: Callable[[str], str | None] = shutil.which) -> dict[str, dict[str, object]]:
@@ -72,10 +84,36 @@ def probe_capabilities(env: dict[str, str] | None = None, which: Callable[[str],
         static_ready = bool(which("feh") or which("nitrogen")) if session == "x11" else False
 
     if session == "wayland":
-        layer = _layer_shell_session(env)
-        video_ready = layer and bool(which("mpvpaper"))
-        video_state = "best_effort" if layer else "unsupported"
-        video_backend = "mpvpaper layer-shell (KWin/wlroots best effort)" if layer else "no compatible Wayland desktop-layer backend"
+        wlroots = _layer_shell_session(env)
+        kde = _kde_session(env)
+        mpvpaper = bool(which("mpvpaper"))
+        video_limitations = "X11 uses third-party embedding; Wayland requires a compositor-specific desktop-layer protocol."
+        if wlroots:
+            # mpvpaper 官方支持的平台（sway/hyprland/wayfire/river 等）。
+            video_ready = mpvpaper
+            video_state = "best_effort"
+            video_backend = "mpvpaper layer-shell (wlroots compositors)"
+        elif kde:
+            # v1.6.2 审查必须修复项：KDE/KWin 会话不宣称 runtime_ready。
+            # mpvpaper 面向 wlroots 合成器，KWin 的 layer-shell 兼容性
+            # 未经独立探针验证；best_effort 仅表示“可用实验开关显式尝试”，
+            # 不得被 UI 或发布门禁当作已支持。
+            video_ready = False
+            video_state = "best_effort" if mpvpaper else "unsupported"
+            video_backend = (
+                "mpvpaper (experimental, untested on KWin; opt-in via SHANGBACKGROUND_ALLOW_MPVPAPER=1)"
+                if mpvpaper
+                else "no supported KDE/KWin video wallpaper backend"
+            )
+            video_limitations += (
+                " KDE/KWin sessions are NOT auto-marked ready: mpvpaper targets wlroots"
+                " compositors and KWin compatibility is untested; set"
+                " SHANGBACKGROUND_ALLOW_MPVPAPER=1 to opt in explicitly."
+            )
+        else:
+            video_ready = False
+            video_state = "unsupported"
+            video_backend = "no compatible Wayland desktop-layer backend"
         html_state = "unsupported"
         html_ready = False
         portal_module = _has("dbus_next")
@@ -88,6 +126,7 @@ def probe_capabilities(env: dict[str, str] | None = None, which: Callable[[str],
         external = bool(which("mpv"))
         video_ready = xwinwrap and bool(embedded or external)
         video_state = "best_effort"
+        video_limitations = "X11 uses third-party embedding; Wayland requires a compositor-specific desktop-layer protocol."
         if embedded:
             video_backend = "xwinwrap + direct libmpv"
         elif external:
@@ -102,6 +141,7 @@ def probe_capabilities(env: dict[str, str] | None = None, which: Callable[[str],
         video_ready = False
         video_state = "unavailable"
         video_backend = "no graphical session detected"
+        video_limitations = "X11 uses third-party embedding; Wayland requires a compositor-specific desktop-layer protocol."
         html_state = "unavailable"
         html_ready = False
         hotkey_state = "unavailable"
@@ -110,7 +150,7 @@ def probe_capabilities(env: dict[str, str] | None = None, which: Callable[[str],
     autostart_dir = Path(env.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "autostart"
     return {
         "static_wallpaper": {"state": "supported" if static_ready else "best_effort", "runtime_ready": static_ready, "backend": static_backend, "limitations": f"Desktop/session detected: {desktop}/{session}; support is desktop-environment specific."},
-        "video_wallpaper": {"state": video_state, "runtime_ready": video_ready, "backend": video_backend, "limitations": "X11 uses third-party embedding; Wayland requires a compositor-specific desktop-layer protocol."},
+        "video_wallpaper": {"state": video_state, "runtime_ready": video_ready, "backend": video_backend, "limitations": video_limitations},
         "html_wallpaper": {"state": html_state, "runtime_ready": html_ready, "backend": runtime_backend_label(html_runtime, "linux") if session == "x11" else "none", "limitations": "The current implementation is X11-only and is not a Wayland layer-shell client."},
         "global_hotkeys": {"state": hotkey_state, "runtime_ready": hotkey_ready, "backend": "pynput/X11 + active-window guard" if session == "x11" else "XDG GlobalShortcuts portal v1/v2 via dbus-next", "limitations": "Single-modifier X11 bindings are guarded outside desktop windows; Wayland registration requires user consent and a distribution-provided portal backend."},
         "mouse_through": {"state": "best_effort" if session == "x11" else "unsupported", "runtime_ready": session == "x11", "backend": "X11 Shape input region" if session == "x11" else "none", "limitations": "The X11 HTML window supports input-region toggling; the current Wayland backend cannot request desktop-layer input transparency."},
