@@ -11,6 +11,17 @@
 - **模式切换补偿失败对用户不可见（P1）** — 新模式启动失败且旧模式恢复/旧配置持久化也失败时，补偿结果只进日志，调用方只拿到一句通用异常。新增 `ModeSwitchReport`/`ModeRollbackOutcome` 结构化报告：`_compensate` 返回回滚实况（配置是否恢复/旧模式是否恢复运行/是否落盘/错误清单），`WallpaperModeError` 携带 report，engine 门面镜像为 `core.last_mode_switch_report`（与 `last_operation_error` 同模式），主窗口失败警告现附带一行回滚摘要（如"配置已恢复；旧模式恢复失败；恢复结果保存失败"）。成功路径行为与返回类型完全不变。
 - **HTML 来源校验注释与行为不符（P1）** — `source_validation.py` 注释声称"Reject non-standard ports (SSRF)"，实际分支为 `pass` 死代码。删除死代码并如实注明：自定义端口属有意允许（用户本机 webview + 本地开发服务器场景），结构性与危险模式校验（凭据注入/CRLF/UNC/SMB/设备名）保持不变；新增端口契约测试钉住真实行为。
 - **内部参数错误静默退出（P2）** — `--internal-video-player` 与 `--build-verify-file` 缺参数时返回 2 但无任何输出，终端与崩溃日志均无法定位。现向 stderr 输出明确的中文错误说明。
+- **Windows 单实例互斥检测不可靠（第一轮审计）** — `ctypes.windll.kernel32.GetLastError()` 可能被中间 ctypes 调用污染，漏检 `ERROR_ALREADY_EXISTS` 时第二个进程自认持有互斥体，穿透文件锁回退并产生双主实例。改用 `WinDLL(use_last_error=True)` + `ctypes.get_last_error()` 的文档化用法。
+- **Windows 设置变更原生过滤器悬挂指针（第一轮审计）** — `QAbstractNativeEventFilter` 安装后仅由局部变量持有，`del` 后 C++ 对象可被回收，事件循环携带已安装 filter 运行属 use-after-free。改为类属性 owner slot 持有（行为级探针实证引用与派发链存活）；`message_offset` 由硬编码 8 改为 `ctypes.sizeof(ctypes.c_void_p)`（x86 构建可移植）；退出路径 `del app` 纯表达式安全化，销毁顺序修正为 shim 随帧 teardown 先行、QApplication 由解释器收尾。"外部程序修改壁纸 → 历史记录"链路由此稳定。
+- **GNOME Shell.Eval 输出解析零匹配（第一轮审计）** — 原判定与 `gdbus call` 实际输出格式（`(true, '…')` 等四种变体）不符，该路径在 GNOME 上永不生效。改为 `startswith("(true")` + 第二元素判定，并以四种真实格式的断言钉住。
+- **二次启动转发命令可无限挂起（第一轮审计）** — `SendMessageW` 无超时，主实例 GUI 线程忙于退出事务或长切换时，转发托盘/右键动作的第二次启动整体挂起。改用 `SendMessageTimeoutW` + `SMTO_ABORTIFHUNG`（与右键快速路径同模式），1 秒预算，超时记日志返回失败。
+- **QtRootShim.after() 序号竞态丢失回调（第一轮审计）** — IPC 回调/幻灯片/热键线程并发调用 `after()` 时，无锁的 `self._seq += 1` 可发出重复计时器 id，`_schedule_after` 因此丢弃其中一个回调（表现为"置前窗口"偶发需要点两次）。加 `threading.Lock` 保护发号。
+- **Portal 全局热键授权被拒后状态失真（第一轮审计）** — `BindShortcuts` 才是实际请求授权的调用，其拒绝异常发生在 `start()` 返回 True 之后，服务一直认为热键已激活但永不触发。现捕获绑定失败、置 `_available=False` 并让 `is_running()`/`last_error` 反映真实状态。
+- **worker 线程内 `QTimer.singleShot` 永不触发（v1.6.0 既有 bug，验收轮实证）** — PySide6 6.11.1 中非 GUI 线程调用 `QTimer.singleShot` 为静默 no-op，"启动时自动更新必应"自 v1.6.0 起从未生效。改为专用 `Signal` + `QueuedConnection` 派发回 UI 线程执行。
+- **幻灯片启动先停后验的副作用（第一轮审计）** — 参数校验（模式/文件夹/图片列表）发生在停止当前动态壁纸之后，校验失败也会把正在播放的视频壁纸停掉，且无失败日志。现先校验后停止并记录根因；调用方通用补偿可能端到端重启旧动态模式的边界已在注释中如实标注（后续改进项）。
+- **共享配置归一化的空配置空窗期（第一轮审计）** — `clear()+update()` 会瞬间清空共享 dict，`_config_lock` 之外的并发读者可观察到（并序列化）空配置。改为逐键 diff 应用；验收注明这是 lost-update 竞态的部分缓解，彻底关闭需要直接写键的调用方同样持锁。
+- **代码签名时间戳走明文 HTTP（第一轮审计）** — RFC3161 时间戳端点由 `http://timestamp.digicert.com` 改为 HTTPS，消除中间人阻断时间戳请求或重放过期 token 的干扰向量。
+- **构建工具可诊断性（第一轮审计）** — 安装器源目录与变体不匹配时列出实际存在的 standalone 输出（原先只有一句 missing）；`--upx` 用于 PyInstaller 后端时显式报错（原先静默产出未压缩构建）；CI 发布资产选择正则改两段式（`-x64` 优先）并修正零匹配后误选，`api.github.com` 调用统一携带 `GITHUB_TOKEN` 认证（规避共享 runner IP 的匿名限流）。
 
 ### 变更
 
