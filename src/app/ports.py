@@ -33,6 +33,29 @@ class WallpaperBackend(Protocol):
 
 
 @runtime_checkable
+class StatefulWallpaperBackend(Protocol):
+    """Optional plugin/state-level capture+restore extension (schema=3).
+
+    Backends that cannot capture plugin state simply do not implement this
+    protocol; the session service then falls back to the path-only schema=2.
+
+    Contract:
+    - ``capture_state()`` returns ``None`` when no state-level capture is
+      possible (non-KDE session, unreachable scripting channel, parse
+      failure).  A returned mapping describes the platform's wallpaper
+      plugin state verbatim; it must never fabricate restorable local
+      files for remote or unknown sources.
+    - ``restore_state(state)`` applies a previously captured mapping and
+      returns a ``BackendResult``.  Backends without restore support must
+      return ``BackendResult(False, ...)`` rather than raising.
+    """
+
+    def capture_state(self) -> Mapping[str, Any] | None: ...
+
+    def restore_state(self, state: Mapping[str, Any]) -> BackendResult: ...
+
+
+@runtime_checkable
 class MediaBackend(Protocol):
     """Generic lifecycle contract for video and HTML wallpaper backends."""
 

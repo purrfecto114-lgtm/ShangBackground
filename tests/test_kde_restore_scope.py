@@ -113,9 +113,12 @@ def test_doctor_warns_when_plugin_out_of_range(monkeypatch: pytest.MonkeyPatch):
         {"applicable": True, "reachable": True, "plugins": ["org.kde.slideshow"], "restorable": False, "detail": "wallpaper plugins: org.kde.slideshow"},
     )
     assert checks[0].status == "warn"
-    assert "超出恢复范围" in checks[0].detail
+    # v1.6.3（schema=3）口径：插件会被重选恢复，但内部配置回落默认值。
+    assert "非图片插件" in checks[0].detail
+    assert "重选原插件" in checks[0].detail
     assert checks[0].hint  # 必须给出可操作提示
-    assert "不会被还原" in checks[0].hint
+    assert "回落插件默认值" in checks[0].hint
+    assert "不被保存" in checks[0].hint
 
 
 def test_doctor_warns_when_plasma_unreachable(monkeypatch: pytest.MonkeyPatch):
@@ -146,9 +149,15 @@ def _run_set(monkeypatch: pytest.MonkeyPatch, *, rc: int, readback_same: bool):
     _file_uri 必须一并 mock：它走 Path.as_uri()，Windows 上无盘符的
     POSIX 风格路径会抛 "relative path can't be expressed as a file URI"
     （CI Windows 矩阵实测；Linux 上是绝对路径所以本地验证不暴露）。
+
+    v1.6.3 D-Bus 前置检查（KDE_SUPPORT_PLAN 任务 3 步骤 2）加入后，
+    CI runner（无 DBUS_SESSION_BUS_ADDRESS、无 $XDG_RUNTIME_DIR/bus）会
+    在 spawn 前被拒——这里显式提供会话 bus 端点以保持"命令成功/失败"
+    两条被测路径的语义。
     """
     from platform_adapters.backends.linux import integration
 
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/tmp/shangbackground-test-bus")
     monkeypatch.setattr(integration.shutil, "which", lambda name: "/usr/bin/plasma-apply-wallpaperimage" if name == "plasma-apply-wallpaperimage" else None)
     monkeypatch.setattr(integration, "_run_args", lambda cmd, timeout=8: (rc, "", ""))
     monkeypatch.setattr(integration, "_ensure_existing_file", lambda path: "/tmp/wp.png")

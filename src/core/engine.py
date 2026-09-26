@@ -68,6 +68,16 @@ from platform_adapters.integration import (
     set_wallpaper_platform,
 )
 
+# v1.6.3 (KDE_SUPPORT_PLAN 任务 2)：可选的插件级壁纸状态捕获/恢复。Windows/macOS
+# 的 integration 模块没有这两个函数——from-import 缺名抛 ImportError，回退 None
+# 后行为与 v1.6.2 逐字节一致（session 服务照旧走 schema=2 路径模式）。
+try:
+    from platform_adapters.integration import capture_wallpaper_state as _capture_wallpaper_state
+    from platform_adapters.integration import restore_wallpaper_state as _restore_wallpaper_state
+except ImportError:  # Windows/macOS 后端无此可选能力
+    _capture_wallpaper_state = None
+    _restore_wallpaper_state = None
+
 try:
     import ctypes.wintypes
 except ImportError:
@@ -1181,6 +1191,8 @@ def _build_application_services() -> ApplicationServices:
             if IS_WINDOWS
             else (lambda path: set_wallpaper_platform(path))
         ),
+        capture_state=(lambda: _capture_wallpaper_state()) if _capture_wallpaper_state else None,
+        restore_state=(lambda state: _restore_wallpaper_state(state)) if _restore_wallpaper_state else None,
     )
     media_backend = ProviderMediaBackend(
         lambda: video_wallpaper,

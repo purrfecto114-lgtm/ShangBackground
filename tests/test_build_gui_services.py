@@ -43,7 +43,9 @@ def test_worker_stop_during_process_launch_is_not_lost(monkeypatch: pytest.Monke
             return iter(())
 
     class FakeProcess:
-        pid = 12345
+        # v1.6.3：恒假 pid（2^31-1）——三平台都不可能是活进程，mock 漂移时
+        # 不会误杀真实进程（详见 test_platform_runtime_regressions.FAKE_PID 注释）。
+        pid = 2**31 - 1
         stdout = FakeStdout()
 
         def __init__(self):

@@ -1,4 +1,14 @@
-"""Capture, persist and restore the wallpaper that preceded this app session."""
+"""Capture, persist and restore the wallpaper that preceded this app session.
+
+v1.6.3 (KDE_SUPPORT_PLAN 任务 2，schema=3)：当后端实现可选的
+capture_state/restore_state 端口时，会话记录额外携带插件级状态
+（``backend_state``），退出时可恢复 KDE containment 的壁纸插件与配置。
+诚实边界（不变量）：
+
+- ``wallpaper`` 字段语义不变——仅存本地可恢复路径，不可恢复时留空；
+- 无状态后端 / 捕获失败 → 逐字节走 schema=2 现状路径；
+- schema=2 旧文件读取时仅在后端支持状态恢复时转换（converted_from=2）。
+"""
 from __future__ import annotations
 
 from collections.abc import Callable, MutableMapping, Sequence
@@ -8,7 +18,7 @@ from threading import RLock
 import time
 from typing import Any
 
-from app.ports import WallpaperBackend
+from app.ports import BackendResult, WallpaperBackend
 from app.runtime_state import SessionWallpaperState
 from app.storage import atomic_write_json
 from app.wallpaper_repositories import normalize_wallpaper_path
@@ -78,10 +88,11 @@ class SessionWallpaperService:
     def persist(self) -> bool:
         with self._state.lock:
             snapshot = self._state.snapshot()
-            if not snapshot.wallpaper:
+            backend_state = snapshot.backend_state if self._valid_backend_state(snapshot.backend_state) else None
+            if not snapshot.wallpaper and backend_state is None:
                 return False
             payload = {
-                "schema": 2,
+                "schema": 3 if backend_state is not None else 2,
                 "platform": self._platform_name(),
                 "wallpaper": normalize_wallpaper_path(snapshot.wallpaper),
                 "style": dict(snapshot.style),
@@ -89,6 +100,8 @@ class SessionWallpaperService:
                 "pid": self._pid(),
                 "app_base_dir": self._app_base_dir(),
             }
+            if backend_state is not None:
+                payload["backend_state"] = dict(backend_state)
             try:
                 atomic_write_json(self._primary_file(), payload, mode=0o600)
                 return True
@@ -120,12 +133,41 @@ class SessionWallpaperService:
                     if platform and platform != self._platform_name():
                         self._log(f"启动前壁纸会话平台不匹配，已忽略: {platform}")
                         continue
+                    # schema=3：状态级恢复不依赖本地路径，wallpaper 为空不再拒绝。
+                    backend_state = data.get("backend_state")
+                    schema = data.get("schema")
+                    if isinstance(schema, int) and schema >= 3 and self._valid_backend_state(backend_state):
+                        target = normalize_wallpaper_path(data.get("wallpaper") or "")
+                        self._state.replace(target, data.get("style") or {}, backend_state)
+                        self._log("已从会话文件恢复启动前壁纸记录（含插件级状态）")
+                        return True
                     target = normalize_wallpaper_path(data.get("wallpaper") or "")
                     if not self.is_restorable(target):
                         self._log(f"启动前壁纸会话无效，已忽略: {target or '<empty>'}")
                         self._remove_quietly(session_file)
                         continue
-                    self._state.replace(target, data.get("style") or {})
+                    # 计划步骤 4：schema=2（或 3 无状态）的路径本来就是 org.kde.image
+                    # 语义——后端支持状态恢复时合成 schema=3 状态（fill_mode None=
+                    # 不动）；后端不支持则不合成，现状逐字节不变。
+                    converted_state = None
+                    if getattr(self._backend, "restore_state", None) is not None:
+                        converted_state = {
+                            "schema": 3,
+                            "kind": "kde-plasma-containments",
+                            "converted_from": 2,
+                            "containments": [
+                                {
+                                    "id": None,
+                                    "screen": None,
+                                    "plugin": "org.kde.image",
+                                    "image": target,
+                                    "image_uri": target,
+                                    "fill_mode": None,
+                                    "config_captured": True,
+                                }
+                            ],
+                        }
+                    self._state.replace(target, data.get("style") or {}, converted_state)
                     self._log(f"已从会话文件恢复启动前壁纸记录: {target}")
                     return True
                 except Exception as exc:
@@ -147,7 +189,29 @@ class SessionWallpaperService:
             else:
                 self.clear_files()
             try:
+                # 顺序契约：先读路径快照再捕获插件状态（本函数只读，顺序
+                # 保守；slideshow 场景 get_current() 返回 ""/远程时仍记录
+                # 状态——这正是 v1.6.2 降级声明所覆盖的缺口）。
                 current = normalize_wallpaper_path(self._backend.get_current())
+                backend_state = None
+                capture_fn = getattr(self._backend, "capture_state", None)
+                if capture_fn is not None:
+                    try:
+                        backend_state = capture_fn()
+                    except Exception as exc:
+                        self._log(f"捕获壁纸插件状态失败（回退路径模式）: {exc}")
+                        backend_state = None
+                if self._valid_backend_state(backend_state):
+                    # wallpaper 字段保持“本地可恢复路径”语义：不可恢复时
+                    # 留空（不伪造），插件级状态由 backend_state 承载。
+                    restorable = self.is_restorable(current)
+                    self._state.replace(current if restorable else "", self._get_style(), backend_state)
+                    if not self.persist():
+                        # The in-process snapshot is still useful for a normal exit,
+                        # but return False so callers know restart inheritance is unsafe.
+                        return False
+                    self._log("已记录启动前壁纸状态（含插件级状态，schema=3）")
+                    return True
                 if not self.is_restorable(current):
                     self._state.clear()
                     self._log("启动前壁纸不是可恢复的本地图片文件，已跳过记录: " + (current or "<empty>"))
@@ -168,11 +232,15 @@ class SessionWallpaperService:
         with self._operation_lock:
             with self._state.lock:
                 snapshot = self._state.snapshot()
-                if not snapshot.wallpaper:
+                if not snapshot.wallpaper and snapshot.backend_state is None:
                     self.load()
                     snapshot = self._state.snapshot()
                 target = normalize_wallpaper_path(snapshot.wallpaper)
                 style = dict(snapshot.style)
+                backend_state = snapshot.backend_state
+            # schema=3：插件级状态恢复（后端不支持时回落现状路径逻辑）。
+            if self._valid_backend_state(backend_state) and getattr(self._backend, "restore_state", None) is not None:
+                return self._restore_backend_state(backend_state, target, style, stop_dynamic=stop_dynamic, finalize=finalize)
             if not target:
                 self._log("没有可恢复的启动前壁纸记录")
                 return False
@@ -192,44 +260,106 @@ class SessionWallpaperService:
                 # backend is active.  That is a successful no-op, not a restore
                 # failure.  Real stop failures are reported by an exception.
 
-            config = self._config
-            previous_current = config.get("current_wallpaper")
-            try:
-                current = normalize_wallpaper_path(self._backend.get_current())
-            except Exception:
-                current = ""
+            return self._restore_and_commit_path(target, style, finalize=finalize)
 
+    def _restore_backend_state(
+        self,
+        backend_state: dict[str, Any],
+        target: str,
+        style: dict[str, Any],
+        *,
+        stop_dynamic: bool,
+        finalize: bool,
+    ) -> bool:
+        """恢复插件级状态（schema=3）；失败时诚实降级为路径恢复。"""
+        if stop_dynamic and self._stop_dynamic is not None:
             try:
-                self._restore_and_verify_target(
-                    target,
-                    style,
-                    already_current=self.same_path(current, target),
-                )
-                config["current_wallpaper"] = target
-                if not bool(self._persist_config()):
-                    raise RuntimeError("配置保存失败")
+                self._stop_dynamic()
             except Exception as exc:
-                if previous_current is None:
-                    config.pop("current_wallpaper", None)
-                else:
-                    config["current_wallpaper"] = previous_current
-                # Keep the session record. A later shutdown/restart can retry the
-                # config commit even when the OS wallpaper is already restored.
-                self._log(f"恢复启动前壁纸失败: {exc}")
+                self._log(f"恢复前停止动态壁纸失败: {exc}")
                 return False
 
-            # A manual restore is intentionally idempotent. Keep the immutable
-            # session anchor so a second click can refresh the same wallpaper and
-            # normal application exit can still restore it after later changes.
-            # Only the final shutdown transaction consumes the persisted anchor.
-            if finalize:
-                self.clear_files()
-                self._state.clear()
-            if self.same_path(current, target):
-                self._log("启动前壁纸路径未变化，已强制刷新桌面绘制: " + os.path.basename(target))
+        config = self._config
+        previous_current = config.get("current_wallpaper")
+        try:
+            result = self._backend.restore_state(backend_state)
+        except Exception as exc:
+            result = BackendResult(False, f"{exc}")
+        if not result.ok:
+            self._log(f"插件状态恢复失败: {result.message}")
+            if self.is_restorable(target):
+                # 诚实降级：插件状态不可恢复但路径可恢复时回退现状路径恢复。
+                self._log("插件状态恢复失败，已回退为图片路径恢复")
+                return self._restore_and_commit_path(target, style, finalize=finalize)
+            # 与现状失败语义一致：保留会话记录供重试，不清文件。
+            return False
+
+        try:
+            # target 为空（slideshow/远程）时不动 current_wallpaper。
+            if target:
+                config["current_wallpaper"] = target
+            if not bool(self._persist_config()):
+                raise RuntimeError("配置保存失败")
+        except Exception as exc:
+            if previous_current is None:
+                config.pop("current_wallpaper", None)
             else:
-                self._log("已恢复启动前壁纸: " + os.path.basename(target))
-            return True
+                config["current_wallpaper"] = previous_current
+            # Keep the session record. A later shutdown/restart can retry the
+            # config commit even when the OS wallpaper is already restored.
+            self._log(f"恢复启动前壁纸失败: {exc}")
+            return False
+
+        # A manual restore is intentionally idempotent. Keep the immutable
+        # session anchor so a second click can refresh the same wallpaper and
+        # normal application exit can still restore it after later changes.
+        # Only the final shutdown transaction consumes the persisted anchor.
+        if finalize:
+            self.clear_files()
+            self._state.clear()
+        self._log("已恢复启动前壁纸插件状态")
+        return True
+
+    def _restore_and_commit_path(self, target: str, style: dict[str, Any], *, finalize: bool) -> bool:
+        """现状路径恢复事务（schema=2 路径，供主路径与状态降级共用）。"""
+        config = self._config
+        previous_current = config.get("current_wallpaper")
+        try:
+            current = normalize_wallpaper_path(self._backend.get_current())
+        except Exception:
+            current = ""
+
+        try:
+            self._restore_and_verify_target(
+                target,
+                style,
+                already_current=self.same_path(current, target),
+            )
+            config["current_wallpaper"] = target
+            if not bool(self._persist_config()):
+                raise RuntimeError("配置保存失败")
+        except Exception as exc:
+            if previous_current is None:
+                config.pop("current_wallpaper", None)
+            else:
+                config["current_wallpaper"] = previous_current
+            # Keep the session record. A later shutdown/restart can retry the
+            # config commit even when the OS wallpaper is already restored.
+            self._log(f"恢复启动前壁纸失败: {exc}")
+            return False
+
+        # A manual restore is intentionally idempotent. Keep the immutable
+        # session anchor so a second click can refresh the same wallpaper and
+        # normal application exit can still restore it after later changes.
+        # Only the final shutdown transaction consumes the persisted anchor.
+        if finalize:
+            self.clear_files()
+            self._state.clear()
+        if self.same_path(current, target):
+            self._log("启动前壁纸路径未变化，已强制刷新桌面绘制: " + os.path.basename(target))
+        else:
+            self._log("已恢复启动前壁纸: " + os.path.basename(target))
+        return True
 
     def _restore_and_verify_target(
         self,
@@ -298,9 +428,17 @@ class SessionWallpaperService:
     def has_restore_candidate(self) -> bool:
         """Return whether memory or a persisted session file may be restorable."""
         with self._state.lock:
-            if self._state.snapshot().wallpaper:
+            snapshot = self._state.snapshot()
+            # v1.6.3：插件级状态（schema=3）本身即可作为恢复候选，即使
+            # wallpaper 为空（slideshow 场景）。无状态后端不受影响。
+            if snapshot.wallpaper or snapshot.backend_state is not None:
                 return True
         return any(os.path.isfile(path) for path in self.files())
+
+    @staticmethod
+    def _valid_backend_state(state: object) -> bool:
+        """仅非空 dict 视为可用插件级状态（空壳状态诚实回退 schema=2）。"""
+        return isinstance(state, dict) and bool(state)
 
     def is_restorable(self, path: str | None) -> bool:
         if not path:

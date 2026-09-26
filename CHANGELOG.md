@@ -2,6 +2,29 @@
 
 本文件记录 ShangBackground 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.6.3] - 2026-09-26
+
+v1.6.2 全绿后的持续优化批次：交付 `docs/KDE_SUPPORT_PLAN.md` 任务 2（schema=3 插件级恢复）、任务 3 步骤 1–2（D-Bus 前置检查）、任务 5 步骤 1（真机验收矩阵）与步骤 3 的 doctor 口径收敛。主线程亲读承重代码后由两个并行 subagent 实施（28-a/28-b），主线程校准返工 1 项（R1）。
+
+### 新增
+
+- **KDE 插件级壁纸状态保存/恢复（schema=3，计划任务 2）** — `app/ports.py` 新增可选 `StatefulWallpaperBackend` 协议（`capture_state()`/`restore_state()`，独立于 `WallpaperBackend` 以免破坏 runtime_checkable 检查）；Linux 后端新增 `capture_wallpaper_state()`（Plasma scripting 逐 containment 读取 id/screen/plugin/Image/FillMode，Image 读取复用 `_kde_read_wallpaper_values` 已验证的组回退链）与 `restore_wallpaper_state()`（id→screen→全量兜底三档匹配，`json.dumps` 防注入，复用 `last_kde_set_outcome` 的 accepted/verified 区分）；`bootstrap.py` 两个适配器与 `engine.py` 布线（Windows/macOS `ImportError`→None，行为与 v1.6.2 逐字节一致）；`SessionWallpaperService` 升级 schema=3：slideshow/远程壁纸等"路径不可恢复"场景现在也会记录插件状态（`wallpaper` 字段保持"本地可恢复路径"语义，不可恢复时留空不伪造），退出恢复优先走 `restore_state`，失败且路径可恢复时诚实降级回路径恢复；schema=2 旧文件读取时按需转换（`converted_from=2`，仅在后端支持状态恢复时）。诚实边界：`config_captured=True` 仅限 `org.kde.image`+读到 Image（R1 校准：FillMode 可缺省——KConfig 默认不写默认值键，缺省即缺省，恢复时不写该键）；非图片插件只保插件名，内部配置不伪造；远程 URL 原样记录在 `image_uri` 不转本地路径。测试：`tests/test_kde_wallpaper_state.py`（21 项，含 R1 回归钉）+ `tests/test_session_wallpaper_service.py`（16 项，新建）。
+- **KDE D-Bus 会话总线前置检查（计划任务 3 步骤 1–2）** — `DBUS_SESSION_BUS_ADDRESS` 与 `$XDG_RUNTIME_DIR/bus` 均不可用时，`_run_plasma_script` 与 `_set_kde_wallpaper` 在 spawn 任何外部命令之前返回可操作错误——"无会话总线/命令缺失（command not found）/Plasma 拒绝（rc!=0 stderr）"三种失败从此可区分，不再把"不在图形会话内"误报成命令问题。`tests/test_kde_restore_scope.py::_run_set` 补 D-Bus 环境钉住（CI runner 无 bus 端点，否则 rc=0 路径会被前置检查误拒——v1.6.2 `_file_uri` 教训的同款跨平台预防）。
+- **doctor "Wayland video embedding" 检查消费统一能力判定（计划任务 5 步骤 3 doctor 侧）** — 原检查只看 mpvpaper 命令存在性，KDE Wayland 装了 mpvpaper 就显示 pass，与 v1.6.2 能力口径（KDE 不默认 ready）分裂。新增门面 `platform_adapters.session.linux_video_wallpaper_capability()`（惰性暴露 `probe_capabilities()["video_wallpaper"]`），doctor 改为消费该判定：wlroots+mpvpaper → pass；KDE+mpvpaper → warn + `SHANGBACKGROUND_ALLOW_MPVPAPER` 实验开关指引；wlroots 未装 → 安装指引；GNOME 等 → "当前 Wayland 桌面无受支持的视频壁纸层"；探测异常 → warn "capability probe unavailable"。这是 REFACTOR_ROADMAP"统一后端选择器"方向的诊断消费面切面——启动器侧统一仍以 KDE 真机矩阵为前置条件，本版不动。测试：`tests/test_doctor_wayland_video.py`（11 项，含端到端实测：旧口径误显 pass 的 KDE Wayland+mpvpaper 场景现在如实 warn）。
+
+### 修复
+
+- **schema=3 捕获的 FillMode 严格门槛会丢 Image（主线程校准 R1）** — 初版实现把 `config_captured=True` 定义为"org.kde.image + Image + FillMode 为 int"，但 Plasma 的 KConfig 默认不写默认值键：FillMode 处于默认值的常见形态下，捕获会拒绝完整配置、恢复时只写插件名——**比 schema=2 更差**（图片本身丢失）。放宽为"org.kde.image + 读到 Image"，`fill_mode=None` 语义为"恢复时不写该键、Plasma 自行使用默认值"（缺省即缺省，不伪造值）。含捕获/恢复两侧回归钉。
+- **测试 FakeProcess 假 pid 可能撞真实进程（v1.6.2 验收轮遗留隐患）** — 测试硬编码的假 pid（9876/2469/2468/9753/8642/4321/12345）在 mock 漂移时会经 `os.kill`/`_reap_child`/状态文件消费方打到真实进程。统一替换为 `2**31-1`（Linux pid_max ≤ 4194304、macOS ≤ 99998、Windows 实际分配远低于 2^31，三平台均不可能是活进程；POSIX 上 `os.kill` 对它确定抛 `ProcessLookupError`）。
+
+### 文档
+
+- **新增 `docs/KDE_TEST_MATRIX.md`（计划任务 5 步骤 1）** — Plasma 5/6 × X11/Wayland × 单/双显示器 × 100%/150% 缩放的环境矩阵，含静态壁纸基础（中文路径/填充模式/双屏）、退出恢复事务（schema=3 专项：slideshow 插件重选验证、会话文件 schema 字段核对）、D-Bus 前置检查专项（无总线环境不拉起 qdbus）、能力与诊断口径（v1.6.3 修复的分裂点验证）、热键与单实例门禁项、动态壁纸证据记录（协议/输出/首帧截图三要素）；命令级冒烟只引用真实存在的 CLI 面（`--version`/`--doctor-json`/右键菜单文件参数模式——**没有** `set-wallpaper` 子命令，已事实核查），发布门禁规则明确"静态通过不自动升级动态状态"。项目无 KDE CI runner，本矩阵是能力状态升级为 `supported` 的唯一证据来源。
+- **`docs/KDE_SUPPORT_PLAN.md`** — 任务 2 步骤 1–4、任务 3 步骤 1–2、任务 5 步骤 1 与 doctor 口径收敛的实施记录（含 R1 校准与诚实边界）；任务 3 步骤 3–4（按输出的恢复策略）与任务 4（KDE 动态壁纸路线）仍为待办。
+- **README 恢复范围声明同步 schema=3 口径** — "退出恢复仅支持本地静态图片"更新为"插件级状态恢复（v1.6.3 schema=3）"：插件被重选、`org.kde.image` 完整恢复、非图片插件内部配置回落默认值的边界如实标注；doctor 对 KDE Wayland 视频场景不因 mpvpaper 已安装而显示 pass 的行为一并注明。
+- **doctor `kde-wallpaper-restore` 提示文案同步 schema=3 口径** — 超范围插件场景的 hint 从"配置不会被还原（完整插件恢复见计划任务 2）"更新为"插件本身会被恢复，但内部配置不被保存、会回落插件默认值"。
+- **版本号 1.6.2 → 1.6.3** — `src/app/version.py`、`src/main_version_info.txt`（含 filevers/prodvers 元组）、README 徽章三处同步，`release.py metadata` 校验通过（tag v1.6.3）。
+
 ## [1.6.2] - 2026-09-26
 
 针对 v1.6.1 审查报告（`docs/REVIEW_REPORT_V1.6.1.md`）的两项"必须修复"与 CI（PR #3）三平台失败。

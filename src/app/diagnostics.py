@@ -102,6 +102,50 @@ def _command_check(commands: tuple[str, ...], label: str, *, required: bool = Fa
     )
 
 
+def _wayland_video_check(capability: dict) -> DiagnosticCheck:
+    """KDE_SUPPORT_PLAN 任务 5：doctor 与 capabilities.py 统一口径。
+
+    消费 probe_capabilities() 的 "video_wallpaper" 子表，不再自行以
+    mpvpaper 命令存在性重判（旧口径在 KDE Wayland 装了 mpvpaper 时显示
+    pass，与 v1.6.2 能力声明“KDE 不默认 ready”分裂）。
+
+    状态映射：runtime_ready → pass；其余 → warn（可选项不 fail）。
+    detail 携带能力判定的 backend；hint 按 state/backend 区分：KDE 有
+    mpvpaper（实验开关指引）/ KDE 无后端 / wlroots 未装 mpvpaper（安装
+    指引）/ 其它（GNOME 等无受支持的视频壁纸层）。
+    """
+    if not capability:
+        # 异常防御：能力子表缺失/异常时如实降级，不渲染为 pass。
+        return DiagnosticCheck(
+            "Wayland video embedding",
+            "warn",
+            "capability probe unavailable",
+            required=False,
+            hint="能力判定暂时不可用，请重跑 --doctor",
+        )
+    backend = str(capability.get("backend") or "")
+    state = str(capability.get("state") or "")
+    if capability.get("runtime_ready"):
+        return DiagnosticCheck(
+            "Wayland video embedding",
+            "pass",
+            f"backend: {backend}" if backend else "runtime ready",
+            required=False,
+        )
+    detail = f"backend: {backend}" if backend else f"state: {state or 'unknown'}"
+    if "mpvpaper layer-shell" in backend:
+        # wlroots 会话但未装 mpvpaper：装上即可 ready。
+        hint = "安装 mpvpaper 后重跑 --doctor"
+    elif state == "best_effort":
+        # KDE/KWin 有 mpvpaper：backend 自带 experimental/untested 措辞。
+        hint = "KDE/KWin 未真机验证：如需实验请设置 SHANGBACKGROUND_ALLOW_MPVPAPER=1（可能黑屏或无首帧）"
+    elif "no supported KDE/KWin" in backend:
+        hint = "KDE 会话当前无受支持的视频壁纸后端（mpvpaper 面向 wlroots 系）"
+    else:
+        hint = "当前 Wayland 桌面无受支持的视频壁纸层（GNOME 需桌面扩展）"
+    return DiagnosticCheck("Wayland video embedding", "warn", detail, required=False, hint=hint)
+
+
 def _directory_check(path: Path, label: str, *, required: bool = True) -> DiagnosticCheck:
     ok = path.is_dir()
     return DiagnosticCheck(
@@ -248,6 +292,7 @@ def collect_diagnostics() -> DiagnosticReport:
         from platform_adapters.session import (
             detect_session_type,
             kde_wallpaper_restore_scope,
+            linux_video_wallpaper_capability,
             session_bus_available,
         )
 
@@ -264,6 +309,9 @@ def collect_diagnostics() -> DiagnosticReport:
         # v1.6.2 审查必须修复项 2：KDE 恢复范围降级声明——非图片插件
         # （slideshow/color/第三方）不会被退出恢复还原，必须在诊断中
         # 显式告知用户，而不是静默丢失后让人意外。
+        # v1.6.3（schema=3）口径更新：退出恢复现在会重选原插件并完整恢复
+        # org.kde.image 的 Image/FillMode；非图片插件的内部配置（轮播列表、
+        # 颜色等）仍无法捕获，会回落插件默认值——如实降级告知。
         scope = kde_wallpaper_restore_scope()
         if scope.get("applicable"):
             if not scope.get("reachable"):
@@ -284,10 +332,11 @@ def collect_diagnostics() -> DiagnosticReport:
                 checks.append(
                     DiagnosticCheck(
                         "kde-wallpaper-restore", "warn",
-                        f"当前 Plasma 壁纸插件超出恢复范围：{scope.get('detail', '')}。"
-                        "退出恢复仅支持本地静态图片（org.kde.image）",
-                        hint="slideshow/color/第三方壁纸插件的配置不会被还原；"
-                        "如需保留请在退出前自行记录插件设置（完整插件恢复见 docs/KDE_SUPPORT_PLAN.md 任务 2）",
+                        f"当前 Plasma 壁纸插件包含非图片插件：{scope.get('detail', '')}。"
+                        "退出恢复会重选原插件并恢复 org.kde.image 的图片/填充模式",
+                        hint="v1.6.3 schema=3：插件本身会被恢复，但 slideshow/color/"
+                        "第三方插件的内部配置（轮播列表、颜色等）不被保存，"
+                        "会回落插件默认值；如需完整保留请在退出前自行记录插件设置",
                     )
                 )
         if session == "wayland":
@@ -298,7 +347,9 @@ def collect_diagnostics() -> DiagnosticReport:
                 module.status = "warn"
                 module.detail += "; no D-Bus session bus endpoint detected"
             checks.append(module)
-            checks.append(_command_check(("mpvpaper",), "Wayland video embedding"))
+            # v1.6.3（KDE_SUPPORT_PLAN 任务 5）：消费统一能力判定，不再以
+            # mpvpaper 命令存在性自行重判（KDE Wayland 曾因此误显示 pass）。
+            checks.append(_wayland_video_check(linux_video_wallpaper_capability()))
         elif session == "x11":
             checks.append(
                 _module_check("pynput", "X11 global hotkeys", required=False, install="pynput")

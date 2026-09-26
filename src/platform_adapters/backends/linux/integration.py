@@ -231,8 +231,38 @@ def _qdbus_commands() -> list[str]:
     return [cmd for cmd in ("qdbus6", "qdbus") if shutil.which(cmd)]
 
 
+# KDE_SUPPORT_PLAN 任务 3 步骤 2：会话 bus 前置检查的可操作错误文案。
+# 与另外两种失败可区分：命令缺失="command not found"、Plasma 拒绝=rc!=0 stderr。
+_KDE_SESSION_BUS_UNAVAILABLE = (
+    "session bus unavailable: DBUS_SESSION_BUS_ADDRESS 未设置且 "
+    "$XDG_RUNTIME_DIR/bus 不存在——不在图形会话内或总线未导出"
+)
+
+
+def _session_bus_endpoint_missing() -> bool:
+    """当无任何可发现的用户会话 bus 端点时返回 True。
+
+    KDE_SUPPORT_PLAN 任务 3 步骤 2：``DBUS_SESSION_BUS_ADDRESS`` 非空即可用；
+    否则回退到 ``$XDG_RUNTIME_DIR/bus`` 的存在性检查（dbus-next 及 qdbus
+    都能通过这个常规 socket 连接，即使自启动入口没继承 ADDRESS）。
+    与 ``platform_adapters.backends.linux.session.session_bus_available``
+    同一判定链，但不依赖 dbus-next。
+    """
+    if str(os.environ.get("DBUS_SESSION_BUS_ADDRESS", "") or "").strip():
+        return False
+    runtime_dir = str(os.environ.get("XDG_RUNTIME_DIR", "") or "").strip()
+    if runtime_dir and os.path.exists(os.path.join(runtime_dir, "bus")):
+        return False
+    return True
+
+
 def _run_plasma_script(script: str, *, timeout: int = 10, allow_dbus_send: bool = False) -> tuple[bool, str, str]:
     """Run a Plasma shell script and return (success, stdout, diagnostics)."""
+    # 前置检查：无会话 bus 时任何 qdbus/dbus-send 都注定失败，且会把
+    # “不在图形会话内”误报成“命令缺失/Plasma 拒绝”。直接返回可操作错误，
+    # 不 spawn 任何外部命令（KDE_SUPPORT_PLAN 任务 3 步骤 2）。
+    if _session_bus_endpoint_missing():
+        return False, "", _KDE_SESSION_BUS_UNAVAILABLE
     errors: list[str] = []
     for qdbus in _qdbus_commands():
         rc, out, err = _run_args([qdbus, "org.kde.plasmashell", "/PlasmaShell", "org.kde.PlasmaShell.evaluateScript", script], timeout=timeout)
@@ -383,6 +413,304 @@ def last_kde_set_outcome() -> dict[str, object]:
     return dict(_LAST_KDE_SET_OUTCOME)
 
 
+# ── KDE_SUPPORT_PLAN 任务 2：插件级壁纸状态保存/恢复（schema=3） ──────────
+
+
+def _kde_capture_state_script() -> str:
+    """逐 containment 打印 ID/SCREEN/PLUGIN、命中的 Image 原始值与 FillMode。
+
+    Image 读取复用 ``_kde_read_wallpaper_values`` 已验证的组回退链与键序；
+    FillMode 从命中的组读（未命中任何组则不打印 IMAGE/FILLMODE 行）。
+    screen 兼容属性/方法两种 Plasma scripting API。
+    """
+    return r'''
+var allDesktops = desktops();
+for (var i = 0; i < allDesktops.length; i++) {
+    var d = allDesktops[i];
+    var plugin = d.wallpaperPlugin || "org.kde.image";
+    var s = (typeof d.screen === "function") ? d.screen() : d.screen;
+    var screenValue = -1;
+    if (typeof s === "number") {
+        screenValue = s;
+    } else if (typeof s === "string") {
+        var parsed = parseInt(s, 10);
+        if (!isNaN(parsed) && ("" + parsed) === s) {
+            screenValue = parsed;
+        }
+    }
+    print("ID:" + d.id + "  SCREEN:" + screenValue + "  PLUGIN:" + plugin);
+    var groups = [
+        ["Wallpaper", plugin, "General"],
+        ["Wallpaper", "org.kde.image", "General"],
+        ["Wallpaper", "image"],
+        ["Wallpaper"]
+    ];
+    var keys = ["Image", "wallpaper", "PreviewImage"];
+    var hit = false;
+    for (var g = 0; g < groups.length && !hit; g++) {
+        d.currentConfigGroup = groups[g];
+        for (var k = 0; k < keys.length; k++) {
+            var value = d.readConfig(keys[k], "");
+            if (value) {
+                print("IMAGE:" + value);
+                hit = true;
+                break;
+            }
+        }
+        if (hit) {
+            print("FILLMODE:" + d.readConfig("FillMode", ""));
+        }
+    }
+}
+'''
+
+
+def _parse_kde_capture_output(out: str) -> list[dict[str, object]]:
+    """把 capture 脚本输出解析为逐 containment 的原始记录。"""
+    records: list[dict[str, object]] = []
+    current: dict[str, object] | None = None
+    for line in out.splitlines():
+        text = line.strip()
+        if text.startswith("ID:"):
+            body = text[len("ID:"):]
+            id_part, sep, tail = body.partition("  SCREEN:")
+            raw_id = id_part.strip() if sep else body.strip()
+            screen: int | None = None
+            plugin = ""
+            if sep:
+                screen_part, sep2, plugin_tail = tail.partition("  PLUGIN:")
+                screen_text = screen_part.strip() if sep2 else ""
+                plugin = plugin_tail.strip() if sep2 else ""
+                try:
+                    screen = int(screen_text)
+                except ValueError:
+                    screen = None
+            try:
+                containment_id: int | None = int(raw_id)
+            except (TypeError, ValueError):
+                containment_id = None
+            current = {"id": containment_id, "screen": screen, "plugin": plugin, "raw_image": "", "fill_mode": None}
+            records.append(current)
+            continue
+        if current is None:
+            continue
+        if text.startswith("IMAGE:"):
+            raw_value = text.split(":", 1)[1].strip()
+            if raw_value.lower() not in {"null", "none", "undefined"}:
+                current["raw_image"] = raw_value
+        elif text.startswith("FILLMODE:"):
+            raw_fill = text.split(":", 1)[1].strip()
+            try:
+                current["fill_mode"] = int(raw_fill)
+            except ValueError:
+                current["fill_mode"] = None
+    return records
+
+
+def capture_wallpaper_state() -> dict | None:
+    """按 containment 保存 KDE 壁纸插件状态（schema=3，KDE_SUPPORT_PLAN 任务 2）。
+
+    诚实规则（与 ``kde_wallpaper_restore_scope`` 同风格，永不抛异常）：
+    - 非 KDE 会话、脚本不可达、解析失败或无任何 containment → None，
+      调用方（SessionWallpaperService）回退 schema=2 路径模式；
+    - ``config_captured=True`` 仅当 plugin==org.kde.image 且读到 Image 值；
+      FillMode 可为 None——KConfig 默认不写默认值键（主线程校准 R1：
+      若把缺省 FillMode 视为“配置不完整”而拒绝捕获 Image，恢复时会丢失
+      图片本身，比 schema=2 更差；诚实做法是缺省键保持缺省，恢复时不写
+      FillMode，Plasma 自行使用其默认值）；slideshow/color/第三方插件只
+      保插件名，内部配置不伪造；
+    - 远程 URL（http(s)://）原样记录在 image_uri，不转成本地路径；
+      image 字段仅当值是本地路径形态（file: URI 或绝对路径）时填。
+    """
+    try:
+        if not _is_kde_session():
+            return None
+        ok, out, _detail = _run_plasma_script(_kde_capture_state_script(), timeout=8)
+        if not ok:
+            return None
+        records = _parse_kde_capture_output(out or "")
+        if not records:
+            return None
+        containments: list[dict[str, object]] = []
+        for record in records:
+            raw_image = str(record.get("raw_image") or "")
+            image = ""
+            if raw_image:
+                if raw_image.startswith("file://"):
+                    image = _path_from_uri(raw_image)
+                elif raw_image.startswith(("http://", "https://")):
+                    image = ""
+                elif raw_image.startswith("/"):
+                    image = raw_image
+            fill_mode = record.get("fill_mode")
+            # R1 校准：KConfig 不写默认值键——FillMode 缺省不是“配置不完整”，
+            # 而是 Plasma 正在使用自己的默认值。缺省即缺省：恢复时不写该键。
+            config_captured = (
+                record.get("plugin") == KDE_RESTOREABLE_PLUGIN
+                and bool(raw_image)
+            )
+            containments.append(
+                {
+                    "id": record.get("id"),
+                    "screen": record.get("screen"),
+                    "plugin": str(record.get("plugin") or ""),
+                    "image": image,
+                    "image_uri": raw_image,
+                    "fill_mode": fill_mode,
+                    "config_captured": config_captured,
+                }
+            )
+        return {"schema": 3, "kind": "kde-plasma-containments", "containments": containments}
+    except Exception:
+        # 防御：状态捕获失败必须安静回退 schema=2，不能阻断启动记录。
+        return None
+
+
+def _kde_restore_script(entries: list[dict[str, object]]) -> str:
+    """生成恢复脚本：按 id→screen→全量兜底三档匹配 containment。
+
+    状态经 ``json.dumps`` 注入（复用 ``_kde_set_script`` 的 %s + json.dumps
+    防注入模式）；config_captured=False 的条目只写 wallpaperPlugin——插件
+    恢复但内部配置回落默认，不伪造配置。
+    """
+    return """
+var entries = %s;
+var allDesktops = desktops();
+function screenOf(d) {
+    var s = (typeof d.screen === "function") ? d.screen() : d.screen;
+    return (typeof s === "number") ? s : -1;
+}
+function findById(d) {
+    for (var j = 0; j < entries.length; j++) {
+        var e = entries[j];
+        if (e.id !== null && e.id !== undefined && Number(e.id) === Number(d.id)) {
+            return e;
+        }
+    }
+    return null;
+}
+function findByScreen(d) {
+    var sv = screenOf(d);
+    if (sv < 0) {
+        return null;
+    }
+    for (var j = 0; j < entries.length; j++) {
+        var e = entries[j];
+        if (e.screen !== null && e.screen !== undefined && Number(e.screen) >= 0 && Number(e.screen) === sv) {
+            return e;
+        }
+    }
+    return null;
+}
+function applyEntry(d, e) {
+    d.wallpaperPlugin = e.plugin;
+    if (e.config_captured) {
+        d.currentConfigGroup = Array("Wallpaper", e.plugin, "General");
+        var imageValue = (e.image_uri ? e.image_uri : e.image);
+        if (imageValue) {
+            d.writeConfig("Image", imageValue);
+        }
+        if (e.fill_mode !== null && e.fill_mode !== undefined) {
+            d.writeConfig("FillMode", Number(e.fill_mode));
+        }
+    }
+    d.reloadConfig();
+}
+var applied = 0;
+var located = 0;
+for (var i = 0; i < allDesktops.length; i++) {
+    var d = allDesktops[i];
+    var e = findById(d);
+    if (e === null) {
+        e = findByScreen(d);
+    }
+    if (e !== null) {
+        applyEntry(d, e);
+        applied++;
+        located++;
+    }
+}
+if (located === 0) {
+    for (var i2 = 0; i2 < allDesktops.length; i2++) {
+        for (var j2 = 0; j2 < entries.length; j2++) {
+            applyEntry(allDesktops[i2], entries[j2]);
+        }
+        applied++;
+    }
+}
+print("SHANGBACKGROUND_KDE_RESTORE_DONE:" + applied);
+""" % json.dumps(entries)
+
+
+def restore_wallpaper_state(state: object) -> tuple[bool, str]:
+    """恢复 capture_wallpaper_state 保存的 containment 插件状态。
+
+    匹配顺序：id → screen；两者都无法定位任何 containment 时对全部
+    containment 应用（Plasma 单屏常见形态的诚实兜底——捕获时 id/screen
+    未知或桌面重建后 id 改变，行为与既有 org.kde.image 全量设置一致）。
+    经 ``_run_plasma_script`` 执行（超时 6s），成功判定 rc==0 且脚本
+    报告应用了至少一个 containment。
+    """
+    try:
+        if not isinstance(state, dict) or state.get("kind") != "kde-plasma-containments":
+            return False, "无法识别的壁纸状态格式"
+        raw_entries = state.get("containments")
+        if not isinstance(raw_entries, list) or not raw_entries:
+            return False, "无法识别的壁纸状态格式"
+        entries: list[dict[str, object]] = []
+        for raw_entry in raw_entries:
+            if not isinstance(raw_entry, dict):
+                return False, "无法识别的壁纸状态格式"
+            plugin = str(raw_entry.get("plugin") or "")
+            if not plugin:
+                return False, "无法识别的壁纸状态格式"
+            fill_mode = raw_entry.get("fill_mode")
+            if fill_mode is not None and not isinstance(fill_mode, bool):
+                try:
+                    fill_mode = int(fill_mode)
+                except (TypeError, ValueError):
+                    fill_mode = None
+            entry_id = raw_entry.get("id")
+            entry_screen = raw_entry.get("screen")
+            entries.append(
+                {
+                    "id": entry_id if isinstance(entry_id, int) and not isinstance(entry_id, bool) else None,
+                    "screen": entry_screen if isinstance(entry_screen, int) and not isinstance(entry_screen, bool) else None,
+                    "plugin": plugin,
+                    "image": str(raw_entry.get("image") or ""),
+                    "image_uri": str(raw_entry.get("image_uri") or ""),
+                    "fill_mode": fill_mode,
+                    "config_captured": bool(raw_entry.get("config_captured")),
+                }
+            )
+        if not _is_kde_session():
+            return False, "not a KDE Plasma session: 无法在非 KDE 会话恢复 Plasma containment 状态"
+        ok, out, detail = _run_plasma_script(_kde_restore_script(entries), timeout=6)
+        applied = 0
+        if ok:
+            for line in (out or "").splitlines():
+                text = line.strip()
+                if text.startswith("SHANGBACKGROUND_KDE_RESTORE_DONE:"):
+                    try:
+                        applied = int(text.split(":", 1)[1])
+                    except ValueError:
+                        applied = 0
+                    break
+        if not ok or applied <= 0:
+            message = detail or f"Plasma 脚本未应用任何 containment（applied={applied}）"
+            _record_kde_set_outcome(accepted=False, verified=False, method="restore_state", detail=message)
+            return False, message
+        _record_kde_set_outcome(
+            accepted=True,
+            verified=False,
+            method="restore_state",
+            detail=f"restored {applied} containment(s); plugin read-back not verified",
+        )
+        return True, f"恢复 {applied} 个 containment 的壁纸插件状态"
+    except Exception as exc:  # 防御：恢复失败必须返回结构化错误，不抛异常。
+        return False, f"恢复壁纸插件状态失败: {exc}"
+
+
 def _set_kde_wallpaper(path: str, *, fill_mode: int | None = None) -> tuple[bool, str]:
     """Set a real static KDE/Plasma wallpaper.
 
@@ -397,6 +725,12 @@ def _set_kde_wallpaper(path: str, *, fill_mode: int | None = None) -> tuple[bool
     do NOT fail the entire operation when read-back is empty — the wallpaper
     is visible on screen regardless.
     """
+    # KDE_SUPPORT_PLAN 任务 3 步骤 2：无会话 bus 时在 spawn 任何外部命令前
+    # 返回可操作错误（与命令缺失/Plasma 拒绝可区分）。
+    if _session_bus_endpoint_missing():
+        detail = "KDE 会话总线不可用（未执行任何外部命令）：" + _KDE_SESSION_BUS_UNAVAILABLE
+        _record_kde_set_outcome(accepted=False, verified=False, method="session-bus-precheck", detail=detail)
+        return False, detail
     abs_path = _ensure_existing_file(path)
     uri = _file_uri(abs_path)
     errors: list[str] = []

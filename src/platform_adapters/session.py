@@ -44,6 +44,18 @@ if sys.platform.startswith("linux"):
         integration = importlib.import_module("platform_adapters.backends.linux.integration")
         return integration.kde_wallpaper_restore_scope()
 
+    def linux_video_wallpaper_capability() -> dict:
+        """Linux Wayland 视频壁纸能力判定（诊断消费，v1.6.3 口径统一）。
+
+        惰性加载 capabilities 模块；返回 probe_capabilities() 的
+        "video_wallpaper" 子 dict（state/runtime_ready/backend/limitations）。
+        诊断层据此渲染，不再自行以命令存在性重判（KDE_SUPPORT_PLAN 任务 5）。
+        """
+        capabilities = importlib.import_module("platform_adapters.backends.linux.capabilities")
+        result = capabilities.probe_capabilities()
+        video = result.get("video_wallpaper")
+        return dict(video) if isinstance(video, dict) else {}
+
 else:  # pragma: no cover - exercised only on non-Linux hosts
     _backend = None
 
@@ -64,9 +76,14 @@ else:  # pragma: no cover - exercised only on non-Linux hosts
         """非 Linux 主机：不适用（诊断调用方据此跳过本检查）。"""
         return {"applicable": False, "reachable": False, "plugins": [], "restorable": False, "detail": "linux-only"}
 
+    def linux_video_wallpaper_capability() -> dict:
+        """非 Linux 主机：不适用（调用方在 Linux 分支才使用）。"""
+        return {"state": "unavailable", "runtime_ready": False, "backend": "linux-only", "limitations": "linux-only"}
+
 __all__ = [
     "detect_session_type",
     "is_wayland_session",
     "session_bus_available",
     "kde_wallpaper_restore_scope",
+    "linux_video_wallpaper_capability",
 ]

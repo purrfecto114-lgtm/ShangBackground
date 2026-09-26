@@ -11,6 +11,13 @@ import pytest
 from app.backends.linux import dependencies as linux_dependencies
 from platform_adapters.backends.linux import capabilities, portal_hotkeys, session, video
 
+# v1.6.3（验收轮遗留隐患修复）：硬编码假 pid 可能与真机活进程撞号——
+# mock 漂移时 os.kill/_reap_child/状态文件消费方会打到真实进程。
+# Linux pid_max ≤ 4194304、macOS ≤ 99998、Windows 实际分配远低于 2^31；
+# 2^31-1 在三平台都不可能是活进程（POSIX 上 os.kill 对它确定抛
+# ProcessLookupError），且无任何断言依赖具体 pid 数值。
+FAKE_PID = 2**31 - 1
+
 
 def test_session_detection_falls_back_to_wayland_display():
     assert session.detect_session_type({"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"}) == "wayland"
@@ -199,7 +206,7 @@ def test_linux_install_plan_uses_active_venv_for_python_packages(monkeypatch: py
 def test_windows_player_is_terminated_when_state_persistence_fails(monkeypatch: pytest.MonkeyPatch):
     from platform_adapters.backends.windows import video as windows_video
 
-    process = SimpleNamespace(pid=4321)
+    process = SimpleNamespace(pid=FAKE_PID)
     terminated: list[object] = []
     monkeypatch.setattr(windows_video, "_launch", lambda _cmd: process)
     monkeypatch.setattr(windows_video, "_wait_for_player_ready", lambda _proc, _ipc: True)
@@ -222,7 +229,7 @@ def test_macos_immediate_player_exit_cleans_state(monkeypatch: pytest.MonkeyPatc
     removed: list[str] = []
 
     class FakeProcess:
-        pid = 9876
+        pid = FAKE_PID
 
         def poll(self):
             return 1
@@ -288,7 +295,7 @@ def test_terminate_process_tree_survives_windows_module_surface(monkeypatch: pyt
     from platform_adapters.backends.linux import video as linux_video
 
     class FakeProcess:
-        pid = 2469
+        pid = FAKE_PID
 
         def poll(self):
             return None  # 恒存活：走满宽限期 → 触发 SIGKILL 升级分支
@@ -317,7 +324,7 @@ def test_linux_video_terminates_child_when_state_persistence_fails(monkeypatch: 
     from platform_adapters.backends.linux import video as linux_video
 
     class FakeProcess:
-        pid = 2468
+        pid = FAKE_PID
 
         def __init__(self):
             self.terminated = False
@@ -365,7 +372,7 @@ def test_macos_video_terminates_child_when_state_persistence_fails(monkeypatch: 
     media.write_bytes(b"test")
 
     class FakeProcess:
-        pid = 9753
+        pid = FAKE_PID
 
         def __init__(self):
             self.terminated = False
@@ -415,7 +422,7 @@ def test_posix_html_terminates_child_when_state_persistence_fails(
         internal_flag = "--internal-html-runner"
 
     class FakeProcess:
-        pid = 8642
+        pid = FAKE_PID
 
         def __init__(self):
             self.terminated = False

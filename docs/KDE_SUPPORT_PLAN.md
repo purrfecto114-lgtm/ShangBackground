@@ -24,6 +24,47 @@
   计划任务 2 的后续目标。
 - 任务 3–5 未动，复选框仍为待办。
 
+**v1.6.3 批次 A 实施记录（Task 28-a）：**
+- 任务 2（schema=3）已实现：`app/ports.py` 新增可选
+  `StatefulWallpaperBackend` 协议（capture_state/restore_state）；
+  `linux/integration.py` 新增 `capture_wallpaper_state()`（逐 containment
+  保存 plugin/Image/FillMode，诚实规则：config_captured 仅限
+  org.kde.image+读到 Image（主线程校准 R1：FillMode 可缺省——KConfig
+  默认不写默认值键，缺省即缺省，恢复时不写该键，避免丢 Image），
+  远程 URL 原样记录不伪造本地路径）与
+  `restore_wallpaper_state()`（id→screen→全量兜底三档匹配，json.dumps
+  防注入）；`bootstrap.py` 两个适配器 + `engine.py` 布线（Windows/macOS
+  ImportError→None，行为不变）；`session_wallpaper_service.py` schema=3
+  持久化/加载/恢复（slideshow 等非图片插件退出时可恢复插件名，内部配置
+  如实声明不伪造）；schema=2 旧文件读取时按需转换（converted_from=2）。
+  测试：`tests/test_kde_wallpaper_state.py`（21 项，含 R1 回归钉）+
+  `tests/test_session_wallpaper_service.py`（16 项，该文件为本次新建）。
+  步骤 5 的 commit 由主线程统一执行。
+- 任务 3 步骤 1–2（D-Bus 前置检查）已实现：
+  `_session_bus_endpoint_missing()` + `_run_plasma_script`/
+  `_set_kde_wallpaper` 双入口前置检查——"无会话总线/命令缺失/Plasma 拒绝"
+  三种错误可区分，无 bus 时不 spawn 任何外部命令；
+  `tests/test_kde_restore_scope.py::_run_set` 补 D-Bus 环境钉住
+  （CI runner 无 bus 端点，否则 rc=0 路径会被前置检查误拒）。
+  步骤 3–4（按输出的恢复策略）仍为待办。
+
+**v1.6.3 批次 B/主线程补充（Task 28-b + 28-c）：**
+- 任务 5 步骤 3 的 doctor 口径收敛已实现：门面
+  `platform_adapters.session.linux_video_wallpaper_capability()` 暴露
+  `probe_capabilities()["video_wallpaper"]`，doctor 的
+  “Wayland video embedding”检查改为消费该统一判定（KDE Wayland
+  +mpvpaper 不再误显示 pass，改为 warn+实验开关指引；GNOME 等无桌面层
+  后端的会话如实 warn）。测试：`tests/test_doctor_wayland_video.py`
+  （11 项）。启动器侧统一（REFACTOR_ROADMAP“统一后端选择器”）仍以
+  KDE 真机矩阵为前置条件，本批不动。
+- doctor 的 kde-wallpaper-restore 提示文案同步 schema=3 口径（插件会被
+  重选恢复，非图片插件内部配置回落默认值）。
+- 任务 5 步骤 1 的矩阵文档已建：`docs/KDE_TEST_MATRIX.md`（真机验收
+  项/命令级冒烟/证据记录表，供人工验收使用——项目无 KDE CI runner，
+  发布门禁升级仍待真机结果）。
+- 测试卫生：FakeProcess 假 pid 统一为 2^31-1（三平台均不可能是活进程，
+  mock 漂移时不会误杀真实进程）。
+
 ---
 
 ### 任务 1：冻结当前 KDE 行为契约
@@ -81,7 +122,10 @@ git commit -m "fix(linux): 不再把 KDE Wayland mpvpaper 标记为已验证"
 - 测试：`tests/test_session_wallpaper_service.py`
 - 创建：`tests/test_kde_wallpaper_state.py`
 
-- [ ] **步骤 1：编写失败测试，覆盖非图片插件**
+- [x] **步骤 1：编写失败测试，覆盖非图片插件**（v1.6.3 批次 A：
+  `tests/test_kde_wallpaper_state.py::test_kde_snapshot_preserves_plugin_and_config`
+  等全套；接口名按实施规格定为 `capture_wallpaper_state`/`restore_wallpaper_state`）
+
 
 ```python
 def test_kde_snapshot_preserves_plugin_and_config():
@@ -92,23 +136,25 @@ def test_kde_snapshot_preserves_plugin_and_config():
     assert isinstance(state["config"], dict)
 ```
 
-- [ ] **步骤 2：运行测试验证当前接口缺失**
+- [x] **步骤 2：运行测试验证当前接口缺失**
 
 运行：`PYTHONPATH=src python -m pytest tests/test_kde_wallpaper_state.py -q`
 
 预期：失败并报告 `get_wallpaper_state_platform` 尚未定义。
 
-- [ ] **步骤 3：实现状态端口**
+- [x] **步骤 3：实现状态端口**（实施为可选协议 `StatefulWallpaperBackend`，
+  不动 `WallpaperBackend` 的 runtime_checkable 契约）
 
 为 `WallpaperBackend` 增加可选的 `capture_state()` / `restore_state()` 能力；KDE 实现通过 Plasma scripting 读取每个 containment 的 plugin、Image、FillMode 和必要的 config group。旧的仅路径接口继续保留作为兼容回退。
 
-- [ ] **步骤 4：加入 schema 迁移测试**
+- [x] **步骤 4：加入 schema 迁移测试**（`converted_from=2` 转换 +
+  远程/未知来源不伪造为本地文件）
 
 使用 `schema=3` 保存 KDE 状态；读取 `schema=2` 时把旧路径转换成 `org.kde.image` 状态；非本地图片、远程来源和未知插件不得被伪造为可恢复本地文件。
 
-- [ ] **步骤 5：运行通过并提交**
+- [ ] **步骤 5：运行通过并提交**（commit 由主线程统一执行）
 
-运行：`PYTHONPATH=src python -m pytest tests/test_session_wallpaper_service.py tests/test_kde_wallpaper_state.py -q`
+运行：`PYTHONPATH=src python -m pytest tests/test_session_wallpaper_service.py tests/test_kde_wallpaper_state.py -q`（v1.6.3 实测：37 passed——R1 校准补钉后 21+16）
 
 ```bash
 git add src/app/ports.py src/app/session_wallpaper_service.py src/platform_adapters/backends/linux/integration.py src/core/engine.py tests/test_session_wallpaper_service.py tests/test_kde_wallpaper_state.py
@@ -124,13 +170,15 @@ git commit -m "feat(kde): 保存并恢复 Plasma 壁纸插件状态"
 - 测试：`tests/test_linux_wayland_backends.py`
 - 创建：`tests/test_kde_static_wallpaper_contract.py`
 
-- [ ] **步骤 1：测试 D-Bus、命令和无会话三种路径**
+- [x] **步骤 1：测试 D-Bus、命令和无会话三种路径**（v1.6.3 批次 A：
+  `test_dbus_precheck_blocks_before_spawning_commands` 三情形 +
+  `_run_set` 命令成功/拒绝路径 + `test_restore_failure_reports_plasma_rejection`；
+  plasma-apply 成功路径由 `tests/test_kde_restore_scope.py` 既有 outcome 测试覆盖）
 
 测试必须分别模拟：`plasma-apply-wallpaperimage` 成功、qdbus 脚本成功、D-Bus 不可用。每个测试断言返回值、诊断信息和是否允许回滚。
 
-- [ ] **步骤 2：实现会话 bus 前置检查**
-
-当 `DBUS_SESSION_BUS_ADDRESS` 和 `$XDG_RUNTIME_DIR/bus` 均不存在时，在调用外部命令前返回可操作错误，不把命令缺失、D-Bus 不可用和 Plasma 拒绝调用混成一个错误。
+- [x] **步骤 2：实现会话 bus 前置检查**（`_session_bus_endpoint_missing()` +
+  `_run_plasma_script`/`_set_kde_wallpaper` 双入口；无 bus 不 spawn 任何命令）
 
 - [ ] **步骤 3：实现按输出的恢复策略**
 

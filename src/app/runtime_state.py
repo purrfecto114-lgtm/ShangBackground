@@ -6,6 +6,7 @@ business decisions remain in their respective services/repositories.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from threading import Event, RLock
 from time import monotonic
@@ -303,9 +304,19 @@ class DynamicWallpaperState:
 
 @dataclass(frozen=True, slots=True)
 class SessionWallpaperSnapshot:
+    """Immutable snapshot of the startup-wallpaper restore anchor.
+
+    v1.6.3 (schema=3): ``backend_state`` carries the optional platform
+    plugin/state-level capture (e.g. KDE Plasma containments).  ``wallpaper``
+    keeps its schema=2 semantics — the locally restorable path, or "" when
+    the pre-session wallpaper is not a restorable local image (slideshow,
+    remote source).  The default keeps the 3-argument constructor intact.
+    """
+
     wallpaper: str
     style: dict[str, Any]
     captured: bool
+    backend_state: Mapping[str, Any] | None = None
 
 
 class SessionWallpaperState:
@@ -316,6 +327,7 @@ class SessionWallpaperState:
         self._wallpaper = ""
         self._style: dict[str, Any] = {}
         self._captured = False
+        self._backend_state: dict[str, Any] | None = None
 
     @property
     def lock(self) -> RLock:
@@ -327,19 +339,27 @@ class SessionWallpaperState:
                 self._wallpaper,
                 dict(self._style),
                 self._captured,
+                dict(self._backend_state) if self._backend_state is not None else None,
             )
 
-    def replace(self, wallpaper: str, style: dict[str, Any] | None = None) -> None:
+    def replace(
+        self,
+        wallpaper: str,
+        style: dict[str, Any] | None = None,
+        backend_state: Mapping[str, Any] | None = None,
+    ) -> None:
         with self._lock:
             self._wallpaper = str(wallpaper or "")
             self._style = dict(style or {})
             self._captured = bool(self._wallpaper)
+            self._backend_state = dict(backend_state) if backend_state is not None else None
 
     def clear(self) -> None:
         with self._lock:
             self._wallpaper = ""
             self._style = {}
             self._captured = False
+            self._backend_state = None
 
 
 class OperationClockState:

@@ -40,7 +40,12 @@ def select_platform_id(platform_id: str | None = None) -> str:
 
 
 class ModuleWallpaperBackend:
-    """Adapt a selected platform integration module to WallpaperBackend."""
+    """Adapt a selected platform integration module to WallpaperBackend.
+
+    v1.6.3 (schema=3): also forwards the optional plugin/state-level capture
+    and restore extension when the platform module provides it.  Backends
+    without those functions degrade honestly instead of raising.
+    """
 
     def __init__(self, module: ModuleType, *, fit_args: tuple[Any, ...] = ()) -> None:
         self._module = module
@@ -54,6 +59,17 @@ class ModuleWallpaperBackend:
 
     def set_wallpaper(self, path: str) -> None:
         self._module.set_wallpaper_platform(path)
+
+    def capture_state(self) -> Any:
+        getter = getattr(self._module, "capture_wallpaper_state", None)
+        return getter() if getter else None
+
+    def restore_state(self, state: Any) -> BackendResult:
+        setter = getattr(self._module, "restore_wallpaper_state", None)
+        if setter is None:
+            return BackendResult(False, "backend does not support state restore")
+        ok, message = setter(state)
+        return BackendResult(bool(ok), str(message))
 
 
 class ModuleMediaBackend:
@@ -136,7 +152,12 @@ class ModuleMediaBackend:
 
 
 class CallbackWallpaperBackend:
-    """Wallpaper port backed by callbacks resolved at call time."""
+    """Wallpaper port backed by callbacks resolved at call time.
+
+    v1.6.3 (schema=3): optional ``capture_state``/``restore_state`` callbacks
+    wire the platform integration's plugin/state-level extension into the
+    session service without requiring every backend to implement it.
+    """
 
     def __init__(
         self,
@@ -144,10 +165,14 @@ class CallbackWallpaperBackend:
         get_current: Callable[[], str],
         configure_fit_mode: Callable[[str], None],
         set_wallpaper: Callable[[str], None],
+        capture_state: Callable[[], Any] | None = None,
+        restore_state: Callable[[Any], Any] | None = None,
     ) -> None:
         self._get_current = get_current
         self._configure_fit_mode = configure_fit_mode
         self._set_wallpaper = set_wallpaper
+        self._capture_state = capture_state
+        self._restore_state = restore_state
 
     def get_current(self) -> str:
         return str(self._get_current() or "")
@@ -157,6 +182,16 @@ class CallbackWallpaperBackend:
 
     def set_wallpaper(self, path: str) -> None:
         self._set_wallpaper(path)
+
+    def capture_state(self) -> Any:
+        if self._capture_state is None:
+            return None
+        return self._capture_state() or None
+
+    def restore_state(self, state: Any) -> BackendResult:
+        if self._restore_state is None:
+            return BackendResult(False, "not supported")
+        return _backend_result(self._restore_state(state))
 
 
 class ProviderMediaBackend(ModuleMediaBackend):
