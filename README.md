@@ -108,7 +108,7 @@ python build_tools/build.py mpv list --target windows --arch x86_64
 
 下载内容按平台/架构/版本保存到 `src/bin/mpv/`，构建时只携带选中的一个版本。普通构建不会隐式联网下载原生代码。Linux 可使用本地或目标系统 libmpv，macOS 使用 AVFoundation。
 
-Windows 安装包使用 Nuitka full standalone + UPX，再由 [Inno Setup 7 x64](https://jrsoftware.org/isdl.php) 封装。UPX 4.2.0+ 应位于 `PATH`，也可通过 `SHANGBACKGROUND_UPX_BINARY` 指定：
+Windows 安装包使用 Nuitka full standalone + UPX，再由 [Inno Setup 7](https://jrsoftware.org/isdl.php) 封装。UPX 4.2.0+ 应位于 `PATH`，也可通过 `SHANGBACKGROUND_UPX_BINARY` 指定：
 
 ```bash
 # 构建并验证 Nuitka full standalone；缺少 UPX 时直接失败
@@ -153,7 +153,7 @@ python build_tools/build.py --tool pyinstaller --target windows --profile full \
 - `CodeQL`：在推送、Pull Request 和每周计划任务中执行 Python 安全分析；
 - `Dependency review`：阻止 Pull Request 引入已知高危依赖，并由 Dependabot 每周维护 Python 与 Action 版本。
 
-自动发布生成 Windows x86_64、Linux x86_64、macOS x86_64、macOS arm64 的 Nuitka full standalone、Windows Inno Setup 7 安装包、源码包和 `SHA256SUMS.txt`。Windows/Linux 强制使用 UPX，macOS 按平台约束禁用 UPX。完整流程见 [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md)。
+自动发布生成 Windows x86_64、Linux x86_64、macOS x86_64、macOS arm64 的 Nuitka full standalone、Windows Inno Setup 安装包（CI 优先使用 Inno Setup 7，不可用时回退 6.5.5）、源码包和 `SHA256SUMS.txt`。Windows/Linux 强制使用 UPX，macOS 按平台约束禁用 UPX。完整流程见 [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md)。
 
 ## 文档
 
