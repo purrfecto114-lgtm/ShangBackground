@@ -141,12 +141,18 @@ def test_doctor_skips_check_outside_kde(monkeypatch: pytest.MonkeyPatch):
 
 
 def _run_set(monkeypatch: pytest.MonkeyPatch, *, rc: int, readback_same: bool):
-    """mock 掉外部命令与读回，跑 _set_kde_wallpaper 并返回 (结果, outcome)。"""
+    """mock 掉外部命令与读回，跑 _set_kde_wallpaper 并返回 (结果, outcome)。
+
+    _file_uri 必须一并 mock：它走 Path.as_uri()，Windows 上无盘符的
+    POSIX 风格路径会抛 "relative path can't be expressed as a file URI"
+    （CI Windows 矩阵实测；Linux 上是绝对路径所以本地验证不暴露）。
+    """
     from platform_adapters.backends.linux import integration
 
     monkeypatch.setattr(integration.shutil, "which", lambda name: "/usr/bin/plasma-apply-wallpaperimage" if name == "plasma-apply-wallpaperimage" else None)
     monkeypatch.setattr(integration, "_run_args", lambda cmd, timeout=8: (rc, "", ""))
     monkeypatch.setattr(integration, "_ensure_existing_file", lambda path: "/tmp/wp.png")
+    monkeypatch.setattr(integration, "_file_uri", lambda path: f"file://{path}")
     monkeypatch.setattr(
         integration,
         "_verify_kde_wallpaper",
