@@ -65,6 +65,67 @@
 - 测试卫生：FakeProcess 假 pid 统一为 2^31-1（三平台均不可能是活进程，
   mock 漂移时不会误杀真实进程）。
 
+**v1.6.4 批次 A 实施记录（Task 30-a）：**
+- 任务 3 步骤 3（按输出的恢复策略）已实现：
+  `linux/integration.py` 新增模块级公开函数
+  `set_kde_wallpaper_for_screen(path, screen_index, *, fill_mode)`
+  （后端能力交付，UI/ports 接线为后续工作）。前置检查链顺序固定：
+  `screen_index` 参数校验（负数/非 int/bool/float → 参数错误，不 spawn）
+  → `_ensure_existing_file` → `_session_bus_endpoint_missing`（先于任何
+  外部命令 spawn）→ 只读探针（复用 schema=3 的
+  `_kde_capture_state_script`/`_parse_kde_capture_output`）建立
+  containment→screen 显式映射。探针命中且 id 可解析的 containment 才
+  允许写入；写入脚本（`_kde_set_for_screen_script`）用 id 与 screen
+  双重条件定位（防探针与写入之间桌面配置变化的竞态），打印
+  `SHANGBACKGROUND_KDE_SET_DONE:<applied>`；运行时 applied==0 同样
+  判失败、不部分成功。plasma-apply-wallpaperimage 是全输出命令，该
+  路径禁用（脚本注释与 Python 注释双处说明）；路径与 targets 均经
+  `json.dumps` 注入。无法映射（没有任何 containment 的 screen==N，或
+  命中者缺少可解析 id）→ 可操作错误（含探针观察到的 screen 集），
+  与“命令缺失/无会话 bus/Plasma 拒绝”三种既有错误可区分。
+  `_record_kde_set_outcome` method 用 `evaluateScript(screen=N)` /
+  `probe-containment-map(screen=N)` / `session-bus-precheck(screen=N)`
+  可区分名称；per-screen 成功不伪读回确认（`_verify_kde_wallpaper` 读
+  全输出第一个本地图片，对单屏场景会误导——verified=False 如实记录）。
+  全输出路径 `_set_kde_wallpaper` 零行为变更（契约测试钉住 plasma-apply
+  成功与 evaluateScript 回退两条路径）。
+- capabilities.py 的 `multi_monitor_static`（KDE 分支）从“与全输出同源”
+  收敛为真实信号：只有 Plasma scripting 通道（qdbus6/qdbus）在场才
+  `runtime_ready`——plasma-apply-wallpaperimage 在场只代表全输出可用
+  （backend 文案如实说明）；limitations 声明显式映射与无法映射即拒绝
+  语义。非 KDE 分支维持原 generic 行为（仅去掉已单独处理的 KDE 提法）。
+- docs/ARCHITECTURE.md 新增“Linux 多显示器静态壁纸”章节（全输出 vs
+  按输出两条路径、拒绝部分成功语义、plasma-apply-wallpaperimage 为何
+  只能用于全输出、能力口径对齐）。
+- 测试：新建 `tests/test_kde_static_wallpaper_contract.py`（16 项：全输出
+  契约钉住 2 + per-screen 成功/映射/竞态/前置检查/参数校验/注入防护 14）；
+  `tests/test_linux_wayland_backends.py` 补 2 项（KDE multi_monitor 能力
+  口径 + per-screen 公开交付面签名契约）。
+- 全量验证：pytest 427 passed + 2 failed（test_build_gui_services 两项
+  xvfb-xauth 沙箱已知基线）+ 7 skipped；ruff check src tests 全过；
+  compileall 全过。步骤 5 的 commit 由主线程统一执行。
+
+**v1.6.4 批次 B/验收与主线程校准（Task 30-b + 30-c）：**
+- 独立验收（30-b）判定 **ACCEPT**：M1 变异测试 4/4 咬合（无法映射回退
+  全输出 / 删 id 双重条件 / applied==0 判成功 / 删 D-Bus 前置——每次
+  变异均字节级还原，md5 双核对零残留）；M2 回归红线（windows/macos
+  后端 0 行变更、integration.py 纯新增、427+2+7 数字吻合）；M3-M6
+  诚实性/规格符合度/文档真实性/静态检查全过。
+- 自设计变异 5（写通道拒绝回退全输出）存活——定位为**测试缺口而非代码
+  缺陷**（该路径实现正确、八类失败矩阵消息实测可区分）；主线程校准按
+  S1 建议补钉：`test_per_screen_write_channel_rejection_reports_failure_without_fallback`
+  （断言 calls==probe+write×2、run_args==[]、method、拒绝原因透传）。
+- S 类处置：S1 已补（上述测试）；S3 已修（uri/abs_path 同因拒绝只记录
+  一次，S1 测试同时钉住 count==1）；S2 已修（ARCHITECTURE Windows 措辞
+  限定为"当前包装器不传 monitor ID，一次调用设置全部输出"，纠正过度
+  声明）；S4 已修（前置检查链补 screen_index 参数校验环节）；S5 记录
+  在案（fill_mode 与既有 `_kde_set_script` 同等宽松，UI 接线时再对称
+  校验）。
+- 版本 1.6.3 → 1.6.4（version.py / main_version_info.txt 含 filevers/
+  prodvers / README 徽章）；CHANGELOG [1.6.4] 完整段落；README 恢复
+  范围声明新增按显示器后端能力条目（明确 UI 尚未接线）。commit 由
+  主线程执行。
+
 ---
 
 ### 任务 1：冻结当前 KDE 行为契约
@@ -180,11 +241,22 @@ git commit -m "feat(kde): 保存并恢复 Plasma 壁纸插件状态"
 - [x] **步骤 2：实现会话 bus 前置检查**（`_session_bus_endpoint_missing()` +
   `_run_plasma_script`/`_set_kde_wallpaper` 双入口；无 bus 不 spawn 任何命令）
 
-- [ ] **步骤 3：实现按输出的恢复策略**
+- [x] **步骤 3：实现按输出的恢复策略**（v1.6.4 批次 A：
+  `integration.set_kde_wallpaper_for_screen()` 公开函数——先跑只读探针建立
+  containment→screen 显式映射，写入脚本用 id+screen 双重条件只定位探针命中的
+  containment；无法映射（或命中者缺少可解析 id）时拒绝执行——不 spawn 写脚本、
+  不触碰任何桌面；写入时 applied==0 同样判失败；plasma-apply-wallpaperimage
+  为全输出命令，该路径禁用。UI/ports 接线为后续工作。测试：
+  `tests/test_kde_static_wallpaper_contract.py`（16 项）；KDE 能力口径
+  `multi_monitor_static` 同步对齐（capabilities.py）。）
 
 静态图片可对全部输出设置；如果用户选择按显示器设置，必须使用明确的 containment/output 映射，并在无法映射时拒绝部分成功。
 
-- [ ] **步骤 4：运行测试和静态检查**
+- [x] **步骤 4：运行测试和静态检查**（v1.6.4 批次 A 实测：
+  `PYTHONPATH=src python3 -m pytest tests/test_linux_wayland_backends.py
+  tests/test_kde_static_wallpaper_contract.py -q` → 24 passed，0 failures；
+  全量 427 passed + 2 failed（xvfb-xauth 沙箱已知基线）+ 7 skipped；
+  ruff / compileall 全过）
 
 运行：`PYTHONPATH=src python -m pytest tests/test_linux_wayland_backends.py tests/test_kde_static_wallpaper_contract.py -q`；预期 0 failures。
 

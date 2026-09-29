@@ -2,6 +2,26 @@
 
 本文件记录 ShangBackground 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.6.4] - 2026-09-29
+
+v1.6.3 全绿后的持续优化批次：交付 `docs/KDE_SUPPORT_PLAN.md` 任务 3 步骤 3–4（按输出的恢复策略）。实施 agent（30-a）+ 独立验收 agent（30-b，M1 变异 4/4 咬合）+ 主线程校准（S1/S3/S2/S4）三段式流程。
+
+### 新增
+
+- **KDE 按显示器（per-screen）静态壁纸设置（计划任务 3 步骤 3）** — `linux/integration.py` 新增模块级公开函数 `set_kde_wallpaper_for_screen(path, screen_index, *, fill_mode)`（纯新增 165 行，全输出路径 `_set_kde_wallpaper` 零改动）：前置检查链固定为 screen_index 参数校验 → 文件存在 → 会话总线前置检查 → 只读探针（复用 schema=3 的 `_kde_capture_state_script` 建立 containment→screen 显式映射）→ 写入脚本用 **id+screen 双重条件**只定位探针命中的 containment（防探针与写入之间桌面配置变化的竞态）。**拒绝部分成功**是核心语义：请求的 screen 无法映射到任何 containment（或命中者缺少可解析 id、做不了双重定位）时返回结构化失败，不 spawn 写脚本、不触碰任何桌面；写入时 `applied=0` 同样判失败。`plasma-apply-wallpaperimage` 是全输出命令，按输出路径禁用（只走 evaluateScript）。错误信息与"命令缺失 / 无会话 bus / Plasma 拒绝"可区分；`last_kde_set_outcome()` 可观测（method 含 `evaluateScript(screen=N)`）。UI/ports 接线为后续工作（当前无生产调用方）。测试：`tests/test_kde_static_wallpaper_contract.py`（新建 17 项：全输出行为钉住 2 + per-screen 15，含验收 S1 补的写通道拒绝钉）+ `tests/test_linux_wayland_backends.py`（+2 项：能力口径 + 公开交付面签名契约）。
+- **`multi_monitor_static` 能力口径 KDE 分支收敛** — `linux/capabilities.py`：KDE 会话的按显示器就绪门槛与实现对齐——只有 qdbus6/qdbus（Plasma scripting 通道）在场才报告 `runtime_ready`，`plasma-apply-wallpaperimage` 在场只代表全输出可用（limitations 明示"无法映射的 screen 会被拒绝而不是部分成功"），避免向 plasma-apply-only 用户错误开放按显示器选择。非 KDE 桌面维持既有口径不变。
+
+### 修复
+
+- **per-screen 写通道拒绝时错误报文重复两遍（验收 S3）** — uri 与 abs_path 两次尝试收到相同拒绝原因时只记录一次（同通道同错误的重复报文对用户没有信息增量），有测试钉住 `count == 1`。
+
+### 文档
+
+- **新增 `docs/ARCHITECTURE.md` "Linux 多显示器静态壁纸（按输出设置）"章节** — 全输出 vs 按输出两条路径的差异、拒绝部分成功语义、plasma-apply-wallpaperimage 为何只能用于全输出、前置检查链顺序、能力口径对齐说明；Windows 侧如实注明当前 IDesktopWallpaper 包装器不传 monitor ID（一次调用设置全部输出，该 API 支持按 monitor 定位是未来扩展点）——修正了原先"使用 monitor API"的过度声明措辞（验收 S2）。
+- **`docs/KDE_SUPPORT_PLAN.md`** — 勾选任务 3 步骤 3–4 复选框 + 批次 A（30-a 实施记录，含 3 处偏离规格的决策文档化）与批次 B（30-b 验收 ACCEPT + S 类建议处置）记录。
+- **README "Linux/KDE 恢复范围声明"** — 新增按显示器设置后端能力条目（明确 UI 尚未接线，应用界面当前仍是一次设置全部输出——不宣称用户已可按屏选择）。
+- **版本号 1.6.3 → 1.6.4** — `src/app/version.py`、`src/main_version_info.txt`（含 filevers/prodvers 元组）、README 徽章三处同步，`release.py metadata` 校验通过（tag v1.6.4）。
+
 ## [1.6.3] - 2026-09-26
 
 v1.6.2 全绿后的持续优化批次：交付 `docs/KDE_SUPPORT_PLAN.md` 任务 2（schema=3 插件级恢复）、任务 3 步骤 1–2（D-Bus 前置检查）、任务 5 步骤 1（真机验收矩阵）与步骤 3 的 doctor 口径收敛。主线程亲读承重代码后由两个并行 subagent 实施（28-a/28-b），主线程校准返工 1 项（R1）。

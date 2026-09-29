@@ -91,3 +91,50 @@ def test_xdg_shortcut_conversion_uses_spec_names():
     assert to_xdg_shortcut("Ctrl+Alt+n") == "CTRL+ALT+n"
     assert to_xdg_shortcut("Super+Shift+F12") == "LOGO+SHIFT+F12"
     assert to_xdg_shortcut("n") is None
+
+
+def test_kde_multi_monitor_static_requires_plasma_scripting(monkeypatch: pytest.MonkeyPatch):
+    """KDE 按显示器设置的能力口径（KDE_SUPPORT_PLAN 任务 3 步骤 3）：
+    plasma-apply-wallpaperimage 是全输出命令——只有 Plasma scripting 通道
+    （qdbus6/qdbus）在场时 multi_monitor_static 才 ready；全输出
+    static_wallpaper 能力不受影响。"""
+    env = {
+        "XDG_SESSION_TYPE": "wayland",
+        "XDG_CURRENT_DESKTOP": "KDE",
+        "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+    }
+    monkeypatch.setattr(capabilities, "_has", lambda name: name == "dbus_next")
+
+    # (a) 只有 plasma-apply-wallpaperimage：全输出 ready，按显示器不 ready。
+    result = capabilities.probe_capabilities(
+        env, which=lambda name: "/usr/bin/plasma-apply-wallpaperimage" if name == "plasma-apply-wallpaperimage" else None
+    )
+    assert result["static_wallpaper"]["runtime_ready"] is True
+    assert result["multi_monitor_static"]["runtime_ready"] is False
+    assert "all-outputs" in result["multi_monitor_static"]["backend"]
+
+    # (b) 有 qdbus6：按显示器 ready，backend/limitations 说明显式映射与
+    # 无法映射即拒绝（拒绝部分成功）的语义。
+    found = {"qdbus6": "/usr/bin/qdbus6"}
+    result = capabilities.probe_capabilities(env, which=found.get)
+    assert result["multi_monitor_static"]["runtime_ready"] is True
+    assert "containment/output" in result["multi_monitor_static"]["backend"]
+    assert "rejected" in result["multi_monitor_static"]["limitations"]
+
+
+def test_linux_integration_exposes_per_screen_setter_contract():
+    """后端能力交付面（KDE_SUPPORT_PLAN 任务 3 步骤 3）：per-screen 公开
+    函数存在（无下划线前缀）、签名带 keyword-only fill_mode；全输出入口
+    _set_kde_wallpaper 保持原surface（回归红线）。"""
+    import inspect
+
+    from platform_adapters.backends.linux import integration
+
+    assert callable(integration.set_kde_wallpaper_for_screen)
+    assert callable(integration._set_kde_wallpaper)
+    signature = inspect.signature(integration.set_kde_wallpaper_for_screen)
+    assert list(signature.parameters) == ["path", "screen_index", "fill_mode"]
+    assert signature.parameters["fill_mode"].kind is inspect.Parameter.KEYWORD_ONLY
+    # integration.py 启用 from __future__ import annotations——签名注解是
+    # 字符串形态（"int"）而非类型对象，两种形态都接受。
+    assert signature.parameters["screen_index"].annotation in (int, "int")

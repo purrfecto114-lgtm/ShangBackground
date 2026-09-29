@@ -786,6 +786,175 @@ def _set_kde_wallpaper(path: str, *, fill_mode: int | None = None) -> tuple[bool
     return False, " | ".join(errors[-6:]) or "KDE wallpaper command could not be executed"
 
 
+# ── KDE_SUPPORT_PLAN 任务 3 步骤 3：按输出（per-screen）设置 ──────────────
+#
+# plasma-apply-wallpaperimage 是 Plasma 的全输出命令（一次调用作用于全部
+# 屏幕），按显示器设置禁用——只走 evaluateScript，并且必须：
+#   1. 先用只读探针（_kde_capture_state_script）建立 containment→screen
+#      的显式映射；
+#   2. 只写探针命中的 containment，写入脚本用 id 与 screen 双重条件定位
+#      （防探针与写入之间 Plasma 桌面配置变化的竞态）；
+#   3. 无法映射（没有任何 containment 的 screen==N，或命中者缺少可解析
+#      的 id 做不了双重定位）时拒绝执行——不 spawn 写脚本、不触碰任何
+#      桌面，拒绝部分成功；
+#   4. 写入脚本运行时 applied==0（探针命中但写入时全部消失）同样判失败。
+# 本函数是后端能力交付；UI/ports 层接线为后续工作。
+
+
+def _kde_set_for_screen_script(image_value: str, targets: list[dict[str, int]], *, fill_mode: int | None = None) -> str:
+    """生成按 screen 定位的写入脚本（只触碰 targets 列出的 containment）。
+
+    ``targets`` 是探针命中的 ``[{"id": ..., "screen": ...}]``；``image_value``
+    与 ``targets`` 都经 ``json.dumps`` 注入（复用 ``_kde_set_script`` 的
+    ``%s`` + json.dumps 防注入范本）。写入时用 id+screen 双重条件重新
+    定位：探针与写入之间桌面配置变化时宁可 applied=0（调用方判失败）
+    也不写错对象。
+    """
+    fill_line = ""
+    if fill_mode is not None:
+        fill_line = f"\n            d.writeConfig(\"FillMode\", {int(fill_mode)});"
+    return """
+// plasma-apply-wallpaperimage 是全输出命令（对全部屏幕生效），按显示器设置禁用——只走 evaluateScript。
+var targets = %s;
+var allDesktops = desktops();
+function screenOf(d) {
+    var s = (typeof d.screen === "function") ? d.screen() : d.screen;
+    return (typeof s === "number") ? s : -1;
+}
+var applied = 0;
+for (var i = 0; i < allDesktops.length; i++) {
+    var d = allDesktops[i];
+    var sv = screenOf(d);
+    for (var t = 0; t < targets.length; t++) {
+        if (Number(targets[t].id) === Number(d.id) && Number(targets[t].screen) === sv) {
+            d.wallpaperPlugin = "org.kde.image";
+            d.currentConfigGroup = Array("Wallpaper", "org.kde.image", "General");
+            d.writeConfig("Image", %s);%s
+            d.reloadConfig();
+            applied++;
+            break;
+        }
+    }
+}
+print("SHANGBACKGROUND_KDE_SET_DONE:" + applied);
+""" % (json.dumps(targets), json.dumps(image_value), fill_line)
+
+
+def set_kde_wallpaper_for_screen(path: str, screen_index: int, *, fill_mode: int | None = None) -> tuple[bool, str]:
+    """对单个输出（Plasma containment 的 screen 编号）设置静态壁纸。
+
+    KDE_SUPPORT_PLAN 任务 3 步骤 3 的按输出策略：
+
+    - 前置检查链顺序固定：``_ensure_existing_file`` → 会话 bus 前置检查
+      （先于任何外部命令 spawn）→ 只读探针建立 containment→screen 映射；
+    - ``screen_index`` 是 Plasma scripting 的 containment screen 编号
+      （int）；负数/非法输入直接参数错误，不 spawn 任何命令；
+    - 无法映射 → ``(False, 可操作错误)``，不 spawn 写脚本、不触碰任何
+      containment——拒绝部分成功；错误信息与"命令缺失 / 无会话 bus /
+      Plasma 拒绝"三种既有错误可区分；
+    - 写入脚本用 id+screen 双重条件只定位探针命中的 containment；
+      ``plasma-apply-wallpaperimage`` 是全输出命令，本路径禁用；
+    - 写入时 applied==0（探针命中但全部消失的竞态）同样判失败。
+
+    与 ``_set_kde_wallpaper`` 一样不检查 KDE 会话令牌（路由属调用方）；
+    非 KDE 会话会得到探针通道的如实错误。
+    """
+    if not isinstance(screen_index, int) or isinstance(screen_index, bool) or screen_index < 0:
+        detail = f"无效的 screen_index={screen_index!r}：需要 >=0 的整数（Plasma containment 的 screen 编号）"
+        _record_kde_set_outcome(accepted=False, verified=False, method="per-screen-invalid-index", detail=detail)
+        return False, detail
+    abs_path = _ensure_existing_file(path)
+    if _session_bus_endpoint_missing():
+        detail = "KDE 会话总线不可用（未执行任何外部命令）：" + _KDE_SESSION_BUS_UNAVAILABLE
+        _record_kde_set_outcome(
+            accepted=False, verified=False, method=f"session-bus-precheck(screen={screen_index})", detail=detail
+        )
+        return False, detail
+    uri = _file_uri(abs_path)
+    # 探针：建立 containment→screen 显式映射（复用 schema=3 的脚本与解析器）。
+    ok, out, detail = _run_plasma_script(_kde_capture_state_script(), timeout=8)
+    if not ok:
+        message = "按显示器设置需要先探测 containment→screen 映射: " + (detail or "探针失败")
+        _record_kde_set_outcome(
+            accepted=False, verified=False, method=f"probe-containment-map(screen={screen_index})", detail=message
+        )
+        return False, message
+    records = _parse_kde_capture_output(out or "")
+    if not records:
+        message = "探针未返回任何 containment，无法建立 containment→screen 映射——拒绝执行，未修改任何桌面"
+        _record_kde_set_outcome(
+            accepted=False, verified=False, method=f"probe-containment-map(screen={screen_index})", detail=message
+        )
+        return False, message
+    screen_matches = [r for r in records if r.get("screen") == screen_index]
+    targets: list[dict[str, int]] = [
+        {"id": int(r["id"]), "screen": int(r["screen"])}
+        for r in screen_matches
+        if isinstance(r.get("id"), int) and not isinstance(r.get("id"), bool)
+    ]
+    if not targets:
+        if screen_matches:
+            message = (
+                f"screen {screen_index} 的 containment 缺少可解析的 id，无法做 id+screen 双重定位——"
+                "拒绝执行，未修改任何桌面"
+            )
+        else:
+            observed = sorted({int(r["screen"]) for r in records if isinstance(r.get("screen"), int)})
+            message = (
+                f"screen {screen_index} 无法映射到任何 Plasma containment（探针观察到的 screen: {observed}）——"
+                "按显示器设置需要明确的 containment/output 映射，无法映射时拒绝执行，未修改任何桌面"
+            )
+        _record_kde_set_outcome(
+            accepted=False, verified=False, method=f"probe-containment-map(screen={screen_index})", detail=message
+        )
+        return False, message
+    # 显式映射写入：只允许写探针命中的 containment（id+screen 双重条件）。
+    errors: list[str] = []
+    for image_value in (uri, abs_path):
+        script = _kde_set_for_screen_script(image_value, targets, fill_mode=fill_mode)
+        ok, out, detail = _run_plasma_script(script, timeout=4, allow_dbus_send=False)
+        if not ok:
+            # v1.6.4 校准（验收 S3）：uri 与 abs_path 两次尝试若收到相同的
+            # 拒绝原因，只记录一次（同一通道对两个值给出同一错误时，重复
+            # 报文对用户没有信息增量）。
+            if not errors or errors[-1] != detail:
+                errors.append(detail)
+            continue
+        applied = 0
+        for line in (out or "").splitlines():
+            text = line.strip()
+            if text.startswith("SHANGBACKGROUND_KDE_SET_DONE:"):
+                try:
+                    applied = int(text.split(":", 1)[1])
+                except ValueError:
+                    applied = 0
+                break
+        if applied <= 0:
+            message = (
+                f"Plasma 桌面配置在探测与写入之间发生变化：screen {screen_index} 探针命中的 containment "
+                "写入时已全部消失（applied=0）——拒绝部分成功"
+            )
+            _record_kde_set_outcome(
+                accepted=False, verified=False, method=f"evaluateScript(screen={screen_index})", detail=message
+            )
+            return False, message
+        # 读回验证不做（_verify_kde_wallpaper 读的是全部输出的第一个本地
+        # 图片，对 per-screen 场景会产生误导性 mismatch）；诚实记录
+        # verified=False，DONE 计数是接受依据——与 restore_state 同风格。
+        _record_kde_set_outcome(
+            accepted=True,
+            verified=False,
+            method=f"evaluateScript(screen={screen_index})",
+            detail=f"applied to {applied} containment(s) on screen {screen_index}; per-screen read-back not verified",
+        )
+        return True, abs_path
+    message = " | ".join(errors[-6:]) or "KDE per-screen wallpaper command could not be executed"
+    _record_kde_set_outcome(
+        accepted=False, verified=False, method=f"evaluateScript(screen={screen_index})", detail=message
+    )
+    return False, message
+
+
 def _get_gnome_wallpaper() -> tuple[bool, str]:
     if not shutil.which("gsettings"):
         return False, "gsettings: command not found"

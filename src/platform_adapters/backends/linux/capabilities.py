@@ -67,7 +67,8 @@ def probe_capabilities(env: dict[str, str] | None = None, which: Callable[[str],
 
     static_backend = ""
     static_ready = False
-    if "kde" in desktop or "plasma" in desktop:
+    kde_desktop = "kde" in desktop or "plasma" in desktop
+    if kde_desktop:
         static_backend = "plasma-apply-wallpaperimage or qdbus6/qdbus Plasma scripting"
         static_ready = bool(which("plasma-apply-wallpaperimage") or which("qdbus6") or which("qdbus"))
     elif "gnome" in desktop or "unity" in desktop or "cinnamon" in desktop:
@@ -148,6 +149,29 @@ def probe_capabilities(env: dict[str, str] | None = None, which: Callable[[str],
         hotkey_ready = False
 
     autostart_dir = Path(env.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "autostart"
+    # KDE_SUPPORT_PLAN 任务 3 步骤 3：按显示器设置必须走 Plasma scripting
+    # （plasma-apply-wallpaperimage 是全输出命令，无法只改一个屏幕）；
+    # 能力口径与 integration.set_kde_wallpaper_for_screen 的行为对齐——
+    # 无法映射的 screen 会被拒绝而不是部分成功。
+    if kde_desktop:
+        plasma_scripting = bool(which("qdbus6") or which("qdbus"))
+        multi_state = "best_effort"
+        multi_ready = plasma_scripting
+        multi_backend = (
+            "qdbus6/qdbus Plasma scripting (explicit containment/output mapping)"
+            if plasma_scripting
+            else "per-screen unavailable: plasma-apply-wallpaperimage is all-outputs only"
+        )
+        multi_limitations = (
+            "Per-screen KDE wallpapers use Plasma scripting with an explicit containment/output mapping;"
+            " screens that cannot be mapped are rejected without partial success."
+            " plasma-apply-wallpaperimage applies to all outputs and is not used for per-screen setting."
+        )
+    else:
+        multi_state = "best_effort"
+        multi_ready = static_ready
+        multi_backend = static_backend
+        multi_limitations = "Behavior and per-monitor selection vary by desktop environment and version."
     return {
         "static_wallpaper": {"state": "supported" if static_ready else "best_effort", "runtime_ready": static_ready, "backend": static_backend, "limitations": f"Desktop/session detected: {desktop}/{session}; support is desktop-environment specific."},
         "video_wallpaper": {"state": video_state, "runtime_ready": video_ready, "backend": video_backend, "limitations": video_limitations},
@@ -157,5 +181,5 @@ def probe_capabilities(env: dict[str, str] | None = None, which: Callable[[str],
         "tray": {"state": "best_effort", "runtime_ready": True, "backend": "QSystemTrayIcon / desktop status notifier", "limitations": "Availability depends on the desktop shell and tray extension."},
         "autostart": {"state": "supported", "runtime_ready": bool(autostart_dir.parent.exists()), "backend": "XDG ~/.config/autostart desktop entry", "limitations": "Starts after login in desktop environments implementing the XDG autostart specification."},
         "single_instance": {"state": "supported", "runtime_ready": True, "backend": "per-user file lock + authenticated QLocalServer IPC", "limitations": "Network/home filesystems with unusual locking semantics require validation."},
-        "multi_monitor_static": {"state": "best_effort", "runtime_ready": static_ready, "backend": static_backend, "limitations": "Behavior and per-monitor selection vary by GNOME/KDE/XFCE and their versions."},
+        "multi_monitor_static": {"state": multi_state, "runtime_ready": multi_ready, "backend": multi_backend, "limitations": multi_limitations},
     }

@@ -25,6 +25,19 @@ platform_adapters/backends/{windows,linux,macos}
 
 原生 API、系统命令和权限语义只存在于匹配平台目录。不支持的能力返回结构化失败，不伪装成功。Windows/Linux/macOS 产物必须在目标系统构建；异平台只允许 dry-run 检查命令。
 
+## Linux 多显示器静态壁纸（按输出设置）
+
+Linux/KDE 静态壁纸有两条路径（`platform_adapters.backends.linux.integration`）：
+
+- **全输出路径** `_set_kde_wallpaper`：优先 `plasma-apply-wallpaperimage`，回退 Plasma scripting 遍历全部 containment。`plasma-apply-wallpaperimage` 是 Plasma 的全输出命令——一次调用作用于所有屏幕，因此只能用于“对全部输出设置”，无法表达“只改某一个显示器”。
+- **按输出路径** `set_kde_wallpaper_for_screen`（v1.6.4，KDE_SUPPORT_PLAN 任务 3）：先跑只读探针建立 containment→screen 的显式映射，然后生成一段 evaluateScript 写入脚本，用 **id 与 screen 双重条件**只定位探针命中的 containment——防止探针与写入之间 Plasma 桌面配置变化导致写错对象。
+
+**拒绝部分成功**是按输出路径的核心语义：探针无法把请求的 screen 映射到任何 containment（或命中者缺少可解析的 id、做不了双重定位）时，直接返回结构化失败——不生成写脚本、不触碰任何桌面；写入脚本运行时报告 `applied=0`（探针命中但写入时全部消失）同样判失败。错误信息与“命令缺失 / 无会话 bus / Plasma 拒绝”可区分。路径值经 `json.dumps` 注入脚本（防注入）；前置检查链顺序固定（screen_index 参数校验 → 文件存在 → 会话 bus → 探针），无 bus 时不 spawn 任何外部命令。
+
+能力口径与行为对齐（`capabilities.probe_capabilities()["multi_monitor_static"]`）：KDE 会话只有 qdbus6/qdbus（Plasma scripting 通道）在场时才报告 `runtime_ready`——`plasma-apply-wallpaperimage` 在场只代表全输出可用。Windows 走 IDesktopWallpaper API（当前包装器不传 monitor ID，一次调用设置全部输出；该 API 支持按 monitor 定位，是未来按显示器设置的扩展点）；macOS 为同图全屏（NSScreen 遍历）。
+
+UI/ports 层的按显示器选择接线是后续工作（当前无生产调用方）。
+
 ## 视频壁纸
 
 Windows 新发布包优先使用已验证的内置 `mpv.exe + JSON IPC`，把 WorkerW 句柄通过
