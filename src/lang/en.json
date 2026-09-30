@@ -52,6 +52,7 @@
   "上一个桌面背景": "ShangBackground",
   "上一张": "Prev",
   "上一张壁纸": "Prev Wallpaper",
+  "上次退出前有 {count} 个桌面动作未能送达（主实例无响应），详见日志": "Before the last exit, {count} desktop action(s) failed to reach the running instance (it was unresponsive); see the log for details",
   "下一个桌面背景": "Next wallpaper",
   "下一个模式": "Next mode",
   "下一张": "Next",

@@ -273,15 +273,25 @@ def _dispatch_action_to_existing_instance(args: argparse.Namespace) -> bool:
 
     # Backward compatibility with a pre-refactor Windows instance.
     # v1.4.4: Reduced timeout from 0.5s to 0.2s.
+    delivered = False
     if core.IS_WINDOWS:
         try:
             legacy = command
             if command == "set_wallpaper" and payload:
                 legacy = "set_wallpaper|" + str(payload)
             existing = core.find_existing_main_window(timeout=0.2)
-            return bool(existing and core.send_command_to_hwnd(existing, legacy))
+            delivered = bool(existing and core.send_command_to_hwnd(existing, legacy))
         except Exception as exc:
             core.log(f"转发现有实例动作失败: {exc}")
+    if not delivered:
+        # v1.6.0 审计 P1-4: 全部转发路径失败（主实例持锁但无响应）。旧实现
+        # 只剩 core.log，用户在桌面右键点完没有任何反馈。记入死信队列，
+        # 主实例下次启动时向用户报告，保证至少有迟到的失败反馈。
+        try:
+            local_ipc.record_missed_command(command, payload)
+            core.log(f"动作未能送达现有实例，已记入死信队列: {command}")
+        except Exception:
+            pass
     return False
 
 

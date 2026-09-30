@@ -2,75 +2,39 @@
 
 本文件记录 ShangBackground 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
-## [1.6.4] - 2026-09-29
+## [1.6.0] - 2026-09-30
 
-v1.6.3 全绿后的持续优化批次：交付 `docs/KDE_SUPPORT_PLAN.md` 任务 3 步骤 3–4（按输出的恢复策略）。实施 agent（30-a）+ 独立验收 agent（30-b，M1 变异 4/4 咬合）+ 主线程校准（S1/S3/S2/S4）三段式流程。
+v1.6.0 是 v1.5.1 之后经四轮审计迭代打磨的合并发布。开发过程中的 1.6.1–1.6.4 中间版本号从未作为标签发布，其变更全部并入本节：v1.6.0 审查报告修复、v1.6.1 两轮审计（自主 5-agent 检测 + 用户报告合并处置）、v1.6.2（v1.6.1 报告两项必须修复 + CI 三平台全绿）、v1.6.3（KDE schema=3 插件级恢复 + doctor 口径统一 + D-Bus 前置检查）、v1.6.4（KDE 按显示器静态壁纸设置）与本轮静默失败审计（P0×3、P1×6、P2×6，详见各条目"静默失败审计"前缀）。
 
 ### 新增
 
+- **IPC 未送达动作死信队列（静默失败审计 P1-4）** — 冷启动右键子进程在 40 次重试后仍无法把动作送达主实例时，旧实现只剩一条日志——用户点完没有任何反馈。`local_ipc` 新增 `record_missed_command`/`drain_missed_commands`（有界 20 条、原子写、损坏文件容错），`support` 转发全链失败时写入；主实例下次启动 1.2 秒后由 `engine.surface_missed_ipc_actions()` 逐条记日志并托盘播报。含 en.json 播报键。
+- **安装器卸载回滚壁纸适应方式（静默失败审计 P1-5）** — Inno Setup 脚本在 ssInstall（任何文件复制之前）捕获 `HKCU\Control Panel\Desktop` 的 WallpaperStyle/TileWallpaper 存入产品自有键；卸载时若应用优雅退出已确认（`--quit --wait-for-exit` 的退出事务已用会话快照还原过）则仅丢弃备份，退出未确认时才回写原始值；两种路径都消费备份键，防陈旧备份影响未来重装。升级重装保留最早的原始值。CI 无 ISCC，源码级契约由测试钉住；真机安装/卸载验证列入验收清单。
 - **KDE 按显示器（per-screen）静态壁纸设置（计划任务 3 步骤 3）** — `linux/integration.py` 新增模块级公开函数 `set_kde_wallpaper_for_screen(path, screen_index, *, fill_mode)`（纯新增 165 行，全输出路径 `_set_kde_wallpaper` 零改动）：前置检查链固定为 screen_index 参数校验 → 文件存在 → 会话总线前置检查 → 只读探针（复用 schema=3 的 `_kde_capture_state_script` 建立 containment→screen 显式映射）→ 写入脚本用 **id+screen 双重条件**只定位探针命中的 containment（防探针与写入之间桌面配置变化的竞态）。**拒绝部分成功**是核心语义：请求的 screen 无法映射到任何 containment（或命中者缺少可解析 id、做不了双重定位）时返回结构化失败，不 spawn 写脚本、不触碰任何桌面；写入时 `applied=0` 同样判失败。`plasma-apply-wallpaperimage` 是全输出命令，按输出路径禁用（只走 evaluateScript）。错误信息与"命令缺失 / 无会话 bus / Plasma 拒绝"可区分；`last_kde_set_outcome()` 可观测（method 含 `evaluateScript(screen=N)`）。UI/ports 接线为后续工作（当前无生产调用方）。测试：`tests/test_kde_static_wallpaper_contract.py`（新建 17 项：全输出行为钉住 2 + per-screen 15，含验收 S1 补的写通道拒绝钉）+ `tests/test_linux_wayland_backends.py`（+2 项：能力口径 + 公开交付面签名契约）。
 - **`multi_monitor_static` 能力口径 KDE 分支收敛** — `linux/capabilities.py`：KDE 会话的按显示器就绪门槛与实现对齐——只有 qdbus6/qdbus（Plasma scripting 通道）在场才报告 `runtime_ready`，`plasma-apply-wallpaperimage` 在场只代表全输出可用（limitations 明示"无法映射的 screen 会被拒绝而不是部分成功"），避免向 plasma-apply-only 用户错误开放按显示器选择。非 KDE 桌面维持既有口径不变。
-
-### 修复
-
-- **per-screen 写通道拒绝时错误报文重复两遍（验收 S3）** — uri 与 abs_path 两次尝试收到相同拒绝原因时只记录一次（同通道同错误的重复报文对用户没有信息增量），有测试钉住 `count == 1`。
-
-### 文档
-
-- **新增 `docs/ARCHITECTURE.md` "Linux 多显示器静态壁纸（按输出设置）"章节** — 全输出 vs 按输出两条路径的差异、拒绝部分成功语义、plasma-apply-wallpaperimage 为何只能用于全输出、前置检查链顺序、能力口径对齐说明；Windows 侧如实注明当前 IDesktopWallpaper 包装器不传 monitor ID（一次调用设置全部输出，该 API 支持按 monitor 定位是未来扩展点）——修正了原先"使用 monitor API"的过度声明措辞（验收 S2）。
-- **`docs/KDE_SUPPORT_PLAN.md`** — 勾选任务 3 步骤 3–4 复选框 + 批次 A（30-a 实施记录，含 3 处偏离规格的决策文档化）与批次 B（30-b 验收 ACCEPT + S 类建议处置）记录。
-- **README "Linux/KDE 恢复范围声明"** — 新增按显示器设置后端能力条目（明确 UI 尚未接线，应用界面当前仍是一次设置全部输出——不宣称用户已可按屏选择）。
-- **版本号 1.6.3 → 1.6.4** — `src/app/version.py`、`src/main_version_info.txt`（含 filevers/prodvers 元组）、README 徽章三处同步，`release.py metadata` 校验通过（tag v1.6.4）。
-
-## [1.6.3] - 2026-09-26
-
-v1.6.2 全绿后的持续优化批次：交付 `docs/KDE_SUPPORT_PLAN.md` 任务 2（schema=3 插件级恢复）、任务 3 步骤 1–2（D-Bus 前置检查）、任务 5 步骤 1（真机验收矩阵）与步骤 3 的 doctor 口径收敛。主线程亲读承重代码后由两个并行 subagent 实施（28-a/28-b），主线程校准返工 1 项（R1）。
-
-### 新增
-
 - **KDE 插件级壁纸状态保存/恢复（schema=3，计划任务 2）** — `app/ports.py` 新增可选 `StatefulWallpaperBackend` 协议（`capture_state()`/`restore_state()`，独立于 `WallpaperBackend` 以免破坏 runtime_checkable 检查）；Linux 后端新增 `capture_wallpaper_state()`（Plasma scripting 逐 containment 读取 id/screen/plugin/Image/FillMode，Image 读取复用 `_kde_read_wallpaper_values` 已验证的组回退链）与 `restore_wallpaper_state()`（id→screen→全量兜底三档匹配，`json.dumps` 防注入，复用 `last_kde_set_outcome` 的 accepted/verified 区分）；`bootstrap.py` 两个适配器与 `engine.py` 布线（Windows/macOS `ImportError`→None，行为与 v1.6.2 逐字节一致）；`SessionWallpaperService` 升级 schema=3：slideshow/远程壁纸等"路径不可恢复"场景现在也会记录插件状态（`wallpaper` 字段保持"本地可恢复路径"语义，不可恢复时留空不伪造），退出恢复优先走 `restore_state`，失败且路径可恢复时诚实降级回路径恢复；schema=2 旧文件读取时按需转换（`converted_from=2`，仅在后端支持状态恢复时）。诚实边界：`config_captured=True` 仅限 `org.kde.image`+读到 Image（R1 校准：FillMode 可缺省——KConfig 默认不写默认值键，缺省即缺省，恢复时不写该键）；非图片插件只保插件名，内部配置不伪造；远程 URL 原样记录在 `image_uri` 不转本地路径。测试：`tests/test_kde_wallpaper_state.py`（21 项，含 R1 回归钉）+ `tests/test_session_wallpaper_service.py`（16 项，新建）。
 - **KDE D-Bus 会话总线前置检查（计划任务 3 步骤 1–2）** — `DBUS_SESSION_BUS_ADDRESS` 与 `$XDG_RUNTIME_DIR/bus` 均不可用时，`_run_plasma_script` 与 `_set_kde_wallpaper` 在 spawn 任何外部命令之前返回可操作错误——"无会话总线/命令缺失（command not found）/Plasma 拒绝（rc!=0 stderr）"三种失败从此可区分，不再把"不在图形会话内"误报成命令问题。`tests/test_kde_restore_scope.py::_run_set` 补 D-Bus 环境钉住（CI runner 无 bus 端点，否则 rc=0 路径会被前置检查误拒——v1.6.2 `_file_uri` 教训的同款跨平台预防）。
 - **doctor "Wayland video embedding" 检查消费统一能力判定（计划任务 5 步骤 3 doctor 侧）** — 原检查只看 mpvpaper 命令存在性，KDE Wayland 装了 mpvpaper 就显示 pass，与 v1.6.2 能力口径（KDE 不默认 ready）分裂。新增门面 `platform_adapters.session.linux_video_wallpaper_capability()`（惰性暴露 `probe_capabilities()["video_wallpaper"]`），doctor 改为消费该判定：wlroots+mpvpaper → pass；KDE+mpvpaper → warn + `SHANGBACKGROUND_ALLOW_MPVPAPER` 实验开关指引；wlroots 未装 → 安装指引；GNOME 等 → "当前 Wayland 桌面无受支持的视频壁纸层"；探测异常 → warn "capability probe unavailable"。这是 REFACTOR_ROADMAP"统一后端选择器"方向的诊断消费面切面——启动器侧统一仍以 KDE 真机矩阵为前置条件，本版不动。测试：`tests/test_doctor_wayland_video.py`（11 项，含端到端实测：旧口径误显 pass 的 KDE Wayland+mpvpaper 场景现在如实 warn）。
+- **mpv IPC 进度/状态上报与播放就绪验证** — 新增共享 JSON IPC 协议层（`src/platform_adapters/mpv_ipc.py`），Windows named pipe 与 Linux Unix socket 复用同一套实现；视频启动后经 IPC 确认媒体真实播放，消除“IPC 通道就绪但画面黑屏”，失败自动拆除并回退；`observe_property` 由 getattr 能力探测升级为真实现（平台通道 + 轮询回退观察器），播放进度、EOF 与状态可上报。Linux 视频扩展名对齐 Windows（补充 `.wmv`），播放器终止改用进程组 SIGTERM→SIGKILL 兜底，无 psutil 也不留孤儿进程。macOS 平台暂不适用（维持原行为）。
 
 ### 修复
 
+- **右键/热键切换壁纸失败零反馈（静默失败审计 P0-1）** — `_execute_ipc_wallpaper_command` 对 previous/next/random 丢弃返回值、恒返回 True：`WallpaperService.apply()` 失败（COM 失败、目标文件被删、别名拷贝失败）时桌面纹丝不动且无任何提示，而 GUI 按钮同场景会弹错误框，两条路径体验不一致。现失败时抛 RuntimeError 走既有 worker 异常通道，与 `set_wallpaper|` 分支和 GUI 路径对齐。
+- **IPC 失败通知被关键词白名单过滤（静默失败审计 P0-1b）** — `_notify_ipc_failure` 只对含"没有/无/不存在/未找到/empty/not found"的消息弹托盘通知，"设置壁纸失败（未知错误）""停止动态壁纸失败"这类真实失败一条都匹配不上。白名单移除：每条 IPC 命令失败都来自用户主动操作（桌面右键/热键），均为用户有意义信号。
+- **适应方式失败信号被后端吞掉、服务层异常分支成死代码（静默失败审计 P0-2）** — Windows `configure_fit_mode` 恒返回 None 且吞异常，`WallpaperService` 的 `_fail("设置适应模式失败")` 分支永不可达，用户看到假成功。契约显式化：COM 或注册表至少一条路径成功返回 True、两条都失败返回 False（`ports.py` 协议注解与 `bootstrap.py` 两个适配器透传返回值；其余平台后端返回 None 维持旧语义、不视为失败），服务层把显式 False 转为用户可见失败。
+- **set_fit_mode 假成功（静默失败审计 P0-3）** — 异常只记日志、不设 `last_operation_error`、隐式返回 None，而 GUI worker 只判 `result is False`，None 不命中——用户改"填充/适应/平铺"失败却看到"操作完成"。现失败路径设置错误原因并返回 False；重应用当前壁纸失败同样传播。
+- **右键菜单"注册成功但永不显示且重启应用无法自愈"（静默失败审计 P1-1）** — SHChangeNotify 失败只记日志，`is_context_menu_synced()` 只看注册表，`sync_context_menu(only_if_needed=True)` 判"已同步"直接短路，三者叠加形成永久不同步稳态。新增进程级 `_shell_association_notified` 标志：本会话未成功通知过 Explorer 即视为未同步，每次应用启动的首次同步都会执行幂等重注册+重通知，跨重启自愈。
+- **VLC 后端静音清零音量（REVIEW 3.2 同源遗留，审计 P2）** — `_vlc_command` 静音时仍传 `--volume=0`；与 mpv 侧修法同语义，静音时保留已保存音量（0-100 → 0-256 VLC 刻度映射不变），解除静音立即恢复。
+- **Linux/macOS CLI help 与音量语义冲突（审计 P2）** — `--volume` 的 help 仍写 "only effective when --muted is not set"，与 mpv 修正后的"静音保留音量"语义矛盾，两处文案更新。
+- **signtool 输出解码不确定（审计 P2）** — `run_signtool` 的 `text=True` 未指定编码，中文 Windows 上按 locale（GBK）解码可抛 UnicodeDecodeError；显式 `encoding="utf-8", errors="replace"`，与其余构建工具一致，诊断信息永不因解码失败丢失。
+- **per-screen 写通道拒绝时错误报文重复两遍（验收 S3）** — uri 与 abs_path 两次尝试收到相同拒绝原因时只记录一次（同通道同错误的重复报文对用户没有信息增量），有测试钉住 `count == 1`。
 - **schema=3 捕获的 FillMode 严格门槛会丢 Image（主线程校准 R1）** — 初版实现把 `config_captured=True` 定义为"org.kde.image + Image + FillMode 为 int"，但 Plasma 的 KConfig 默认不写默认值键：FillMode 处于默认值的常见形态下，捕获会拒绝完整配置、恢复时只写插件名——**比 schema=2 更差**（图片本身丢失）。放宽为"org.kde.image + 读到 Image"，`fill_mode=None` 语义为"恢复时不写该键、Plasma 自行使用默认值"（缺省即缺省，不伪造值）。含捕获/恢复两侧回归钉。
 - **测试 FakeProcess 假 pid 可能撞真实进程（v1.6.2 验收轮遗留隐患）** — 测试硬编码的假 pid（9876/2469/2468/9753/8642/4321/12345）在 mock 漂移时会经 `os.kill`/`_reap_child`/状态文件消费方打到真实进程。统一替换为 `2**31-1`（Linux pid_max ≤ 4194304、macOS ≤ 99998、Windows 实际分配远低于 2^31，三平台均不可能是活进程；POSIX 上 `os.kill` 对它确定抛 `ProcessLookupError`）。
-
-### 文档
-
-- **新增 `docs/KDE_TEST_MATRIX.md`（计划任务 5 步骤 1）** — Plasma 5/6 × X11/Wayland × 单/双显示器 × 100%/150% 缩放的环境矩阵，含静态壁纸基础（中文路径/填充模式/双屏）、退出恢复事务（schema=3 专项：slideshow 插件重选验证、会话文件 schema 字段核对）、D-Bus 前置检查专项（无总线环境不拉起 qdbus）、能力与诊断口径（v1.6.3 修复的分裂点验证）、热键与单实例门禁项、动态壁纸证据记录（协议/输出/首帧截图三要素）；命令级冒烟只引用真实存在的 CLI 面（`--version`/`--doctor-json`/右键菜单文件参数模式——**没有** `set-wallpaper` 子命令，已事实核查），发布门禁规则明确"静态通过不自动升级动态状态"。项目无 KDE CI runner，本矩阵是能力状态升级为 `supported` 的唯一证据来源。
-- **`docs/KDE_SUPPORT_PLAN.md`** — 任务 2 步骤 1–4、任务 3 步骤 1–2、任务 5 步骤 1 与 doctor 口径收敛的实施记录（含 R1 校准与诚实边界）；任务 3 步骤 3–4（按输出的恢复策略）与任务 4（KDE 动态壁纸路线）仍为待办。
-- **README 恢复范围声明同步 schema=3 口径** — "退出恢复仅支持本地静态图片"更新为"插件级状态恢复（v1.6.3 schema=3）"：插件被重选、`org.kde.image` 完整恢复、非图片插件内部配置回落默认值的边界如实标注；doctor 对 KDE Wayland 视频场景不因 mpvpaper 已安装而显示 pass 的行为一并注明。
-- **doctor `kde-wallpaper-restore` 提示文案同步 schema=3 口径** — 超范围插件场景的 hint 从"配置不会被还原（完整插件恢复见计划任务 2）"更新为"插件本身会被恢复，但内部配置不被保存、会回落插件默认值"。
-- **版本号 1.6.2 → 1.6.3** — `src/app/version.py`、`src/main_version_info.txt`（含 filevers/prodvers 元组）、README 徽章三处同步，`release.py metadata` 校验通过（tag v1.6.3）。
-
-## [1.6.2] - 2026-09-26
-
-针对 v1.6.1 审查报告（`docs/REVIEW_REPORT_V1.6.1.md`）的两项"必须修复"与 CI（PR #3）三平台失败。
-
-### 修复
-
 - **KDE Wayland 视频能力探测误报（审查必须修复项 1）** — `capabilities.py` 原先只要桌面令牌含 `kde`/`plasma` 且 PATH 中有 `mpvpaper`，就把视频壁纸标为 `runtime_ready=True`。但 mpvpaper 官方定位是 wlroots 系合成器（Sway/Hyprland 等，以 wlroots 为依赖），把 KWin 会话按同一后端标记为 ready 属于把"命令存在"当成"后端可运行"。现 KDE Wayland 一律 `runtime_ready=False`：有 mpvpaper 时 `state=best_effort`（backend 如实注明"experimental, untested on KWin"与实验开关用法），无则 `unsupported`；`_layer_shell_session` 令牌集移除 kde/plasma，新增 `_kde_session` 分流；sway/hyprland 等 wlroots 会话行为不变。启动路径（`video.py`）同步收紧：KDE 会话默认拒绝 mpvpaper，`SHANGBACKGROUND_ALLOW_MPVPAPER=1` 只作为显式实验开关放行启动尝试且不改变能力声明（错误信息指导用户如何开启）。新增契约测试 `tests/test_kde_capability_contract.py`（9 项：报告原型断言/开关不改声明/wlroots 不受影响/静态与热键不殃及/X11 不受影响等），`test_linux_wayland_backends.py` 与 `test_platform_runtime_regressions.py` 中 4 处旧"KDE 自动 ready"断言翻转为失败契约（mpvpaper 参数类测试改用 sway 会话验证，与桌面令牌解耦）。
 - **KDE 退出恢复的插件丢失未告知用户（审查必须修复项 2，选"明确降级范围"路线）** — `SessionWallpaperService`（schema=2）仅保存本地壁纸路径，设置脚本无条件写 `org.kde.image`：用户原本使用 slideshow/color/第三方 Plasma 插件时，退出恢复会静默丢失插件与配置。按报告给出的二选一，本版选择明确降级而非实现 schema=3：新增 `integration.kde_wallpaper_restore_scope()`（经 session 门面暴露，惰性加载），读取每个 containment 的 `wallpaperPlugin`；`--doctor` 对超范围插件显式 WARN + hint（"slideshow/color/第三方壁纸插件的配置不会被还原；如需保留请自行记录插件设置"），全部为 `org.kde.image` 时 PASS，Plasma 不可达时 WARN。完整插件级恢复（schema=3）保留为 `docs/KDE_SUPPORT_PLAN.md` 任务 2 的后续目标。新增 `tests/test_kde_restore_scope.py`（16 项）。
 - **Windows 测试矩阵失败（CI）** — `_terminate_process_tree` 中两处 POSIX-only 泄漏：`os.getpgid(pid)` 抛 `AttributeError`（非 `OSError`，穿透 `except OSError`）；同函数后续的 `signal.SIGKILL` 在 Windows 的 signal 模块中不存在（实参在调用点求值，先于 own_group 检查）——getpgid 报错在执行序上先炸，掩盖了后者（验收轮子进程模拟实证）。CI 在 Windows 3.10/3.13 上运行 Linux 失败路径的跨平台模拟测试时即崩。分别改为 `hasattr` 守卫与 `getattr(signal, "SIGKILL", signal.SIGTERM)` 占位（Windows 上 own_group 恒为 False，信号永不发送）。
 - **macOS 测试矩阵失败（CI）** — `test_linux_ipc_readiness_end_to_end_over_real_unix_socket` 用 pytest `tmp_path` 拼 socket 路径，GitHub 托管 runner 上（`/private/var/folders/…` 嵌套目录）超过 macOS AF_UNIX 的 104 字节 `sun_path` 上限，`bind` 抛 "AF_UNIX path too long"。现超限（>95 字节）时回退到系统级短临时目录并在 finally 自行清理，极端环境 skip。
 - **Dependency review 工作流红叉（CI）** — 仓库未启用 Dependency graph 时 `dependency-review-action` 以 error 终止，无法与"发现高危依赖"区分，PR 被无关红叉阻塞。现先用 SBOM 端点探测（200=已启用）：未启用时输出明确的 `::warning::` 并跳过审查（管理员在 Settings → Code security 启用后自动恢复生效，无需改工作流）。
-
-### 变更
-
-- **KDE 静态壁纸设置结果的结构化可观测（审查建议项 1，轻量版）** — `_set_kde_wallpaper` 把"命令返回 0"（accepted）与"读回确认"（verified）合并为单一成功返回，掩盖了 Plasma 6 已知的 readConfig 空值行为。新增 `last_kde_set_outcome()` 事后查询（accepted/verified/method/detail 四字段），不改变 `set_wallpaper` 的 `(bool, str)` 公共契约（engine→UI 调用链零改动），诊断与日志可据此区分"Plasma 接受了请求但读回未验证"与"读回确认一致"。配套 4 项行为测试。
-- **版本号 1.6.1 → 1.6.2** — 审计基线（v1.6.1 源码包及其 SHA-256）已在下载页分发，本轮行为变更以新版本号区分；`src/app/version.py`、`src/main_version_info.txt`、README 徽章三处同步，`release.py metadata` 校验通过。
-
-### 文档
-
-- **入库 v1.6.1 审查报告与 KDE 实现计划** — `docs/REVIEW_REPORT_V1.6.1.md`（审查结论与证据）与 `docs/KDE_SUPPORT_PLAN.md`（任务 1–5 计划）随版本入库；计划文件的任务 1（冻结 KDE 行为契约）已勾选并附 v1.6.2 实施记录（任务 2 的 schema=3 路线与任务 3–5 仍为待办）。
-- **README 恢复范围声明（审查必须修复项 2 的文档面）** — Linux/KDE 平台说明明确标注："退出恢复仅支持本地静态图片（org.kde.image）；slideshow/color/第三方壁纸插件的配置不会被还原"。
-
-## [1.6.1] - 2026-09-24
-
-### 修复
-
 - **共享层平台反向依赖（P0）** — 架构文档规定 `core/`、`app/` 不得直接导入平台后端，但存在三处违反：`core/engine.py` 直连 Windows 后端私有函数 `_prime_explorer_wallpaper_host`，`app/diagnostics.py` 与 `app/config.py` 直连 Linux 后端 `session` 模块。现全部收敛：Windows/共享侧经 `platform_adapters.integration` 门面新增公共 `prime_desktop_wallpaper_host()`（三平台后端统一暴露，非 Windows 为 no-op）；会话探测经新建的 `platform_adapters/session.py` 门面（零 `app.*` 依赖，`app.config` 模块级导入不构成环；非 Linux 主机返回惰性默认值）。新增 `tests/test_layering.py`：AST 级依赖方向守护（含探测器自检），回归即 CI 失败。
 - **发布源码包混入字节码（P0）** — CI 在打包前运行 pytest，`src/**/__pycache__/*.pyc` 随 `rglob("*")` 无过滤进入 zip/tar 发布包。`_zip_directory`/`_tar_directory` 现排除 `__pycache__` 目录与 `.pyc`/`.pyo` 后缀，并新增两个归档卫生回归测试（构造带 pycache 的迷你工作区，断言归档内零泄漏）。
 - **模式切换补偿失败对用户不可见（P1）** — 新模式启动失败且旧模式恢复/旧配置持久化也失败时，补偿结果只进日志，调用方只拿到一句通用异常。新增 `ModeSwitchReport`/`ModeRollbackOutcome` 结构化报告：`_compensate` 返回回滚实况（配置是否恢复/旧模式是否恢复运行/是否落盘/错误清单），`WallpaperModeError` 携带 report，engine 门面镜像为 `core.last_mode_switch_report`（与 `last_operation_error` 同模式），主窗口失败警告现附带一行回滚摘要（如"配置已恢复；旧模式恢复失败；恢复结果保存失败"）。成功路径行为与返回类型完全不变。
@@ -87,28 +51,6 @@ v1.6.2 全绿后的持续优化批次：交付 `docs/KDE_SUPPORT_PLAN.md` 任务
 - **共享配置归一化的空配置空窗期（第一轮审计）** — `clear()+update()` 会瞬间清空共享 dict，`_config_lock` 之外的并发读者可观察到（并序列化）空配置。改为逐键 diff 应用；验收注明这是 lost-update 竞态的部分缓解，彻底关闭需要直接写键的调用方同样持锁。
 - **代码签名时间戳走明文 HTTP（第一轮审计）** — RFC3161 时间戳端点由 `http://timestamp.digicert.com` 改为 HTTPS，消除中间人阻断时间戳请求或重放过期 token 的干扰向量。
 - **构建工具可诊断性（第一轮审计）** — 安装器源目录与变体不匹配时列出实际存在的 standalone 输出（原先只有一句 missing）；`--upx` 用于 PyInstaller 后端时显式报错（原先静默产出未压缩构建）；CI 发布资产选择正则改两段式（`-x64` 优先）并修正零匹配后误选，`api.github.com` 调用统一携带 `GITHUB_TOKEN` 认证（规避共享 runner IP 的匿名限流）。
-
-### 变更
-
-- **测试依赖单源固定（P0 部分）** — pytest/ruff 版本约束原先内联散落在 ci.yml（两处）与 release.yml（一处），易漂移。新增 `requirements/test.txt`（pytest>=8,<10 + ruff>=0.12,<1），三个 workflow 安装步骤统一改为 `-r requirements/test.txt`（pip 缓存键已自动覆盖）。pyright 有意不列入：CI 从不运行它，pyrightconfig.json 仅供本地 IDE，列入即伪门禁。
-- **`--doctor`/`--doctor-json` 输出可操作修复指引（P2）** — `DiagnosticCheck` 新增 `hint` 字段：缺失依赖给出 `python -m pip install <package>`，可选命令缺失说明自动降级行为，macOS 系统框架缺失说明来源；human 报告在 WARN/FAIL 行下输出 `hint:`，JSON 载荷同步携带（新增字段，旧消费者不受影响）。
-- **架构文档线程模型如实化（P1）** — `ARCHITECTURE.md` 原声明"长期 Worker 使用 `QObject.moveToThread(QThread)`；短时 Python 任务使用共享线程池"，与实现不符（全库 0 处 moveToThread、无共享线程池；实际为 `threading.Thread` worker + Qt Signal queued 回 UI，`services/updates.py` 为唯一 QThread 用户）。现改为如实描述现状 + 新增 Worker 硬性规则（线程内禁触 Qt 控件、回 UI 必经 Signal）+ moveToThread 列为需真机验收掩护的路线图目标，消除"文档撒谎"这一 P1 的实质。
-- **PySide6 维持 6.11.1（评估结论）** — 6.11.2 已于 2026-08 发布，但检索未发现其修复影响本项目的安全或崩溃问题（项目仅用 QtWidgets/QtCore/QtGui 成熟面）；且 6.11.x 系列存在 teardown segfault 的第三方报告线索。无真机验收环境下盲升 patch 版本风险大于收益，维持 6.11.1，升级列入真机验收轮的专项检查项。
-- **版本号 1.6.0 → 1.6.1** — v1.6.0 最终版从未发布（远程仅存在指向审计基线的 v1.6.0-rc1 标签），本轮全部修复随 1.6.1 发布；`src/app/version.py`、`src/main_version_info.txt`、README 徽章三处同步，`release.py metadata` 校验通过。合并回默认分支时 version.py 的变更将按设计自动触发发布流水线。
-
-### 文档
-
-- **新增 `docs/REFACTOR_ROADMAP.md`** — `main_window.py`（约 8400 行）God Object 的四阶段拆分路线图：基于 v1.6.1 实测方法聚类给出各职责块行区间与独立性评估（含日志/About 区间嵌套的前置剥离标注），阶段 1（日志查看器/About 动画/SVG 渲染，约 -750 行）零风险可先行，阶段 4（core worker 调度/模式编排/退出流程）必须三平台真机冒烟掩护；每阶段的行为不变原则、Controller 边界规则与回滚策略成文。
-- **`docs/BUILD_SYSTEM.md`** — 发布前最低验证补入 HTML 壁纸运行器自检命令：`PYTHONPATH=src python -m platform_adapters.native_html_runner --self-test`（含 Windows cmd/PowerShell 等价形式；原命令在仓库根目录因 `src/` 不在模块搜索路径而必然失败，且此前无任何文档给出可运行形式）。
-
-## [1.6.0] - 2026-09-22
-
-### 新增
-
-- **mpv IPC 进度/状态上报与播放就绪验证** — 新增共享 JSON IPC 协议层（`src/platform_adapters/mpv_ipc.py`），Windows named pipe 与 Linux Unix socket 复用同一套实现；视频启动后经 IPC 确认媒体真实播放，消除“IPC 通道就绪但画面黑屏”，失败自动拆除并回退；`observe_property` 由 getattr 能力探测升级为真实现（平台通道 + 轮询回退观察器），播放进度、EOF 与状态可上报。Linux 视频扩展名对齐 Windows（补充 `.wmv`），播放器终止改用进程组 SIGTERM→SIGKILL 兜底，无 psutil 也不留孤儿进程。macOS 平台暂不适用（维持原行为）。
-
-### 修复
-
 - **视频路径绑定启动崩溃（P0）** — 主窗口构建时向 `bind_existing_file(..., suffixes=...)` 传入的 `suffixes` 在 `bind()` 中无对应形参，启动即 TypeError。现 `bind()` 支持 `suffixes` 关键字并转发到既有扩展名校验链（大小写不敏感，行为不变时保持默认）。
 - **Windows 收藏右键菜单阻塞事件循环** — Windows 平台 mixin 中仍保留阻塞版 `menu.exec()`，属 v1.4.3 修复的回归；现删除阻塞版本，统一走共享实现的 `popup()` 异步菜单。
 - **界面文案国际化补全** — en.json 补齐缺失键（Bing 同步提示、动画开关、静音/音量提示、失败提示、关于页链接等）；修正日志文案误包 `t()` 的方向错误；用户可见的硬编码中文统一包进 `t()`。
@@ -116,11 +58,34 @@ v1.6.2 全绿后的持续优化批次：交付 `docs/KDE_SUPPORT_PLAN.md` 任务
 
 ### 变更
 
+- **Windows 多显示器能力口径与实现对齐（静默失败审计 P1-3）** — `multi_monitor_static` 的 backend 原声明 "IDesktopWallpaper monitor API"，暗示按显示器独立控制；实现实为 monitorID=NULL 的一次性全输出设置（包装器未接线按显示器选择）。backend/limitations 改为如实描述：同图铺满所有屏、per-monitor 选择未接线、旧注册表回退无此能力——与 macOS 侧同一口径（Linux KDE 侧已于上一批次收敛）。
+- **跨卷非 ASCII 壁纸别名拷贝可观测（静默失败审计 P1-2）** — 别名按（路径, 大小, mtime）缓存，跨卷整文件拷贝只发生在每个文件版本首次而非每次切换；但首拷在壁纸 worker 线程、set_wallpaper 之前同步执行，大图的切换延迟无法诊断。现记录字节数与耗时的 WARNING 日志。
+- **NOTICE 补第三方运行时二进制条目（审计遗留 §8.6）** — 明确发行产物不分发 mpv/VLC/ffmpeg 二进制，及未来若捆绑 mpv 时的 GPLv2+/FFmpeg 许可义务（许可证文本、源代码提供方式、NOTICE 补录）。
+- **CI 已知限制如实注记（审计 P2）** — ci.yml 的构建计划校验步骤与 `docs/RELEASE_PROCESS.md` 注明：PyInstaller 仅 dry-run 计划校验，真实产物 + `validate_frozen_runtime` 仅 Nuitka 路径覆盖，两条路径产物一致性未经 CI 实证。
+- **KDE 静态壁纸设置结果的结构化可观测（审查建议项 1，轻量版）** — `_set_kde_wallpaper` 把"命令返回 0"（accepted）与"读回确认"（verified）合并为单一成功返回，掩盖了 Plasma 6 已知的 readConfig 空值行为。新增 `last_kde_set_outcome()` 事后查询（accepted/verified/method/detail 四字段），不改变 `set_wallpaper` 的 `(bool, str)` 公共契约（engine→UI 调用链零改动），诊断与日志可据此区分"Plasma 接受了请求但读回未验证"与"读回确认一致"。配套 4 项行为测试。
+- **测试依赖单源固定（P0 部分）** — pytest/ruff 版本约束原先内联散落在 ci.yml（两处）与 release.yml（一处），易漂移。新增 `requirements/test.txt`（pytest>=8,<10 + ruff>=0.12,<1），三个 workflow 安装步骤统一改为 `-r requirements/test.txt`（pip 缓存键已自动覆盖）。pyright 有意不列入：CI 从不运行它，pyrightconfig.json 仅供本地 IDE，列入即伪门禁。
+- **`--doctor`/`--doctor-json` 输出可操作修复指引（P2）** — `DiagnosticCheck` 新增 `hint` 字段：缺失依赖给出 `python -m pip install <package>`，可选命令缺失说明自动降级行为，macOS 系统框架缺失说明来源；human 报告在 WARN/FAIL 行下输出 `hint:`，JSON 载荷同步携带（新增字段，旧消费者不受影响）。
+- **架构文档线程模型如实化（P1）** — `ARCHITECTURE.md` 原声明"长期 Worker 使用 `QObject.moveToThread(QThread)`；短时 Python 任务使用共享线程池"，与实现不符（全库 0 处 moveToThread、无共享线程池；实际为 `threading.Thread` worker + Qt Signal queued 回 UI，`services/updates.py` 为唯一 QThread 用户）。现改为如实描述现状 + 新增 Worker 硬性规则（线程内禁触 Qt 控件、回 UI 必经 Signal）+ moveToThread 列为需真机验收掩护的路线图目标，消除"文档撒谎"这一 P1 的实质。
+- **PySide6 维持 6.11.1（评估结论）** — 6.11.2 已于 2026-08 发布，但检索未发现其修复影响本项目的安全或崩溃问题（项目仅用 QtWidgets/QtCore/QtGui 成熟面）；且 6.11.x 系列存在 teardown segfault 的第三方报告线索。无真机验收环境下盲升 patch 版本风险大于收益，维持 6.11.1，升级列入真机验收轮的专项检查项。
 - **全局热键默认开启** — 工厂默认、旧配置迁移、保存回退与热键服务读取四层一致改为默认启用；设置页文案同步去掉“默认关闭”表述。配套的简单热键焦点保护（`hotkey_focus_guard`）同步全平台默认开启。
 - **构建钉版对齐** — `build_tools/requirements/build-pyinstaller.txt` 由 6.21.0 对齐到 `buildlib/constants.py` 的 **6.22.0**；清理 pyproject.toml 中空的 `per-file-ignores` 配置。
 
 ### 文档
 
+- **CHANGELOG 版本段合并** — 开发过程中的 1.6.1–1.6.4 中间版本号从未作为标签发布（远程仅有指向审计基线的 v1.6.0-rc1），四轮审计迭代的全部变更并入本节随 1.6.0 正式发布；`docs/REVIEW_REPORT_V1.6.1.md` 等审查报告保留原文件名作为历史依据。
+- **en.json 新增死信队列播报键 + i18n 静态完整性回归钉（审计 P1-6）** — `tests/test_i18n_runtime.py` 新增 AST 级比对：源码中全部静态 `t("字面量")` 键必须收录进 en.json，防英文界面漏显中文回退（14 键缺口在 v1.6.0 原批次已补齐，本钉防回归）。
+- **静默失败审计回归测试** — 新建 `tests/test_silent_failure_regressions.py`（36 项）：IPC 失败传播三命令参数化、通知无白名单、fit_mode 契约四态（注册表成功/全失败/无 winreg/COM 短路）、服务层显式 False 与 None 容忍、bootstrap 透传、set_fit_mode 失败/异常/重应用传播/成功、会话通知标志三态、能力口径、死信队列往返/上限/损坏容错/转发失败与成功、播报含 GUI 线程调度、安装器源码契约、VLC 静音/非静音音量映射。
+- **新增 `docs/ARCHITECTURE.md` "Linux 多显示器静态壁纸（按输出设置）"章节** — 全输出 vs 按输出两条路径的差异、拒绝部分成功语义、plasma-apply-wallpaperimage 为何只能用于全输出、前置检查链顺序、能力口径对齐说明；Windows 侧如实注明当前 IDesktopWallpaper 包装器不传 monitor ID（一次调用设置全部输出，该 API 支持按 monitor 定位是未来扩展点）——修正了原先"使用 monitor API"的过度声明措辞（验收 S2）。
+- **`docs/KDE_SUPPORT_PLAN.md`** — 勾选任务 3 步骤 3–4 复选框 + 批次 A（30-a 实施记录，含 3 处偏离规格的决策文档化）与批次 B（30-b 验收 ACCEPT + S 类建议处置）记录。
+- **README "Linux/KDE 恢复范围声明"** — 新增按显示器设置后端能力条目（明确 UI 尚未接线，应用界面当前仍是一次设置全部输出——不宣称用户已可按屏选择）。
+- **新增 `docs/KDE_TEST_MATRIX.md`（计划任务 5 步骤 1）** — Plasma 5/6 × X11/Wayland × 单/双显示器 × 100%/150% 缩放的环境矩阵，含静态壁纸基础（中文路径/填充模式/双屏）、退出恢复事务（schema=3 专项：slideshow 插件重选验证、会话文件 schema 字段核对）、D-Bus 前置检查专项（无总线环境不拉起 qdbus）、能力与诊断口径（v1.6.3 修复的分裂点验证）、热键与单实例门禁项、动态壁纸证据记录（协议/输出/首帧截图三要素）；命令级冒烟只引用真实存在的 CLI 面（`--version`/`--doctor-json`/右键菜单文件参数模式——**没有** `set-wallpaper` 子命令，已事实核查），发布门禁规则明确"静态通过不自动升级动态状态"。项目无 KDE CI runner，本矩阵是能力状态升级为 `supported` 的唯一证据来源。
+- **`docs/KDE_SUPPORT_PLAN.md`** — 任务 2 步骤 1–4、任务 3 步骤 1–2、任务 5 步骤 1 与 doctor 口径收敛的实施记录（含 R1 校准与诚实边界）；任务 3 步骤 3–4（按输出的恢复策略）与任务 4（KDE 动态壁纸路线）仍为待办。
+- **README 恢复范围声明同步 schema=3 口径** — "退出恢复仅支持本地静态图片"更新为"插件级状态恢复（v1.6.3 schema=3）"：插件被重选、`org.kde.image` 完整恢复、非图片插件内部配置回落默认值的边界如实标注；doctor 对 KDE Wayland 视频场景不因 mpvpaper 已安装而显示 pass 的行为一并注明。
+- **doctor `kde-wallpaper-restore` 提示文案同步 schema=3 口径** — 超范围插件场景的 hint 从"配置不会被还原（完整插件恢复见计划任务 2）"更新为"插件本身会被恢复，但内部配置不被保存、会回落插件默认值"。
+- **入库 v1.6.1 审查报告与 KDE 实现计划** — `docs/REVIEW_REPORT_V1.6.1.md`（审查结论与证据）与 `docs/KDE_SUPPORT_PLAN.md`（任务 1–5 计划）随版本入库；计划文件的任务 1（冻结 KDE 行为契约）已勾选并附 v1.6.2 实施记录（任务 2 的 schema=3 路线与任务 3–5 仍为待办）。
+- **README 恢复范围声明（审查必须修复项 2 的文档面）** — Linux/KDE 平台说明明确标注："退出恢复仅支持本地静态图片（org.kde.image）；slideshow/color/第三方壁纸插件的配置不会被还原"。
+- **新增 `docs/REFACTOR_ROADMAP.md`** — `main_window.py`（约 8400 行）God Object 的四阶段拆分路线图：基于 v1.6.1 实测方法聚类给出各职责块行区间与独立性评估（含日志/About 区间嵌套的前置剥离标注），阶段 1（日志查看器/About 动画/SVG 渲染，约 -750 行）零风险可先行，阶段 4（core worker 调度/模式编排/退出流程）必须三平台真机冒烟掩护；每阶段的行为不变原则、Controller 边界规则与回滚策略成文。
+- **`docs/BUILD_SYSTEM.md`** — 发布前最低验证补入 HTML 壁纸运行器自检命令：`PYTHONPATH=src python -m platform_adapters.native_html_runner --self-test`（含 Windows cmd/PowerShell 等价形式；原命令在仓库根目录因 `src/` 不在模块搜索路径而必然失败，且此前无任何文档给出可运行形式）。
 - **仓库清理** — 按路线图“不留阶段性报告”原则，删除根目录的一次性审查报告与 TODO 账本两份文件（结论并入 CHANGELOG 与 ROADMAP）；删除 3 个零引用的 `img/` 图片，并以真实文件名恢复 GitHub Pages 站点引用的 `img/文字logo.png`（仓库中原为历史工具产生的 `#U` 转义损坏名）。
 - **文档与现实对齐** — ROADMAP 勾销已完成的 CI dry-run 与 Wayland Portal 两项，并吸收二轮审查结论（mpv 真机验证矩阵、许可证清单、Qt 行为测试、broad except 审计）；GETTING_MPV 修正“Windows 发布包必须含 mpv.exe”与 release.yml 实际策略的矛盾，并记录播放就绪验证；PROJECT_STRUCTURE 移除指向不存在示例目录的断链引用；README 平台表反映 Wayland Portal 进展。
 

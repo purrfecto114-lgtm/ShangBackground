@@ -764,7 +764,7 @@ def main() -> None:
     parser.add_argument("video_path")
     parser.add_argument("--muted", action="store_true")
     parser.add_argument("--volume", type=int, default=100,
-                        help="audio volume 0-100, only effective when --muted is not set (default: 100)")
+                        help="audio volume 0-100 (default: 100); preserved while muted so unmuting restores it immediately")
     args = parser.parse_args()
     ok, message = start_video_wallpaper(args.video_path, muted=args.muted, volume=args.volume)
     if not ok:

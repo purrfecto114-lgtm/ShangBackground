@@ -27,7 +27,14 @@ class WallpaperBackend(Protocol):
 
     def get_current(self) -> str: ...
 
-    def configure_fit_mode(self, mode: str) -> None: ...
+    def configure_fit_mode(self, mode: str) -> bool | None:
+        """Apply the desktop fit/position mode.
+
+        v1.6.0 审计 P0-2: Windows 后端返回 bool（True=COM 或注册表至少一条
+        路径生效，False=两条路径都失败）；其余平台后端仍返回 None（无失败
+        信号）。服务层只把显式 ``False`` 视为失败，``None`` 维持旧语义。
+        """
+        ...
 
     def set_wallpaper(self, path: str) -> None: ...
 

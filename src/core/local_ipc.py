@@ -2,12 +2,76 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from typing import Any, Callable
 
+from app.paths import user_data_dir
 from core import single_instance
 
 ALLOWED_COMMANDS = frozenset({"show", "previous", "next", "random", "jump", "set_wallpaper", "quit"})
 MAX_MESSAGE_BYTES = 64 * 1024
+
+# v1.6.0 审计 P1-4: 未送达动作的死信队列（dead-letter journal）。
+# 冷启动右键子进程把动作转发给主实例失败时（40 次重试后仍无响应），
+# 旧实现只剩一条 core.log——用户点完没有任何反馈。写入此文件后，
+# 主实例下次启动会读取并向用户报告（见 engine.surface_missed_ipc_actions）。
+MISSED_COMMANDS_FILE = os.path.join(user_data_dir(), "missed_ipc_actions.json")
+MISSED_COMMANDS_LIMIT = 20
+
+
+def _read_missed_entries() -> list[dict]:
+    """Best-effort read of the persisted dead-letter entries."""
+    try:
+        with open(MISSED_COMMANDS_FILE, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        entries = data.get("entries") if isinstance(data, dict) else None
+        if not isinstance(entries, list):
+            return []
+        return [entry for entry in entries if isinstance(entry, dict)]
+    except (OSError, ValueError):
+        return []
+
+
+def record_missed_command(command: str, payload: Any = None) -> bool:
+    """Persist a user action that could not be delivered to the primary instance.
+
+    Bounded to the most recent ``MISSED_COMMANDS_LIMIT`` entries. Best-effort:
+    this already runs on a failure path, so IO errors are swallowed and
+    reported via the return value only.
+    """
+    try:
+        entries = _read_missed_entries()
+        entries.append(
+            {
+                "command": str(command),
+                "payload": payload,
+                "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+        )
+        entries = entries[-MISSED_COMMANDS_LIMIT:]
+        os.makedirs(os.path.dirname(MISSED_COMMANDS_FILE), exist_ok=True)
+        tmp_path = MISSED_COMMANDS_FILE + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump({"version": 1, "entries": entries}, handle, ensure_ascii=False)
+        os.replace(tmp_path, MISSED_COMMANDS_FILE)
+        return True
+    except Exception:
+        return False
+
+
+def drain_missed_commands() -> list[dict]:
+    """Return persisted undelivered actions (oldest first) and clear the file."""
+    try:
+        entries = _read_missed_entries()
+        if entries:
+            try:
+                os.remove(MISSED_COMMANDS_FILE)
+            except OSError:
+                pass
+        return entries
+    except Exception:
+        return []
 
 
 def _message(command: str, payload: Any = None, *, identity: dict[str, Any] | None = None) -> bytes:

@@ -247,10 +247,78 @@ Type: files; Name: "{localappdata}\{#APP_NAME}\single_instance.lock"; Check: Sho
 Type: files; Name: "{tmp}\ShangBackground_session_wallpaper.json"
 
 [Code]
+var
+  // v1.6.0 审计 P1-5: InitializeUninstall 里应用内优雅退出（--quit --wait-
+  // for-exit，含会话级壁纸+适应方式还原）是否确认成功。只有失败时才
+  // 需要在卸载阶段用安装时备份回滚适应方式。
+  GracefulQuitConfirmed: Boolean;
+
+const
+  // 安装时捕获的 HKCU\Control Panel\Desktop 适应方式原始值存放处。
+  StyleBackupSubkey = 'Software\ShangBackground\UninstallStyleBackup';
+
 // InitializeSetup runs before any file operations.
 function InitializeSetup(): Boolean;
 begin
   Result := True;
+end;
+
+// v1.6.0 审计 P1-5: 捕获安装前的壁纸适应方式（WallpaperStyle/TileWallpaper）。
+// 应用只在运行期间改写这两个值；卸载时若应用已无法执行退出事务，桌面会
+// 停留在最后一次应用设置的适应方式。这里在首次安装（ssInstall，任何文件
+// 复制之前）把原始值存到产品自己的注册表键里；升级重装时若已有备份则保留
+// 最早的原始值，不覆盖。
+procedure CaptureOriginalWallpaperStyle();
+var
+  Style, Tile: String;
+begin
+  if RegValueExists(HKEY_CURRENT_USER, StyleBackupSubkey, 'WallpaperStyle') or
+     RegValueExists(HKEY_CURRENT_USER, StyleBackupSubkey, 'TileWallpaper') then
+    Exit;
+  Style := '';
+  Tile := '';
+  if not RegQueryStringValue(HKEY_CURRENT_USER, 'Control Panel\Desktop', 'WallpaperStyle', Style) then
+    Style := '';
+  if not RegQueryStringValue(HKEY_CURRENT_USER, 'Control Panel\Desktop', 'TileWallpaper', Tile) then
+    Tile := '';
+  if (Style = '') and (Tile = '') then
+    Exit;
+  if Style <> '' then
+    RegWriteStringValue(HKEY_CURRENT_USER, StyleBackupSubkey, 'WallpaperStyle', Style);
+  if Tile <> '' then
+    RegWriteStringValue(HKEY_CURRENT_USER, StyleBackupSubkey, 'TileWallpaper', Tile);
+  Log('{#APP_NAME}: captured pre-install wallpaper style for uninstall rollback');
+end;
+
+// v1.6.0 审计 P1-5: 卸载时消费安装时备份。ApplyValues=True 时把原始值写回
+// HKCU\Control Panel\Desktop（应用退出事务未确认、无人还原适应方式的场景）；
+// ApplyValues=False 时仅丢弃备份（应用已用更精确的会话快照完成还原，不能再
+// 用安装时的旧值覆盖）。两种路径都会删除备份键，避免陈旧备份影响未来重装。
+procedure ConsumeOriginalWallpaperStyle(const ApplyValues: Boolean);
+var
+  Style, Tile: String;
+begin
+  try
+    if RegValueExists(HKEY_CURRENT_USER, StyleBackupSubkey, 'WallpaperStyle') or
+       RegValueExists(HKEY_CURRENT_USER, StyleBackupSubkey, 'TileWallpaper') then
+    begin
+      if ApplyValues then
+      begin
+        Style := '';
+        Tile := '';
+        if RegQueryStringValue(HKEY_CURRENT_USER, StyleBackupSubkey, 'WallpaperStyle', Style) and (Style <> '') then
+          RegWriteStringValue(HKEY_CURRENT_USER, 'Control Panel\Desktop', 'WallpaperStyle', Style);
+        if RegQueryStringValue(HKEY_CURRENT_USER, StyleBackupSubkey, 'TileWallpaper', Tile) and (Tile <> '') then
+          RegWriteStringValue(HKEY_CURRENT_USER, 'Control Panel\Desktop', 'TileWallpaper', Tile);
+        Log('{#APP_NAME}: rolled back wallpaper style to pre-install values');
+      end
+      else
+        Log('{#APP_NAME}: graceful exit already restored style; discarding install-time backup');
+    end;
+    RegDeleteKeyIncludingSubkeys(HKEY_CURRENT_USER, StyleBackupSubkey);
+  except
+    Log('{#APP_NAME}: wallpaper style rollback failed: ' + GetExceptionMessage);
+  end;
 end;
 
 // Upgrade lifecycle: ask the currently logged-in user's existing instance to
@@ -305,6 +373,7 @@ var
   ResultCode: Integer;
 begin
   Result := True;
+  GracefulQuitConfirmed := False;
   ExecutablePath := ExpandConstant('{app}\ShangBackground.exe');
   if not FileExists(ExecutablePath) then
     Exit;
@@ -318,7 +387,11 @@ begin
       '建议先从托盘退出程序；如果程序已经无法启动，可以继续卸载。' #13#10 #13#10 +
       '是否仍然继续卸载？',
       mbConfirmation, MB_YESNO, IDYES) = IDYES;
-  end;
+  end
+  else
+    // v1.6.0 审计 P1-5: 优雅退出确认成功——应用的退出事务已用会话快照还原
+    // 壁纸与适应方式，卸载阶段不需要（也不能）再用安装时备份覆盖。
+    GracefulQuitConfirmed := True;
 end;
 
 var
@@ -344,6 +417,11 @@ var
 begin
   if CurUninstallStep = usUninstall then
   begin
+    // v1.6.0 审计 P1-5: 先消费安装时的适应方式备份（在删除任何应用文件/
+    // 锁之前执行；纯注册表操作，不依赖应用产物）。仅在应用退出事务未确认
+    // 时才回写原始值。
+    ConsumeOriginalWallpaperStyle(not GracefulQuitConfirmed);
+
     // MANDATORY: Remove legacy VBS startup files (v1.4.4 and earlier).
     StartupFolder := ExpandConstant('{userstartup}');
     VbsPath := StartupFolder + '\ShangBackground.vbs';
@@ -403,6 +481,12 @@ var
   ExecutablePath: String;
   ManifestPath: String;
 begin
+  if CurStep = ssInstall then
+  begin
+    // v1.6.0 审计 P1-5: 首次安装前捕获原始适应方式（见 ConsumeOriginal-
+    // WallpaperStyle 的卸载侧说明）。
+    CaptureOriginalWallpaperStyle();
+  end;
   if CurStep = ssPostInstall then
   begin
     ExecutablePath := ExpandConstant('{app}\ShangBackground.exe');

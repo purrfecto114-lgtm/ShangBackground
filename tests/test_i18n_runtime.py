@@ -58,3 +58,32 @@ def test_set_language_preserves_public_signature_and_changes_state():
     i18n.set_language("en")
     assert i18n.get_language() == "en"
     assert i18n.t("missing", default="fallback") == "fallback"
+
+
+def test_every_static_t_literal_has_an_english_translation():
+    """v1.6.0 审计 P1-6 回归钉。
+
+    静态可提取的 ``t("字面量")`` 调用必须全部收录进 en.json，否则英文界面
+    会在这些位置回退显示中文原文。运行时拼接的键（少量）不在此列。
+    """
+    import ast
+    from pathlib import Path
+
+    src_dir = Path(i18n.__file__).resolve().parent.parent
+    keys: set[str] = set()
+    for py_file in src_dir.rglob("*.py"):
+        tree = ast.parse(py_file.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and node.args):
+                continue
+            arg = node.args[0]
+            if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
+                continue
+            func = node.func
+            name = getattr(func, "id", getattr(func, "attr", None))
+            if name == "t":
+                keys.add(arg.value)
+
+    en = json.loads((src_dir / "lang" / "en.json").read_text(encoding="utf-8"))
+    missing = sorted(key for key in keys if key not in en)
+    assert not missing, f"en.json 缺少 {len(missing)} 个 t() 键，例如: {missing[:10]}"

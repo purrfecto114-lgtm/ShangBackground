@@ -70,6 +70,27 @@ infringement.
 运行时使用。任何未经授权使用排除资产的行为可能构成版权侵权。
 
 ================================================================================
+6. Third-Party Runtime Binaries / 第三方运行时二进制
+================================================================================
+
+ShangBackground does not distribute mpv, VLC or ffmpeg binaries in its release
+artifacts. Video wallpaper backends invoke the player found on the user's
+system (or a user-approved runtime download performed by the application at
+runtime with hash verification).
+
+本项目发行产物不分发 mpv、VLC 或 ffmpeg 二进制。视频壁纸后端调用用户
+系统上已安装的播放器（或由应用在运行时经哈希校验后下载的运行时）。
+
+If a future release bundles mpv (e.g. via build_tools mpv_runtime packaging),
+mpv is licensed under GPLv2+ and links FFmpeg (GPL/LGPL depending on build);
+that release must additionally ship the corresponding license texts, source
+offers and this NOTICE entry per each component's obligations.
+
+若未来版本捆绑分发 mpv（例如经 build_tools 的 mpv_runtime 打包），mpv 以
+GPLv2+ 许可并链接 FFmpeg（视构建为 GPL/LGPL）；该版本必须按各组件的许可
+义务额外附带对应许可证文本、源代码提供方式，并在本文件中补充条目。
+
+================================================================================
 Date / 日期: 2026
 Author / 作者: 小小电子xxdz
 ================================================================================

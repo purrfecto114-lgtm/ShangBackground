@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.6.4-0ea5e9?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-v1.6.0-0ea5e9?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/PySide6-6.11-41cd52?style=flat-square&logo=qt&logoColor=white" alt="PySide6">
   <img src="https://img.shields.io/badge/License-GPLv3-blue?style=flat-square" alt="GPLv3">
@@ -55,8 +55,8 @@ ShangBackground 使用一份共享源码支持 Windows、Linux 和 macOS。Windo
 
 ### Linux/KDE 恢复范围声明
 
-- **退出恢复支持插件级状态（v1.6.3 schema=3）**：KDE 会话退出时会按 containment 重选原壁纸插件并恢复 `org.kde.image` 的图片与填充模式；`slideshow`/`color`/第三方插件的**内部配置**（轮播列表、颜色等）不被保存，会回落插件默认值——`--doctor` 的 `kde-wallpaper-restore` 检查项如实报告当前插件与该边界。插件级恢复的 Plasma scripting 通道依赖 qdbus6/qdbus 与会话总线（无总线时报可操作错误，不拉起外部命令）。
-- **按显示器设置静态壁纸的后端能力已交付（v1.6.4）**：`set_kde_wallpaper_for_screen()` 用只读探针建立 containment→screen 显式映射后，仅对命中屏幕写入（id+screen 双重定位）；无法映射的 screen 直接拒绝、不部分成功，`plasma-apply-wallpaperimage`（全输出命令）不参与该路径。**UI/配置入口尚未接线**——当前应用界面仍是一次设置全部输出，按显示器选择的生产调用方是后续工作。
+- **退出恢复支持插件级状态（v1.6.0 schema=3）**：KDE 会话退出时会按 containment 重选原壁纸插件并恢复 `org.kde.image` 的图片与填充模式；`slideshow`/`color`/第三方插件的**内部配置**（轮播列表、颜色等）不被保存，会回落插件默认值——`--doctor` 的 `kde-wallpaper-restore` 检查项如实报告当前插件与该边界。插件级恢复的 Plasma scripting 通道依赖 qdbus6/qdbus 与会话总线（无总线时报可操作错误，不拉起外部命令）。
+- **按显示器设置静态壁纸的后端能力已交付（v1.6.0）**：`set_kde_wallpaper_for_screen()` 用只读探针建立 containment→screen 显式映射后，仅对命中屏幕写入（id+screen 双重定位）；无法映射的 screen 直接拒绝、不部分成功，`plasma-apply-wallpaperimage`（全输出命令）不参与该路径。**UI/配置入口尚未接线**——当前应用界面仍是一次设置全部输出，按显示器选择的生产调用方是后续工作。
 - **KDE Wayland 视频壁纸不默认启用**：mpvpaper 面向 wlroots 系合成器（Sway/Hyprland 等），KWin 的 layer-shell 兼容性未经真机验证。如需实验性尝试，设置环境变量 `SHANGBACKGROUND_ALLOW_MPVPAPER=1`（后果自负）；`--doctor` 对该场景如实 WARN（不因 mpvpaper 已安装而显示 pass）。
 - 插件级恢复的真机验收矩阵与 KDE 动态壁纸路线见 [`docs/KDE_SUPPORT_PLAN.md`](docs/KDE_SUPPORT_PLAN.md) 与 [`docs/KDE_TEST_MATRIX.md`](docs/KDE_TEST_MATRIX.md)。
 

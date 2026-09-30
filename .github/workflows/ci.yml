@@ -53,6 +53,11 @@ jobs:
       - name: Validate all native build plans
         shell: bash
         run: |
+          # v1.6.0 审计注记（已知限制）: 此步骤只做 --dry-run 计划校验；
+          # 真实产物 + validate_frozen_runtime 仅在 release.yml 的 Nuitka
+          # 路径上运行过。PyInstaller 与 Nuitka 两条路径的产物一致性从未被
+          # CI 实证（提高覆盖需要在 CI 增加真实 PyInstaller 构建，属于
+          # 后续基础设施投入，见 docs/RELEASE_PROCESS.md）。
           set -euo pipefail
           for target in windows linux macos; do
             for tool in pyinstaller nuitka; do

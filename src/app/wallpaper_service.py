@@ -164,9 +164,15 @@ class WallpaperService:
             fit_mode = self._normalize_fit_mode(str(config.get("fit_mode", "填充")))
             self._emit(progress, "正在应用适应方式…", 0.2)
             try:
-                self._backend.configure_fit_mode(fit_mode)
+                fit_ok = self._backend.configure_fit_mode(fit_mode)
             except Exception as exc:
                 return self._fail("设置适应模式失败: " + str(exc))
+            # v1.6.0 审计 P0-2: Windows 后端失败时返回 False（COM 与注册表
+            # 两条路径都未生效）。旧代码只捕获异常，而后端从不抛异常，这个
+            # 失败分支是死代码——失败信号在到达服务层前就被后端吃掉了。
+            # ``None``（其余平台/旧后端）维持旧语义，不视为失败。
+            if fit_ok is False:
+                return self._fail("设置适应模式失败: 桌面接口与注册表回退均未生效")
             if self._is_cancelled():
                 return self._fail("壁纸操作已终止，跳过系统壁纸设置")
 

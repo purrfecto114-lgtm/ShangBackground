@@ -1362,14 +1362,22 @@ def is_operation_cancelled() -> bool:
 
 
 def _execute_ipc_wallpaper_command(command: str) -> bool:
+    # v1.6.0 审计 P0-1: previous/next/random 的返回值 previously 被丢弃后恒
+    # return True——只要 WallpaperService.apply() 返回 False（COM 失败、目标
+    # 文件被删、别名拷贝失败），桌面纹丝不动且无任何提示，而 GUI 按钮同场景
+    # 会弹错误框。现在失败时抛 RuntimeError 走既有 worker 异常路径，与
+    # "set_wallpaper|" 分支及 GUI 路径对齐。
     if command == "previous":
-        previous_wallpaper()
+        if previous_wallpaper() is False:
+            raise RuntimeError(last_operation_error or "切换到上一张壁纸失败")
         return True
     if command == "next":
-        next_wallpaper()
+        if next_wallpaper() is False:
+            raise RuntimeError(last_operation_error or "切换到下一张壁纸失败")
         return True
     if command == "random":
-        random_wallpaper()
+        if random_wallpaper() is False:
+            raise RuntimeError(last_operation_error or "随机切换壁纸失败")
         return True
     if command.startswith("set_wallpaper|"):
         target = os.path.abspath(os.path.expanduser(command.split("|", 1)[1]))
@@ -1439,17 +1447,50 @@ def _notify_ipc_failure(command: str, error: str) -> None:
 
     This runs on the IPC worker thread, so it must not touch Qt widgets
     directly. Use the root shim's after() to schedule on the GUI thread.
+
+    v1.6.0 审计修复: 移除关键词白名单过滤。旧白名单（没有/无/不存在/
+    未找到/empty/not found）会把 "设置壁纸失败（未知错误）"、"停止动态
+    壁纸失败" 这类真实失败全部过滤掉；而每一条 IPC 命令失败都来自用户
+    主动操作（桌面右键/热键），都是用户有意义的信号。
     """
     try:
         msg = str(error)
-        # Only show notification for user-meaningful errors, not internal failures
-        if any(keyword in msg for keyword in ("没有", "无", "不存在", "未找到", "empty", "not found")):
-            if root is not None and hasattr(root, "after"):
-                root.after(0, lambda: _show_tray_notification(msg))
-            else:
-                log(f"IPC 失败（无 GUI 通知通道）: {msg}")
+        if root is not None and hasattr(root, "after"):
+            root.after(0, lambda: _show_tray_notification(msg))
+        else:
+            log(f"IPC 失败（无 GUI 通知通道）: {msg}")
     except Exception:
         pass
+
+
+def surface_missed_ipc_actions() -> int:
+    """报告并清空上次会话未送达的 IPC 动作（死信队列）。
+
+    v1.6.0 审计 P1-4: 桌面右键的冷启动子进程把动作转发给主实例失败时，
+    动作由 ``local_ipc.record_missed_command`` 持久化。主实例下次启动时在
+    GUI 线程调用本函数：逐条记日志并通过托盘气泡告知用户，保证"点完没
+    反应"至少有迟到反馈。必须在 GUI 线程调用（内部使用托盘通知）。
+    """
+    try:
+        from core import local_ipc as _local_ipc
+
+        missed = _local_ipc.drain_missed_commands()
+    except Exception as exc:
+        log(f"读取未送达 IPC 动作失败: {exc}")
+        return 0
+    if not missed:
+        return 0
+    for entry in missed:
+        payload = entry.get("payload")
+        log(
+            "未送达的桌面动作: " + str(entry.get("command", ""))
+            + (f" payload={payload}" if payload else "")
+            + " time=" + str(entry.get("time", ""))
+        )
+    count = len(missed)
+    message = t("上次退出前有 {count} 个桌面动作未能送达（主实例无响应），详见日志").format(count=count)
+    _show_tray_notification(message)
+    return count
 
 
 def _show_tray_notification(message: str) -> None:
@@ -1891,14 +1932,27 @@ def random_wallpaper():
 
 @_serialized_wallpaper_operation
 def set_fit_mode(mode):
+    """设置壁纸适应方式并按需重应用当前壁纸。
+
+    v1.6.0 审计 P0-3: 失败路径现在设置 ``last_operation_error`` 并返回
+    False。旧契约吞掉异常且隐式返回 None，而 GUI worker 只判 ``result is
+    False``，None 不命中——用户点了"应用适应方式"失败却看到"操作完成"
+    的假成功。
+    """
+    global last_operation_error
     try:
         mode = normalize_style_key(mode)
         config["fit_mode"] = mode
-        configure_fit_mode(mode, winreg, log)
+        fit_ok = configure_fit_mode(mode, winreg, log)
+        if fit_ok is False:
+            last_operation_error = "设置适应模式失败: 桌面接口与注册表回退均未生效"
+            log(last_operation_error)
+            return False
         current = config.get("current_wallpaper")
         applied_path = None
         if current and os.path.exists(current):
-            set_wallpaper_direct(current, "适应模式")
+            if set_wallpaper_direct(current, "适应模式") is False:
+                return False
             applied_path = current
         else:
             # 当前壁纸已不存在时，回退到 history 中最近一张仍存在的壁纸。
@@ -1906,7 +1960,8 @@ def set_fit_mode(mode):
             history = list_wallpaper_history(existing_only=True)
             if history:
                 candidate = history[0]
-                set_wallpaper_direct(candidate, "适应模式")
+                if set_wallpaper_direct(candidate, "适应模式") is False:
+                    return False
                 applied_path = candidate
             if applied_path is None:
                 log("适应模式: 当前壁纸已不存在且历史记录中无可回退项，未重新应用")
@@ -1914,8 +1969,11 @@ def set_fit_mode(mode):
             log("适应模式: " + mode + " (reapplied: " + str(applied_path) + ")")
         else:
             log("适应模式: " + mode)
+        return True
     except Exception as e:
-        log("设置适应模式失败: " + str(e))
+        last_operation_error = "设置适应模式失败: " + str(e)
+        log(last_operation_error)
+        return False
 
 
 def get_next_wallpaper(images: tuple[str, ...] | list[str] | None = None):
@@ -2641,6 +2699,15 @@ def _stale_context_menu_paths() -> tuple[str, ...]:
     )
 
 
+# v1.6.0 审计 P1-1: 本进程内是否已至少成功向 Explorer 发送过一次
+# SHCNE_ASSOCCHANGED。注册表写入是同步的，但 Explorer 允许缓存 shell
+# 关联数据；若本次会话从未成功通知过（SHChangeNotify 失败/Explorer 重启
+# 窗口期），仅凭注册表判断"已同步"会让 sync_context_menu(only_if_needed=
+# True) 直接短路，形成"菜单永不出现且重启应用也无法自愈"的稳态。
+# 每个进程启动后首次检查都会因此返回 False，触发一次幂等的重注册+重通知。
+_shell_association_notified = False
+
+
 def _notify_shell_association_changed() -> None:
     """Tell Explorer that per-user shell verbs changed.
 
@@ -2649,6 +2716,7 @@ def _notify_shell_association_changed() -> None:
     signal for this case and avoids making users restart Explorer/log out just
     to see a newly enabled or disabled verb.
     """
+    global _shell_association_notified
     if not IS_WINDOWS:
         return
     try:
@@ -2657,13 +2725,23 @@ def _notify_shell_association_changed() -> None:
         ctypes.windll.shell32.SHChangeNotify(
             SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None
         )
+        # SHChangeNotify 无返回值；未抛异常即视为已送达。置位会话标志，
+        # 让 is_context_menu_synced() 恢复纯注册表视角。
+        _shell_association_notified = True
     except Exception as exc:
         log(f"刷新 Windows Shell 关联缓存失败: {exc}")
 
 
 def is_context_menu_synced() -> bool:
-    """Return True if the Windows desktop context menu exactly matches config."""
+    """Return True if the Windows desktop context menu exactly matches config.
+
+    v1.6.0 审计 P1-1: 除注册表视角外，还要求本会话已至少成功通知过一次
+    Explorer（见 ``_shell_association_notified``）。否则注册表正确但
+    Explorer 缓存未失效的稳态会被误判为"已同步"，且永无重试机会。
+    """
     if not IS_WINDOWS or winreg is None:
+        return False
+    if not _shell_association_notified:
         return False
     try:
         for entry in _desired_context_menu_entries():

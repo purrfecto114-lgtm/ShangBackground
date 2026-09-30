@@ -54,8 +54,10 @@ class ModuleWallpaperBackend:
     def get_current(self) -> str:
         return str(self._module.get_current_wallpaper_platform() or "")
 
-    def configure_fit_mode(self, mode: str) -> None:
-        self._module.configure_fit_mode(mode, *self._fit_args)
+    def configure_fit_mode(self, mode: str) -> bool | None:
+        # v1.6.0 审计 P0-2: 透传底层返回值（Windows 显式 bool，其余 None），
+        # 不再丢弃失败信号。
+        return self._module.configure_fit_mode(mode, *self._fit_args)
 
     def set_wallpaper(self, path: str) -> None:
         self._module.set_wallpaper_platform(path)
@@ -163,7 +165,7 @@ class CallbackWallpaperBackend:
         self,
         *,
         get_current: Callable[[], str],
-        configure_fit_mode: Callable[[str], None],
+        configure_fit_mode: Callable[[str], "bool | None"],
         set_wallpaper: Callable[[str], None],
         capture_state: Callable[[], Any] | None = None,
         restore_state: Callable[[Any], Any] | None = None,
@@ -177,8 +179,8 @@ class CallbackWallpaperBackend:
     def get_current(self) -> str:
         return str(self._get_current() or "")
 
-    def configure_fit_mode(self, mode: str) -> None:
-        self._configure_fit_mode(mode)
+    def configure_fit_mode(self, mode: str) -> bool | None:
+        return self._configure_fit_mode(mode)
 
     def set_wallpaper(self, path: str) -> None:
         self._set_wallpaper(path)

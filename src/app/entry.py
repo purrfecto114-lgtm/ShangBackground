@@ -428,6 +428,9 @@ def main() -> int:
 
         if getattr(args, "sync_context_on_start", False) and core.IS_WINDOWS:
             QTimer.singleShot(250, lambda: window.sync_context_menu(show_message=True, only_if_needed=True))
+        # v1.6.0 审计 P1-4: 报告上次会话未送达的桌面右键动作（死信队列）。
+        # 延迟到托盘图标就绪之后；无未送达动作时静默返回。
+        QTimer.singleShot(1200, core.surface_missed_ipc_actions)
         if core.IS_WINDOWS:
             QTimer.singleShot(100, core.start_message_window)
         QTimer.singleShot(180, core.report_usage)

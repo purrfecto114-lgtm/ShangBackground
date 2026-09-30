@@ -95,6 +95,12 @@ def run_signtool(args: list[str] | tuple[str, ...], *, timeout: float = 60) -> s
     return subprocess.run(
         list(args),
         text=True,
+        # v1.6.0 审计修复: 其余构建工具均显式 UTF-8 解码；不指定 encoding 时
+        # text=True 会用 locale 默认编码（中文 Windows 为 GBK）解码 signtool
+        # 输出，非 ASCII 内容可能触发 UnicodeDecodeError。errors="replace"
+        # 保证诊断信息永不因解码失败而丢失。
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         check=False,
         timeout=timeout,

@@ -137,6 +137,13 @@ CI 之外，开发者也可以在本机生成 `setup.exe`：
 - 视频/HTML helper、GPU、系统 WebView 和 MPV；
 - 代码签名、公证、杀毒软件与安装器行为。
 
+### 已知限制：PyInstaller 路径的产物验证缺口
+
+CI（`ci.yml`）对 PyInstaller 与 Nuitka 两种后端都只执行 `--dry-run` 计划校验；真实产物构建与
+`validate_frozen_runtime` 目前仅在 `release.yml` 的 Nuitka 路径上运行。两条路径的产物一致性从未被
+CI 实证（v1.6.0 静默失败审计注记）。提高覆盖需要在 CI 中加入真实 PyInstaller 构建步骤，属于后续
+基础设施投入；在此之前，PyInstaller 手动构建者应自行运行 `build.py --verify` 与产物冒烟。
+
 当前工作流不执行代码签名或 Apple notarization，因为仓库中没有签名身份和密钥配置。后续加入签名时，应使用 GitHub Environments 和受保护 Secrets，并让签名 Job 独占相应权限。
 
 ## 签名探测与验证

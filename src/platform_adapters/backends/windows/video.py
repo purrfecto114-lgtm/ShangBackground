@@ -555,13 +555,17 @@ def _vlc_command(video_path: str, muted: bool, volume: int = 100) -> tuple[str, 
         "--no-qt-system-tray",
         "--avcodec-hw=any",
     ]
+    # v1.6.0 审计修复（REVIEW 3.2 同源问题）: 静音时不再传 --volume=0。
+    # 与 mpv 侧修法同语义：保留已保存的音量值，解除静音（GUI 走 stop+restart）
+    # 时立即恢复，避免静音期间把用户音量清零。
+    # VLC's --volume uses 0-1024 where 256 == 100%.  Map 0-100 → 0-256
+    # so the slider's percentage matches the user's mental model.
+    clamped_volume = max(0, min(100, int(volume)))
+    mapped_volume = int(clamped_volume * 256 / 100)
     if muted:
-        cmd.extend(["--no-audio", "--volume=0"])
+        cmd.extend(["--no-audio", f"--volume={mapped_volume}"])
     else:
-        # VLC's --volume uses 0-1024 where 256 == 100%.  Map 0-100 → 0-256
-        # so the slider's percentage matches the user's mental model.
-        clamped_volume = max(0, min(100, int(volume)))
-        cmd.append(f"--volume={int(clamped_volume * 256 / 100)}")
+        cmd.append(f"--volume={mapped_volume}")
     cmd.append(os.path.abspath(video_path))
     return "vlc", cmd, ""
 

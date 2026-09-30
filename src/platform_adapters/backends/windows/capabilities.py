@@ -48,5 +48,8 @@ def probe_capabilities() -> dict[str, dict[str, object]]:
         "tray": {"state": "supported", "runtime_ready": native, "backend": "QSystemTrayIcon", "limitations": "Explorer tray must be available."},
         "autostart": {"state": "supported", "runtime_ready": native, "backend": "per-user Startup folder", "limitations": "Portable app path must remain valid."},
         "single_instance": {"state": "supported", "runtime_ready": native, "backend": "per-user file lock + authenticated QLocalServer IPC; Local mutex fallback", "limitations": "Fast User Switching and session-bound endpoint behavior require native validation."},
-        "multi_monitor_static": {"state": "supported", "runtime_ready": native, "backend": "IDesktopWallpaper monitor API", "limitations": "Legacy fallback cannot provide the same per-monitor control."},
+        # v1.6.0 审计 P1-3: 实现是 monitorID=NULL 的一次性全输出设置（integration
+        # 包装器未接线按显示器选择），不是 "monitor API" 暗示的每显示器独立控制。
+        # backend/limitations 如实描述现状，与 macOS 侧同一口径（同图铺满所有屏）。
+        "multi_monitor_static": {"state": "supported", "runtime_ready": native, "backend": "IDesktopWallpaper (all monitors set in one call)", "limitations": "The wrapper passes monitorID=NULL, so every monitor receives the same image; per-monitor selection is not wired. Legacy registry fallback cannot provide per-monitor control."},
     }

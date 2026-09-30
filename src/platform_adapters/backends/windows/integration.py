@@ -3,10 +3,12 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import json
+import logging
 import os
 import shutil
 import tempfile
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 
@@ -82,7 +84,21 @@ def _wallpaper_api_path(original: str) -> str:
             try:
                 os.link(original, temp_alias)
             except OSError:
+                # v1.6.0 审计 P1-2: 跨卷（或文件系统不支持硬链接）时退化为整文件
+                # 拷贝。别名按 (路径, 大小, mtime) 缓存，因此每个文件版本只发生
+                # 一次而非每次切换；但首次拷贝发生在壁纸 worker 线程、set_wallpaper
+                # 之前，大图会有可感知延迟。记录大小与耗时，让跨卷大图的切换
+                # 延迟可诊断，而不是表现为无法解释的卡顿。
+                _copy_started = time.monotonic()
                 shutil.copyfile(original, temp_alias)
+                logging.getLogger(
+                    "platform_adapters.windows_integration"
+                ).warning(
+                    "非 ASCII 壁纸别名发生跨卷拷贝: %d 字节, 耗时 %.2fs (%s)",
+                    stat.st_size,
+                    time.monotonic() - _copy_started,
+                    original,
+                )
             os.replace(temp_alias, alias)
         source_file = alias + ".source.json"
         try:
@@ -615,19 +631,25 @@ def get_current_wallpaper_platform() -> str:
     return _original_path_for_alias(buf.value) if ok else ""
 
 
-def configure_fit_mode(fit_mode, winreg_module=None, log=None):
+def configure_fit_mode(fit_mode, winreg_module=None, log=None) -> bool:
     """设置壁纸适应方式.
 
     优先走 IDesktopWallpaper::SetPosition (与 SetWallpaper 同路径, 不触发刷新).
     回退到注册表 WallpaperStyle/TileWallpaper (旧路径, 需要 SetWallpaper 重新触发).
+
+    返回 True 表示 COM 或注册表回退至少一条路径成功; 返回 False 表示两条
+    路径都失败. 旧契约恒返回 None 且吞掉异常, 导致服务层的失败分支成为
+    死代码、用户看到假成功（静默失败审计 P0-2）, 现改为显式契约.
     """
     # 优先 COM
     if _set_position_via_com(fit_mode):
-        return
+        return True
     # 回退注册表
     fit_mode = normalize_style_key(fit_mode)
     if winreg_module is None:
-        return
+        if log:
+            log("设置适应模式失败: 注册表模块不可用")
+        return False
     key = None
     try:
         key = winreg_module.OpenKey(
@@ -644,9 +666,11 @@ def configure_fit_mode(fit_mode, winreg_module=None, log=None):
             winreg_module.REG_SZ,
             "1" if fit_mode == "平铺" else "0",
         )
+        return True
     except Exception as exc:
         if log:
             log("设置适应模式失败: " + str(exc))
+        return False
     finally:
         if key is not None:
             try:
