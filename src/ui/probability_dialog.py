@@ -78,9 +78,7 @@ class RandomProbabilityDialog(QDialog):
         apply_dialog_title(title)
         root.addWidget(title)
 
-        explain = QLabel(
-            self._t("直接填写每张壁纸的随机百分比。所有项目合计必须为 100%；设为 0% 的壁纸不会参与随机。")
-        )
+        explain = QLabel(self._t("直接填写每张壁纸的随机百分比。所有项目合计必须为 100%；设为 0% 的壁纸不会参与随机。"))
         explain.setWordWrap(True)
         explain.setProperty("muted", True)
         explain.setProperty("dialogNote", True)
@@ -167,7 +165,9 @@ class RandomProbabilityDialog(QDialog):
             row = _ProbabilityRow(filename, row_widget, slider, spin, state)
             self._rows[filename] = row
             slider.valueChanged.connect(lambda value, key=filename: self._set_units(key, value, "slider"))
-            spin.valueChanged.connect(lambda value, key=filename: self._set_units(key, round(value * PERCENT_SCALE), "spin"))
+            spin.valueChanged.connect(
+                lambda value, key=filename: self._set_units(key, round(value * PERCENT_SCALE), "spin")
+            )
 
         self._rows_layout.addStretch(1)
         container.setUpdatesEnabled(True)
@@ -266,9 +266,7 @@ class RandomProbabilityDialog(QDialog):
         self._total_bar.setValue(min(PERCENT_TOTAL_UNITS, total))
         self._total_bar.setFormat(f"{total / PERCENT_SCALE:.1f}% / 100.0%")
         if valid:
-            self._summary_label.setText(
-                self._t("分配有效") + f" · {self._t('参与随机')}: {enabled}/{len(units)}"
-            )
+            self._summary_label.setText(self._t("分配有效") + f" · {self._t('参与随机')}: {enabled}/{len(units)}")
             self._summary_label.setToolTip("")
         else:
             difference = (PERCENT_TOTAL_UNITS - total) / PERCENT_SCALE
@@ -296,10 +294,7 @@ class RandomProbabilityDialog(QDialog):
         if sum(units) != PERCENT_TOTAL_UNITS or not any(units):
             QMessageBox.warning(self, self._t("随机概率"), self._t("保存前请让所有项目合计为 100%。"))
             return
-        values = {
-            filename: row.slider.value() / PERCENT_SCALE
-            for filename, row in self._rows.items()
-        }
+        values = {filename: row.slider.value() / PERCENT_SCALE for filename, row in self._rows.items()}
         try:
             self._backend.save_probability_weights(self._folder, values)
         except Exception as exc:

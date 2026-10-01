@@ -7,6 +7,7 @@ area visible, rendering continues.  Unknown/unsupported window systems return
 ``None`` so callers can conservatively keep rendering rather than falsely
 pausing.
 """
+
 from __future__ import annotations
 
 import ctypes
@@ -45,12 +46,7 @@ class Rect:
         return self.width > 1 and self.height > 1
 
     def intersects(self, other: "Rect") -> bool:
-        return not (
-            self.right <= other.x
-            or other.right <= self.x
-            or self.bottom <= other.y
-            or other.bottom <= self.y
-        )
+        return not (self.right <= other.x or other.right <= self.x or self.bottom <= other.y or other.bottom <= self.y)
 
     def contains_point(self, x: float, y: float) -> bool:
         return self.x <= x < self.right and self.y <= y < self.bottom
@@ -162,15 +158,15 @@ def _windows_screen_rects() -> list[Rect]:
         hmonitor_type = getattr(wintypes, "HMONITOR", wintypes.HANDLE)
         hdc_type = getattr(wintypes, "HDC", wintypes.HANDLE)
 
-        @ctypes.WINFUNCTYPE(
-            wintypes.BOOL, hmonitor_type, hdc_type, ctypes.POINTER(wintypes.RECT), wintypes.LPARAM
-        )
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, hmonitor_type, hdc_type, ctypes.POINTER(wintypes.RECT), wintypes.LPARAM)
         def _enum(_monitor, _hdc, native_rect, _lparam):
             try:
                 value = native_rect.contents
                 rect = Rect(
-                    float(value.left), float(value.top),
-                    float(value.right - value.left), float(value.bottom - value.top),
+                    float(value.left),
+                    float(value.top),
+                    float(value.right - value.left),
+                    float(value.bottom - value.top),
                 )
                 if rect.valid():
                     result.append(rect)
@@ -235,12 +231,15 @@ def _windows_covering_rects(
             got = False
             if dwmapi is not None:
                 try:
-                    got = dwmapi.DwmGetWindowAttribute(
-                        hwnd,
-                        DWMWA_EXTENDED_FRAME_BOUNDS,
-                        ctypes.byref(native),
-                        ctypes.sizeof(native),
-                    ) == 0
+                    got = (
+                        dwmapi.DwmGetWindowAttribute(
+                            hwnd,
+                            DWMWA_EXTENDED_FRAME_BOUNDS,
+                            ctypes.byref(native),
+                            ctypes.sizeof(native),
+                        )
+                        == 0
+                    )
                 except Exception:
                     got = False
             if not got and not user32.GetWindowRect(hwnd, ctypes.byref(native)):
@@ -271,9 +270,13 @@ def _windows_covering_rects(
                 if dwmapi is not None:
                     cloaked = wintypes.DWORD()
                     try:
-                        if dwmapi.DwmGetWindowAttribute(
-                            hwnd, DWMWA_CLOAKED, ctypes.byref(cloaked), ctypes.sizeof(cloaked)
-                        ) == 0 and cloaked.value:
+                        if (
+                            dwmapi.DwmGetWindowAttribute(
+                                hwnd, DWMWA_CLOAKED, ctypes.byref(cloaked), ctypes.sizeof(cloaked)
+                            )
+                            == 0
+                            and cloaked.value
+                        ):
                             return True
                     except Exception:
                         pass
@@ -625,11 +628,7 @@ def desktop_is_visible(
     excluded = _normalize_window_ids(excluded_window_ids)
     probe_key = tuple(sorted(excluded))
     now = time.monotonic()
-    if (
-        not force
-        and probe_key == _last_probe_key
-        and now - _last_probe_at < _CACHE_TTL_SECONDS
-    ):
+    if not force and probe_key == _last_probe_key and now - _last_probe_at < _CACHE_TTL_SECONDS:
         return _last_probe_result
     screens = _screen_rects()
     if not screens:
@@ -641,9 +640,7 @@ def desktop_is_visible(
         windows = _macos_covering_rects(screens, excluded_window_ids=excluded)
         result = None if windows is None else desktop_visible_from_rects(screens, windows)
     elif sys.platform.startswith("linux"):
-        windows = _linux_x11_covering_rects(
-            screens, excluded_window_ids=excluded
-        )
+        windows = _linux_x11_covering_rects(screens, excluded_window_ids=excluded)
         result = None if windows is None else desktop_visible_from_rects(screens, windows)
     else:
         result = None

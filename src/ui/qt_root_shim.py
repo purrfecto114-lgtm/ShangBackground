@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 if TYPE_CHECKING:
     from ui.main_window import ShangBackgroundWindow
 
+
 class QtRootShim(QObject):
     """给核心模块提供最小 root.after/deiconify 兼容层。
 
@@ -97,13 +98,13 @@ class QtRootShim(QObject):
     def focus_force(self):
         self.window.activateWindow()
 
-
     def show_message(self, title, message, level="info"):
         # Delegate to the shared ui.dialog_style helper so the dialog
         # inherits the application-level QSS cascade (no need to copy
         # ``_theme_stylesheet`` onto the box any more — that historic
         # pattern was a source of style drift across the three platforms).
         from ui.dialog_style import show_message as _show_message
+
         _show_message(self.window, title, message, level=level)
 
     def winfo_id(self):

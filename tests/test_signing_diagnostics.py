@@ -16,13 +16,15 @@ def test_signing_reports_missing_signtool(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert "signtool" in result.reason.lower()
 
 
-def test_signing_requires_certificate_before_invoking_tool(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+def test_signing_requires_certificate_before_invoking_tool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     from build_tools import signing
 
     calls: list[tuple[object, ...]] = []
-    monkeypatch.setattr(signing, "run_signtool", lambda *args, **kwargs: calls.append(args) or type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+    monkeypatch.setattr(
+        signing,
+        "run_signtool",
+        lambda *args, **kwargs: calls.append(args) or type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})(),
+    )
     # Ensure tool would be found if it were checked, but cert is missing so it must not be called.
     monkeypatch.setattr(signing, "find_signtool", lambda: Path("C:/fake/signtool.exe"))
     target = tmp_path / "app.exe"
@@ -49,9 +51,7 @@ def test_signing_succeeds_with_mocked_tool(monkeypatch: pytest.MonkeyPatch, tmp_
     monkeypatch.setattr(signing, "run_signtool", fake_run)
     target = tmp_path / "app.exe"
     target.write_bytes(b"MZ")
-    result = signing.sign_and_verify(
-        target, certificate="cert.pfx", timestamp_url="http://timestamp.example.com"
-    )
+    result = signing.sign_and_verify(target, certificate="cert.pfx", timestamp_url="http://timestamp.example.com")
     assert result.status == "signed"
     assert result.reason.lower() != "unsigned"
     # Must have invoked sign and verify (at least 2 calls)

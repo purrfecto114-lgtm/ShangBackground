@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from app.paths import (
-    PROJECT_ROOT, RESOURCE_ROOT, app_executable_path, entry_script_path,
-    external_media_runtime_allowed, is_packaged_runtime, mpv_bundled_exe,
+    PROJECT_ROOT,
+    RESOURCE_ROOT,
+    app_executable_path,
+    entry_script_path,
+    external_media_runtime_allowed,
+    is_packaged_runtime,
+    mpv_bundled_exe,
 )
 from app.libmpv_runtime import runtime_available as libmpv_runtime_available
 from app.build_features import use_internal_libmpv
@@ -55,26 +60,39 @@ if sys.platform == "win32":
     def _bind_kernel32_prototypes(kernel32) -> None:
         """为 mpv IPC 用到的内核函数补齐签名（避免 64 位句柄被截断）。"""
         kernel32.CreateFileW.argtypes = [
-            ctypes.wintypes.LPCWSTR, ctypes.wintypes.DWORD, ctypes.wintypes.DWORD,
-            ctypes.wintypes.LPVOID, ctypes.wintypes.DWORD, ctypes.wintypes.DWORD,
+            ctypes.wintypes.LPCWSTR,
+            ctypes.wintypes.DWORD,
+            ctypes.wintypes.DWORD,
+            ctypes.wintypes.LPVOID,
+            ctypes.wintypes.DWORD,
+            ctypes.wintypes.DWORD,
             ctypes.wintypes.HANDLE,
         ]
         kernel32.CreateFileW.restype = ctypes.wintypes.HANDLE
         kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
         kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
         kernel32.WriteFile.argtypes = [
-            ctypes.wintypes.HANDLE, ctypes.wintypes.LPCVOID, ctypes.wintypes.DWORD,
-            ctypes.POINTER(ctypes.wintypes.DWORD), ctypes.wintypes.LPVOID,
+            ctypes.wintypes.HANDLE,
+            ctypes.wintypes.LPCVOID,
+            ctypes.wintypes.DWORD,
+            ctypes.POINTER(ctypes.wintypes.DWORD),
+            ctypes.wintypes.LPVOID,
         ]
         kernel32.WriteFile.restype = ctypes.wintypes.BOOL
         kernel32.ReadFile.argtypes = [
-            ctypes.wintypes.HANDLE, ctypes.wintypes.LPVOID, ctypes.wintypes.DWORD,
-            ctypes.POINTER(ctypes.wintypes.DWORD), ctypes.wintypes.LPVOID,
+            ctypes.wintypes.HANDLE,
+            ctypes.wintypes.LPVOID,
+            ctypes.wintypes.DWORD,
+            ctypes.POINTER(ctypes.wintypes.DWORD),
+            ctypes.wintypes.LPVOID,
         ]
         kernel32.ReadFile.restype = ctypes.wintypes.BOOL
         kernel32.PeekNamedPipe.argtypes = [
-            ctypes.wintypes.HANDLE, ctypes.wintypes.LPVOID, ctypes.wintypes.DWORD,
-            ctypes.POINTER(ctypes.wintypes.DWORD), ctypes.POINTER(ctypes.wintypes.DWORD),
+            ctypes.wintypes.HANDLE,
+            ctypes.wintypes.LPVOID,
+            ctypes.wintypes.DWORD,
+            ctypes.POINTER(ctypes.wintypes.DWORD),
+            ctypes.POINTER(ctypes.wintypes.DWORD),
             ctypes.POINTER(ctypes.wintypes.DWORD),
         ]
         kernel32.PeekNamedPipe.restype = ctypes.wintypes.BOOL
@@ -98,7 +116,9 @@ def _read_state() -> dict[str, object]:
 
 def _write_state(pid: int, player: str, hwnd: int | None = None, ipc_path: str = "") -> None:
     process_state.write_state(
-        PID_FILE, pid, kind=PROCESS_KIND,
+        PID_FILE,
+        pid,
+        kind=PROCESS_KIND,
         extra={
             "player": player,
             "hwnd": int(hwnd or 0),
@@ -177,7 +197,7 @@ def _split_registry_command(command: str) -> str | None:
     match = re.match(r'^"([^"]+\.exe)"', command, re.IGNORECASE)
     if match and os.path.isfile(match.group(1)):
         return match.group(1)
-    match = re.match(r'^(.*?\.exe)(?:\s|$)', command, re.IGNORECASE)
+    match = re.match(r"^(.*?\.exe)(?:\s|$)", command, re.IGNORECASE)
     if match:
         exe = match.group(1).strip('"')
         if os.path.isfile(exe):
@@ -223,10 +243,12 @@ def _registry_executable_candidates(exe_name: str) -> list[str]:
     roots = [winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE]
     app_path_keys = []
     for item in app_path_names:
-        app_path_keys.extend([
-            rf"Software\Microsoft\Windows\CurrentVersion\App Paths\{item}",
-            rf"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\{item}",
-        ])
+        app_path_keys.extend(
+            [
+                rf"Software\Microsoft\Windows\CurrentVersion\App Paths\{item}",
+                rf"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\{item}",
+            ]
+        )
 
     if "mpv" in exe_lower:
         open_command_keys = [
@@ -280,6 +302,7 @@ def _registry_executable_candidates(exe_name: str) -> list[str]:
             pass
     return result
 
+
 def _candidate_paths_uncached(*names: str) -> list[str]:
     result: list[str] = []
     allow_external = external_media_runtime_allowed()
@@ -292,6 +315,7 @@ def _candidate_paths_uncached(*names: str) -> list[str]:
     if "mpv.exe" in _names_lower or "mpv" in _names_lower:
         try:
             from app.paths import resolve_mpv_path
+
             resolved = resolve_mpv_path()
             if resolved:
                 result.append(resolved)
@@ -313,11 +337,7 @@ def _candidate_paths_uncached(*names: str) -> list[str]:
                 key = os.path.normcase(os.path.abspath(path))
             except Exception:
                 continue
-            if (
-                os.path.basename(path).lower() in wanted
-                and key not in seen
-                and os.path.isfile(path)
-            ):
+            if os.path.basename(path).lower() in wanted and key not in seen and os.path.isfile(path):
                 seen.add(key)
                 deduped.append(path)
         return deduped
@@ -410,13 +430,16 @@ def _find_workerw() -> int:
     # writes an 8-byte DWORD_PTR on x64 (stack/heap corruption risk).
     user32.FindWindowW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
     user32.FindWindowW.restype = ctypes.c_void_p
-    user32.FindWindowExW.argtypes = [
-        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p
-    ]
+    user32.FindWindowExW.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p]
     user32.FindWindowExW.restype = ctypes.c_void_p
     user32.SendMessageTimeoutW.argtypes = [
-        ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t,
-        ctypes.c_uint, ctypes.c_uint, ctypes.POINTER(ctypes.c_size_t),
+        ctypes.c_void_p,
+        ctypes.c_uint,
+        ctypes.c_size_t,
+        ctypes.c_ssize_t,
+        ctypes.c_uint,
+        ctypes.c_uint,
+        ctypes.POINTER(ctypes.c_size_t),
     ]
     user32.SendMessageTimeoutW.restype = ctypes.c_size_t
     progman = user32.FindWindowW("Progman", None)
@@ -452,6 +475,7 @@ def _mpv_ipc_path(pid: int | None = None) -> str:
     suffix = secrets.token_hex(8)
     return rf"\\.\pipe\shangbg-mpv-{suffix}"
 
+
 def _internal_libmpv_command(
     video_path: str, muted: bool, volume: int, workerw: int
 ) -> tuple[str, list[str], str] | None:
@@ -484,12 +508,18 @@ def _internal_libmpv_command(
         cmd = [app_executable_path()]
     else:
         cmd = [sys.executable, entry_script_path()]
-    cmd.extend([
-        "--internal-libmpv-player", os.path.abspath(video_path),
-        "--wid", str(workerw),
-        "--ipc-path", ipc_path,
-        "--volume", str(max(0, min(100, int(volume)))),
-    ])
+    cmd.extend(
+        [
+            "--internal-libmpv-player",
+            os.path.abspath(video_path),
+            "--wid",
+            str(workerw),
+            "--ipc-path",
+            ipc_path,
+            "--volume",
+            str(max(0, min(100, int(volume)))),
+        ]
+    )
     if muted:
         cmd.append("--muted")
     return "libmpv", cmd, ipc_path
@@ -637,8 +667,11 @@ class _MpvNamedPipeChannel:
         data = bytes(payload)
         written = ctypes.wintypes.DWORD(0)
         ok = _KERNEL32.WriteFile(
-            ctypes.wintypes.HANDLE(self._handle), data, len(data),
-            ctypes.byref(written), None,
+            ctypes.wintypes.HANDLE(self._handle),
+            data,
+            len(data),
+            ctypes.byref(written),
+            None,
         )
         if not ok or written.value <= 0:
             raise OSError(f"WriteFile failed (error={ctypes.get_last_error()})")
@@ -689,9 +722,7 @@ def _open_ipc_pipe(ipc_path: str, timeout: float = 3.0) -> int | None:
     error_pipe_busy = 231
     deadline = time.monotonic() + max(0.2, float(timeout))
     while time.monotonic() < deadline:
-        handle = _KERNEL32.CreateFileW(
-            ipc_path, generic_read_write, 0, None, open_existing, 0, None
-        )
+        handle = _KERNEL32.CreateFileW(ipc_path, generic_read_write, 0, None, open_existing, 0, None)
         if handle not in (None, _INVALID_HANDLE_VALUE):
             return int(handle)
         if ctypes.get_last_error() == error_pipe_busy:
@@ -728,9 +759,7 @@ def _heal_dead_player_state() -> None:
     process_state.remove_state(PID_FILE)
 
 
-def _mpv_ipc_transact(
-    ipc_path: str, command, timeout: float = _RUNTIME_IPC_OPEN_TIMEOUT
-) -> tuple[bool, Any]:
+def _mpv_ipc_transact(ipc_path: str, command, timeout: float = _RUNTIME_IPC_OPEN_TIMEOUT) -> tuple[bool, Any]:
     """执行一次 JSON IPC 事务：发送命令并等待 mpv 应答。
 
     运行时路径默认短超时：管道缺失（播放器已退出）时快速失败并自愈状态，
@@ -893,8 +922,7 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
 
     return False, (
         "未找到可用的视频壁纸播放器，或播放器无法启动。优先尝试了 mpv 可执行运行时，随后尝试兼容 libmpv/VLC。"
-        f" 诊断日志：{PLAYER_LOG}"
-        + ("\n" + "；".join(errors[-4:]) if errors else "")
+        f" 诊断日志：{PLAYER_LOG}" + ("\n" + "；".join(errors[-4:]) if errors else "")
     )
 
 
@@ -913,17 +941,21 @@ def _send_mpv_ipc_commands(commands: list[dict]) -> bool:
 def set_video_volume(muted: bool, volume: int) -> bool:
     """Live-adjust volume/mute on the running player without restart."""
     clamped_volume = max(0, min(100, int(volume)))
-    return _send_mpv_ipc_commands([
-        {"command": ["set_property", "volume", clamped_volume]},
-        {"command": ["set_property", "mute", bool(muted)]},
-    ])
+    return _send_mpv_ipc_commands(
+        [
+            {"command": ["set_property", "volume", clamped_volume]},
+            {"command": ["set_property", "mute", bool(muted)]},
+        ]
+    )
 
 
 def set_video_paused(paused: bool) -> bool:
     """Live-pause/resume the running mpv wallpaper via JSON IPC."""
-    return _send_mpv_ipc_commands([
-        {"command": ["set_property", "pause", bool(paused)]},
-    ])
+    return _send_mpv_ipc_commands(
+        [
+            {"command": ["set_property", "pause", bool(paused)]},
+        ]
+    )
 
 
 _PROPERTY_OBSERVERS: dict[str, PollingPropertyObserver] = {}
@@ -990,8 +1022,12 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("video_path")
     parser.add_argument("--muted", action="store_true")
-    parser.add_argument("--volume", type=int, default=100,
-                        help="audio volume 0-100; preserved while muted for later unmute (default: 100)")
+    parser.add_argument(
+        "--volume",
+        type=int,
+        default=100,
+        help="audio volume 0-100; preserved while muted for later unmute (default: 100)",
+    )
     args = parser.parse_args()
     ok, message = start_video_wallpaper(args.video_path, muted=args.muted, volume=args.volume)
     if not ok:

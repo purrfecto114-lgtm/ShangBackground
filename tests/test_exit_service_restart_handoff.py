@@ -8,6 +8,7 @@ def _service(events: list[str]) -> ExitService:
         def _run():
             events.append(name)
             return value
+
         return _run
 
     return ExitService(
@@ -24,9 +25,7 @@ def _service(events: list[str]) -> ExitService:
 
 def test_restart_closes_ipc_but_keeps_singleton_until_process_exit():
     events: list[str] = []
-    report = _service(events).run(
-        reason="relaunch", restore_wallpaper=False, restarting=True
-    )
+    report = _service(events).run(reason="relaunch", restore_wallpaper=False, restarting=True)
 
     assert "ipc" in events
     assert "release" not in events

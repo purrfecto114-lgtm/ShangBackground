@@ -62,9 +62,13 @@ FONT_FAMILY = {
 FONT_EXTENSIONS = (".ttf", ".ttc", ".otf")
 
 VIDEO_EXTENSIONS = (
-    ((".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".wmv")
-     if (IS_WINDOWS or IS_LINUX) else (".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"))
-    if is_feature_enabled("video") else ()
+    (
+        (".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".wmv")
+        if (IS_WINDOWS or IS_LINUX)
+        else (".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm")
+    )
+    if is_feature_enabled("video")
+    else ()
 )
 VIDEO_FILETYPES = [("视频文件", "*" + " *".join(VIDEO_EXTENSIONS))]
 IMAGE_FILETYPES = [
@@ -103,24 +107,27 @@ if is_feature_enabled("hotkeys"):
             # not import app.config, so this module-scope use stays circular-
             # import safe.
             from platform_adapters.session import is_wayland_session
+
             _linux_wayland = is_wayland_session()
         except Exception:
             _linux_wayland = False
         if _linux_wayland:
-            DEPENDENCIES.extend([
-                {
-                    "module": "dbus_next",
-                    "package": "dbus-next",
-                    "required": False,
-                    "desc": "Wayland XDG Portal 全局热键注册",
-                },
-                {
-                    "module": "pynput",
-                    "package": "pynput",
-                    "required": False,
-                    "desc": "快捷键录制辅助（Portal 负责实际注册）",
-                },
-            ])
+            DEPENDENCIES.extend(
+                [
+                    {
+                        "module": "dbus_next",
+                        "package": "dbus-next",
+                        "required": False,
+                        "desc": "Wayland XDG Portal 全局热键注册",
+                    },
+                    {
+                        "module": "pynput",
+                        "package": "pynput",
+                        "required": False,
+                        "desc": "快捷键录制辅助（Portal 负责实际注册）",
+                    },
+                ]
+            )
         else:
             DEPENDENCIES.append(
                 {"module": "pynput", "package": "pynput", "required": False, "desc": "X11 系统级全局热键"}
@@ -130,13 +137,20 @@ if is_feature_enabled("hotkeys"):
             {"module": "pynput", "package": "pynput", "required": False, "desc": "可选的系统级全局热键"}
         )
 if IS_MACOS:
-    DEPENDENCIES.extend([
-        {"module": "AppKit", "package": "pyobjc-framework-Cocoa", "required": False, "desc": "macOS 原生桌面集成"},
-        {"module": "Quartz", "package": "pyobjc-framework-Quartz", "required": False, "desc": "macOS 桌面窗口层级"},
-    ])
+    DEPENDENCIES.extend(
+        [
+            {"module": "AppKit", "package": "pyobjc-framework-Cocoa", "required": False, "desc": "macOS 原生桌面集成"},
+            {"module": "Quartz", "package": "pyobjc-framework-Quartz", "required": False, "desc": "macOS 桌面窗口层级"},
+        ]
+    )
     if is_feature_enabled("video"):
         DEPENDENCIES.append(
-            {"module": "AVFoundation", "package": "pyobjc-framework-AVFoundation", "required": False, "desc": "macOS 视频壁纸播放"}
+            {
+                "module": "AVFoundation",
+                "package": "pyobjc-framework-AVFoundation",
+                "required": False,
+                "desc": "macOS 视频壁纸播放",
+            }
         )
 if is_feature_enabled("html"):
     DEPENDENCIES.append(
@@ -169,18 +183,46 @@ if is_feature_enabled("video"):
 if is_feature_enabled("html"):
     MODE_KEYS.append("HTML")
 MODE_ALIASES = {
-    "幻灯片放映": "幻灯片放映", "幻灯片": "幻灯片放映", "slideshow": "幻灯片放映",
-    "slide show": "幻灯片放映", "slides": "幻灯片放映", "图片": "图片", "单张图片": "图片",
-    "image": "图片", "picture": "图片", "single image": "图片", "视频": "视频", "video": "视频",
-    "video wallpaper": "视频", "纯色": "纯色", "solid": "纯色", "solid color": "纯色",
-    "渐变": "渐变", "gradient": "渐变", "html": "HTML", "HTML": "HTML", "网页": "HTML",
-    "web": "HTML", "webpage": "HTML",
+    "幻灯片放映": "幻灯片放映",
+    "幻灯片": "幻灯片放映",
+    "slideshow": "幻灯片放映",
+    "slide show": "幻灯片放映",
+    "slides": "幻灯片放映",
+    "图片": "图片",
+    "单张图片": "图片",
+    "image": "图片",
+    "picture": "图片",
+    "single image": "图片",
+    "视频": "视频",
+    "video": "视频",
+    "video wallpaper": "视频",
+    "纯色": "纯色",
+    "solid": "纯色",
+    "solid color": "纯色",
+    "渐变": "渐变",
+    "gradient": "渐变",
+    "html": "HTML",
+    "HTML": "HTML",
+    "网页": "HTML",
+    "web": "HTML",
+    "webpage": "HTML",
 }
 STYLE_ALIASES = {
-    "填充": "填充", "fill": "填充", "zoom": "填充", "适应": "适应", "fit": "适应",
-    "scaled": "适应", "拉伸": "拉伸", "stretch": "拉伸", "stretched": "拉伸",
-    "居中": "居中", "center": "居中", "centered": "居中", "平铺": "平铺",
-    "tile": "平铺", "tiled": "平铺",
+    "填充": "填充",
+    "fill": "填充",
+    "zoom": "填充",
+    "适应": "适应",
+    "fit": "适应",
+    "scaled": "适应",
+    "拉伸": "拉伸",
+    "stretch": "拉伸",
+    "stretched": "拉伸",
+    "居中": "居中",
+    "center": "居中",
+    "centered": "居中",
+    "平铺": "平铺",
+    "tile": "平铺",
+    "tiled": "平铺",
 }
 
 

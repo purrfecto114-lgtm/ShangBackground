@@ -17,6 +17,7 @@ from app.dependency_warning import (
     suppress_dependency_warning,
 )
 
+
 def _module_available(module: str) -> bool:
     """Return whether a Python module and its required native runtime are usable.
 
@@ -278,9 +279,7 @@ def build_install_plan(packages: Iterable[str]) -> InstallPlan:
     display = " &&\n".join(_command_display(item) for item in commands)
 
     if in_virtualenv:
-        note = t(
-            "检测到虚拟环境：Python 包将安装到当前解释器，避免发行版包安装后仍无法导入。"
-        )
+        note = t("检测到虚拟环境：Python 包将安装到当前解释器，避免发行版包安装后仍无法导入。")
         if system_packages:
             note += "\n" + t("GTK/WebKit 等原生运行库仍通过系统包管理器安装。")
     elif system_packages and pip_packages:
@@ -327,13 +326,26 @@ def _try_import_pyside() -> tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any]:
             QPushButton,
             QVBoxLayout,
         )
-        return QApplication, QDialog, QDialogButtonBox, QLabel, QMessageBox, QPlainTextEdit, QPushButton, QTimer, QVBoxLayout
+
+        return (
+            QApplication,
+            QDialog,
+            QDialogButtonBox,
+            QLabel,
+            QMessageBox,
+            QPlainTextEdit,
+            QPushButton,
+            QTimer,
+            QVBoxLayout,
+        )
     except Exception:
         return (None, None, None, None, None, None, None, None, None)
 
 
 def _install_with_pyside(parent, plan: InstallPlan) -> bool:
-    QApplication, QDialog, QDialogButtonBox, QLabel, QMessageBox, QPlainTextEdit, QPushButton, QTimer, QVBoxLayout = _try_import_pyside()
+    QApplication, QDialog, QDialogButtonBox, QLabel, QMessageBox, QPlainTextEdit, QPushButton, QTimer, QVBoxLayout = (
+        _try_import_pyside()
+    )
     if QDialog is None:
         return False
 
@@ -341,13 +353,11 @@ def _install_with_pyside(parent, plan: InstallPlan) -> bool:
     if app is None:
         return False
 
-
     if plan.command and os.path.basename(str(plan.command[0])) in {"pkexec", "sudo"}:
         answer = QMessageBox.question(
             parent,
             t("确认提升权限"),
-            t("即将通过系统提权工具安装运行依赖。请确认你信任本软件和下列命令：")
-            + "\n\n" + plan.display_command,
+            t("即将通过系统提权工具安装运行依赖。请确认你信任本软件和下列命令：") + "\n\n" + plan.display_command,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -428,7 +438,17 @@ def _install_with_pyside(parent, plan: InstallPlan) -> bool:
 
 
 def _prompt_with_pyside(parent, missing, plan: InstallPlan) -> bool | None:
-    QApplication, _QDialog, _QDialogButtonBox, _QLabel, QMessageBox, _QPlainTextEdit, _QPushButton, _QTimer, _QVBoxLayout = _try_import_pyside()
+    (
+        QApplication,
+        _QDialog,
+        _QDialogButtonBox,
+        _QLabel,
+        QMessageBox,
+        _QPlainTextEdit,
+        _QPushButton,
+        _QTimer,
+        _QVBoxLayout,
+    ) = _try_import_pyside()
     if QMessageBox is None or QApplication.instance() is None:
         return None
 
@@ -438,19 +458,25 @@ def _prompt_with_pyside(parent, missing, plan: InstallPlan) -> bool | None:
     )
     extra = ("\n\n" + plan.note) if plan.note else ""
     text = (
-        t("检测到缺少运行依赖：") + "\n\n" + names + "\n\n" +
-        t("当前 Linux 发行版：") + f" {plan.distro}  /  {plan.manager}\n" +
-        t("将执行：") + "\n" + plan.display_command + extra + "\n\n" +
-        t("是否现在自动安装？")
+        t("检测到缺少运行依赖：")
+        + "\n\n"
+        + names
+        + "\n\n"
+        + t("当前 Linux 发行版：")
+        + f" {plan.distro}  /  {plan.manager}\n"
+        + t("将执行：")
+        + "\n"
+        + plan.display_command
+        + extra
+        + "\n\n"
+        + t("是否现在自动安装？")
     )
     prompt = QMessageBox(parent)
     prompt.setIcon(QMessageBox.Icon.Warning)
     prompt.setWindowTitle(t("运行依赖检查"))
     prompt.setText(text)
     prompt.setStandardButtons(
-        QMessageBox.StandardButton.Yes
-        | QMessageBox.StandardButton.No
-        | QMessageBox.StandardButton.Cancel
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel
     )
     prompt.setDefaultButton(QMessageBox.StandardButton.No)
     suppress_btn = None
@@ -469,13 +495,17 @@ def _prompt_with_pyside(parent, missing, plan: InstallPlan) -> bool | None:
         if ok:
             QMessageBox.information(parent, t("安装完成"), t("依赖安装完成，请重新启动软件。"))
             return False
-        QMessageBox.warning(parent, t("安装失败"), t("依赖安装失败，请在终端手动执行：") + "\n\n" + plan.display_command)
+        QMessageBox.warning(
+            parent, t("安装失败"), t("依赖安装失败，请在终端手动执行：") + "\n\n" + plan.display_command
+        )
         return False
     # "No" 分支：显示手动安装命令，并提供"复制到剪贴板"按钮
     manual_msg = QMessageBox(parent)
     manual_msg.setIcon(QMessageBox.Icon.Information)
     manual_msg.setWindowTitle(t("手动安装依赖"))
-    manual_msg.setText(t("可以在终端执行：") + "\n\n" + plan.display_command + (f"\n\n{plan.note}" if plan.note else ""))
+    manual_msg.setText(
+        t("可以在终端执行：") + "\n\n" + plan.display_command + (f"\n\n{plan.note}" if plan.note else "")
+    )
     copy_btn = manual_msg.addButton(t("复制命令"), QMessageBox.ButtonRole.AcceptRole)
     manual_msg.addButton(t("关闭"), QMessageBox.ButtonRole.RejectRole)
     manual_msg.setDefaultButton(copy_btn)
@@ -483,6 +513,7 @@ def _prompt_with_pyside(parent, missing, plan: InstallPlan) -> bool | None:
     if manual_msg.clickedButton() is copy_btn:
         try:
             from PySide6.QtGui import QGuiApplication  # pyright: ignore[reportMissingImports]
+
             QGuiApplication.clipboard().setText(plan.display_command)
             # 简短确认
             confirm = QMessageBox(parent)

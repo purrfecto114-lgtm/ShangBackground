@@ -41,9 +41,7 @@ def _runtime_package(plan: BuildPlan, *, materialize: bool) -> tuple[Path | None
     package = package_root / "shangbackground_native_runtime"
     if materialize:
         package.mkdir(parents=True, exist_ok=True)
-        (package / "__init__.py").write_text(
-            '"""Build-only native runtime anchor."""\n', encoding="utf-8"
-        )
+        (package / "__init__.py").write_text('"""Build-only native runtime anchor."""\n', encoding="utf-8")
     # During dry-runs the potentially large payload is intentionally not
     # copied, but the generated command must still show the complete package
     # configuration contract. A real build always stages the verified payload.
@@ -115,6 +113,7 @@ def _find_linux_libxcb_cursor() -> str | None:
     telling the user to install ``libxcb-cursor0``).
     """
     import ctypes.util
+
     candidate = ctypes.util.find_library("xcb-cursor")
     if candidate and Path(candidate).is_file():
         return candidate
@@ -336,6 +335,7 @@ def _execute(args: argparse.Namespace) -> int:
     elif upx_enabled_requested and upx_supported_for_target(plan.target) and args.dry_run:
         # During dry-run, report what would happen but don't fail.
         from .upx import find_upx_binary
+
         found = find_upx_binary()
         if found:
             print(f"  INFO: UPX would use: {found}")

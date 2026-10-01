@@ -3,6 +3,7 @@
 The service owns opt-in policy, configuration snapshots, focus-guard decisions
 and dispatch throttling. Platform backends only register/unregister key chords.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, MutableMapping
@@ -59,10 +60,7 @@ class HotkeyService:
                 self._log("全局热键未启用，已跳过系统级注册")
                 return False
 
-            bindings = {
-                action: str(config.get(f"hotkey_{action}", "") or "").strip()
-                for action in self.ACTIONS
-            }
+            bindings = {action: str(config.get(f"hotkey_{action}", "") or "").strip() for action in self.ACTIONS}
             bindings = {action: chord for action, chord in bindings.items() if chord}
             if not bindings:
                 self._bindings.clear()

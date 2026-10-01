@@ -1,4 +1,5 @@
 """Core runtime, state, algorithms, display helpers, and single-instance coordination."""
+
 from __future__ import annotations
 
 __all__ = [

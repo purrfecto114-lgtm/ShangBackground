@@ -4,6 +4,7 @@ A PID alone is not an identity: operating systems reuse PIDs.  State files
 therefore include the process creation timestamp and executable path.  A stale
 or legacy PID-only file is never used for destructive termination.
 """
+
 from __future__ import annotations
 
 import json

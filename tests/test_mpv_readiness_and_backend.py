@@ -8,6 +8,7 @@ SIGKILL、不留孤儿）；PollingPropertyObserver 只报变化且 stop 有界 
 LegacyModuleMpvBackend.observe_property 的平台优先/轮询回退/能力缺失三路径；
 两平台能力点契约；_verify_media_ready 薄包装直传。
 """
+
 from __future__ import annotations
 
 import collections
@@ -140,8 +141,7 @@ def test_linux_ipc_readiness_end_to_end_over_real_unix_socket(tmp_path):
             time.sleep(0.2)  # 通道在而媒体未播：应答故意延迟
             request_id = json.loads(captured["request"]).get("request_id")
             conn.sendall(
-                json.dumps({"error": "success", "data": 1.5, "request_id": request_id}).encode("utf-8")
-                + b"\n"
+                json.dumps({"error": "success", "data": 1.5, "request_id": request_id}).encode("utf-8") + b"\n"
             )
 
     thread = threading.Thread(target=serve, name="fake-mpv-e2e", daemon=True)
@@ -326,9 +326,7 @@ def test_platform_capability_contract():
     ):
         source = (repo_root / relative).read_text(encoding="utf-8")
         # 用正则而非字面串：对括号/空白等价重构稳健，仍要求接线真实存在。
-        assert re.search(r"if\s+not\s+use_internal_libmpv\(\)\s*:", source), (
-            f"{relative} 未接线统一门控"
-        )
+        assert re.search(r"if\s+not\s+use_internal_libmpv\(\)\s*:", source), f"{relative} 未接线统一门控"
 
 
 def test_verify_media_ready_thin_wrapper_passes_arguments_through(monkeypatch: pytest.MonkeyPatch):

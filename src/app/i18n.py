@@ -47,6 +47,7 @@ def _listener_entry(callback: LanguageChangeListener) -> tuple[bool, object]:
         return True, weakref.WeakMethod(callback)  # type: ignore[arg-type]
     return False, callback
 
+
 def subscribe_language_changes(callback: LanguageChangeListener) -> Callable[[], None]:
     """Subscribe to JSON-language changes and return an idempotent unsubscribe.
 
@@ -131,9 +132,7 @@ def load_language(lang: str) -> None:
                 payload = json.loads(raw.decode("utf-8"))
                 if not isinstance(payload, dict):
                     raise ValueError("translation root must be a JSON object")
-                _TRANSLATIONS[lang] = {
-                    str(key): str(value) for key, value in payload.items()
-                }
+                _TRANSLATIONS[lang] = {str(key): str(value) for key, value in payload.items()}
                 loaded = True
             except Exception:
                 _TRANSLATIONS[lang] = {}

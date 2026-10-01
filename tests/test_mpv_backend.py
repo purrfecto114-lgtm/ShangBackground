@@ -8,7 +8,9 @@ from app.mpv_backend import LegacyModuleMpvBackend
 def test_legacy_mpv_backend_normalizes_lifecycle_and_properties():
     calls: list[tuple] = []
     module = SimpleNamespace(
-        start_video_wallpaper=lambda target, muted, volume: calls.append(("start", target, muted, volume)) or (True, "ok"),
+        start_video_wallpaper=lambda target, muted, volume: (
+            calls.append(("start", target, muted, volume)) or (True, "ok")
+        ),
         stop_video_wallpaper=lambda: calls.append(("stop",)),
         is_video_wallpaper_running=lambda: True,
         set_video_paused=lambda paused: calls.append(("pause", paused)) or True,

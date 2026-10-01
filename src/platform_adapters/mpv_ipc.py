@@ -10,6 +10,7 @@ mpv 的 ``--input-ipc-server`` 以「一行一条 JSON 消息」的 UTF-8 文本
 因此 Windows 命名管道与 Linux Unix socket 都能直接接入，测试也可以用内存
 I/O 驱动协议层，不需要真实的 mpv 进程。
 """
+
 from __future__ import annotations
 
 import collections
@@ -70,9 +71,7 @@ class MpvIpcClient:
     # ------------------------------------------------------------------
     # 事务
     # ------------------------------------------------------------------
-    def request(
-        self, command: Sequence[Any] | Mapping[str, Any], timeout: float = 3.0
-    ) -> tuple[bool, Any]:
+    def request(self, command: Sequence[Any] | Mapping[str, Any], timeout: float = 3.0) -> tuple[bool, Any]:
         """发送一条命令并等待携带相同 ``request_id`` 的应答。
 
         返回 ``(ok, data)``：``data`` 是完整应答字典（含 error/data 字段，
@@ -91,9 +90,7 @@ class MpvIpcClient:
             request_id = self._request_counter
             message["request_id"] = request_id
             try:
-                line = json.dumps(
-                    message, ensure_ascii=False, separators=(",", ":"), allow_nan=False
-                )
+                line = json.dumps(message, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
                 payload = (line + "\n").encode("utf-8")
             except (TypeError, ValueError, UnicodeError):
                 return False, None
@@ -123,9 +120,7 @@ class MpvIpcClient:
             oid_value = int(oid)
         except (TypeError, ValueError):
             return False
-        ok, _response = self.request(
-            ["observe_property", oid_value, str(name)], timeout=timeout
-        )
+        ok, _response = self.request(["observe_property", oid_value, str(name)], timeout=timeout)
         return ok
 
     def take_events(self) -> list[dict[str, Any]]:

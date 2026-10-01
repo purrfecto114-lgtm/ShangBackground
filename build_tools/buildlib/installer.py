@@ -24,6 +24,7 @@ Design notes
   only emit the rendered command (``--dry-run``); on a Windows host we look
   for ``ISCC.exe`` in the well-known install paths and ``PATH``.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -247,9 +248,7 @@ def create_installer_plan(
     # planned on a macOS/Linux ARM host.
     arch = "x86_64" if arch == "auto" else normalize_arch(arch)
     if arch != "x86_64":
-        raise RuntimeError(
-            f"The current Inno Setup script supports only x86_64 bundles; got arch={arch!r}."
-        )
+        raise RuntimeError(f"The current Inno Setup script supports only x86_64 bundles; got arch={arch!r}.")
     build_plan = create_plan(
         tool=tool,
         target=target,
@@ -450,7 +449,10 @@ def main(argv: list[str] | None = None) -> int:
     _print_plan(plan)
 
     if args.skip_validate and not args.dry_run:
-        print("--skip-validate is allowed only with --dry-run; real installers must validate their payload.", file=sys.stderr)
+        print(
+            "--skip-validate is allowed only with --dry-run; real installers must validate their payload.",
+            file=sys.stderr,
+        )
         return 2
 
     if not args.skip_validate:
@@ -468,8 +470,7 @@ def main(argv: list[str] | None = None) -> int:
                 suggestions = _list_existing_variants(plan.plan.tool)
                 if suggestions:
                     print(
-                        "  Existing standalone outputs for this tool "
-                        "(pass --input or match the variant flags):",
+                        "  Existing standalone outputs for this tool (pass --input or match the variant flags):",
                         file=sys.stderr,
                     )
                     for suggestion in suggestions:

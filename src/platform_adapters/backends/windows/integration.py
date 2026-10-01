@@ -15,7 +15,6 @@ from contextlib import contextmanager
 from app.config import STYLE_MAP, normalize_style_key
 
 
-
 _UNICODE_ALIAS_PREFIX = "wallpaper-"
 _UNICODE_ALIAS_LIMIT = 24
 
@@ -91,9 +90,7 @@ def _wallpaper_api_path(original: str) -> str:
                 # 延迟可诊断，而不是表现为无法解释的卡顿。
                 _copy_started = time.monotonic()
                 shutil.copyfile(original, temp_alias)
-                logging.getLogger(
-                    "platform_adapters.windows_integration"
-                ).warning(
+                logging.getLogger("platform_adapters.windows_integration").warning(
                     "非 ASCII 壁纸别名发生跨卷拷贝: %d 字节, 耗时 %.2fs (%s)",
                     stat.st_size,
                     time.monotonic() - _copy_started,
@@ -124,6 +121,7 @@ def _original_path_for_alias(path: str) -> str:
         return source if source and os.path.isfile(source) else path
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return path
+
 
 SPI_GETDESKWALLPAPER = 0x0073
 SPI_SETDESKWALLPAPER = 0x0014
@@ -499,6 +497,7 @@ def get_screen_size(root=None):
         pass
     try:
         from PySide6.QtWidgets import QApplication
+
         app = QApplication.instance()
         if isinstance(app, QApplication):
             screen = app.primaryScreen()

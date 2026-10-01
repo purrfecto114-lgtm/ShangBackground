@@ -110,7 +110,9 @@ def test_nuitka_dry_plan_does_not_materialize_runtime_package(tmp_path: Path, mo
     bundled = MpvBuildSelection("bundled", "bundled", "linux", "x86_64", "unit", payload, {})
     object.__setattr__(plan, "tool", "nuitka")
     object.__setattr__(plan, "mpv", bundled)
-    object.__setattr__(plan, "staged_mpv_dir", plan.generated_dir / "python" / "shangbackground_native_runtime" / "payload")
+    object.__setattr__(
+        plan, "staged_mpv_dir", plan.generated_dir / "python" / "shangbackground_native_runtime" / "payload"
+    )
     monkeypatch.setattr(nuitka, "python_executable", lambda: "/usr/bin/python3")
 
     command, environment = nuitka.build_args(plan, windows_console_mode="disable")

@@ -99,6 +99,7 @@ except ImportError:
     psutil = None
 
 from app.optional_runtime import video_wallpaper, html_wallpaper, hotkey_backend_module
+
 _pynput_keyboard = None
 _pynput_hotkey_listener = None
 
@@ -128,26 +129,22 @@ LRESULT = ctypes.c_ssize_t
 # 定义WNDCLASS结构
 class WNDCLASS(ctypes.Structure):
     _fields_ = [
-        ('style', ctypes.c_uint),
-        ('lpfnWndProc', ctypes.c_void_p),
-        ('cbClsExtra', ctypes.c_int),
-        ('cbWndExtra', ctypes.c_int),
-        ('hInstance', ctypes.c_void_p),
-        ('hIcon', ctypes.c_void_p),
-        ('hCursor', ctypes.c_void_p),
-        ('hbrBackground', ctypes.c_void_p),
-        ('lpszMenuName', ctypes.c_wchar_p),
-        ('lpszClassName', ctypes.c_wchar_p)
+        ("style", ctypes.c_uint),
+        ("lpfnWndProc", ctypes.c_void_p),
+        ("cbClsExtra", ctypes.c_int),
+        ("cbWndExtra", ctypes.c_int),
+        ("hInstance", ctypes.c_void_p),
+        ("hIcon", ctypes.c_void_p),
+        ("hCursor", ctypes.c_void_p),
+        ("hbrBackground", ctypes.c_void_p),
+        ("lpszMenuName", ctypes.c_wchar_p),
+        ("lpszClassName", ctypes.c_wchar_p),
     ]
 
 
 # 定义COPYDATASTRUCT结构
 class COPYDATASTRUCT(ctypes.Structure):
-    _fields_ = [
-        ('dwData', ctypes.c_size_t),
-        ('cbData', ctypes.c_ulong),
-        ('lpData', ctypes.c_void_p)
-    ]
+    _fields_ = [("dwData", ctypes.c_size_t), ("cbData", ctypes.c_ulong), ("lpData", ctypes.c_void_p)]
 
 
 def is_frozen():
@@ -183,6 +180,9 @@ _MAX_LOG_FILE_BYTES = 1024 * 1024
 _LOG_THROTTLE_LOCK = threading.RLock()
 _LOG_THROTTLE_STATE: dict[str, tuple[float, int]] = {}
 _LOG_THROTTLE_SECONDS = 0.75
+# 硬上限（v1.6.1 P2-2）：洪峰里新键的注入速度可以远超 0.75s 窗口的
+# 自然过期节奏，无上限的 dict 会随唯一消息数线性增长（长会话内存泄漏）。
+_LOG_THROTTLE_MAX_KEYS = 512
 _LOG_FILE_LOCK = threading.RLock()
 
 
@@ -231,6 +231,11 @@ def _should_emit_log(message: str, level: str) -> bool:
         if now - last < _LOG_THROTTLE_SECONDS:
             _LOG_THROTTLE_STATE[key] = (last, count + 1)
             return False
+        if key not in _LOG_THROTTLE_STATE and len(_LOG_THROTTLE_STATE) >= _LOG_THROTTLE_MAX_KEYS:
+            # 逐出最久未活跃的键（插入序近似 LRU：被刷新的键会重新落入
+            # 字典尾部？不会——dict 保持首次插入序；因此按时间戳取最旧）。
+            oldest_key = min(_LOG_THROTTLE_STATE, key=lambda k: _LOG_THROTTLE_STATE[k][0])
+            _LOG_THROTTLE_STATE.pop(oldest_key, None)
         _LOG_THROTTLE_STATE[key] = (now, 0)
         return True
 
@@ -256,6 +261,7 @@ def log(msg, level: str = "INFO", exc_info=False):
     legacy_failed = False
     try:
         from app.log_setup import legacy as _legacy_logger
+
         _legacy_logger.log(msg, level=level, exc_info=exc_info)
     except Exception:
         legacy_failed = True
@@ -280,12 +286,11 @@ def log(msg, level: str = "INFO", exc_info=False):
     return display_message
 
 
-
-
 def log_error(context: str, exc: BaseException | None = None) -> None:
     """记录错误并保留堆栈；供三端统一使用。"""
     try:
         from app.log_setup import legacy as _legacy_logger
+
         _legacy_logger.log_error(context, exc)
         return
     except Exception:
@@ -367,6 +372,7 @@ RUNTIME_STATE = RuntimeState()
 
 def _serialized_wallpaper_operation(function):
     """Serialize state-changing wallpaper operations across UI, timer and IPC workers."""
+
     @wraps(function)
     def _wrapped(*args, **kwargs):
         with RUNTIME_STATE.wallpaper_operation_lock:
@@ -487,8 +493,18 @@ def _configure_win32_ctypes():
         user32.RegisterClassW.argtypes = [ctypes.POINTER(WNDCLASS)]
         user32.RegisterClassW.restype = ATOM
         user32.CreateWindowExW.argtypes = [
-            DWORD, LPCWSTR, LPCWSTR, DWORD, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
-            HWND, HMENU, HINSTANCE, ctypes.c_void_p,
+            DWORD,
+            LPCWSTR,
+            LPCWSTR,
+            DWORD,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            HWND,
+            HMENU,
+            HINSTANCE,
+            ctypes.c_void_p,
         ]
         user32.CreateWindowExW.restype = HWND
         user32.DefWindowProcW.argtypes = [HWND, UINT, WPARAM, LPARAM]
@@ -560,13 +576,9 @@ def _get_relaunch_service() -> RelaunchService:
         is_frozen=is_frozen,
         executable_path=app_executable_path,
         base_dir=lambda: BASE_DIR,
-        capture_session=lambda: capture_session_original_wallpaper(
-            inherit_existing=True, force_refresh=False
-        ),
+        capture_session=lambda: capture_session_original_wallpaper(inherit_existing=True, force_refresh=False),
         persist_session=_persist_session_original_wallpaper,
-        release_guard=lambda: perform_exit_cleanup(
-            reason="relaunch", restore_wallpaper=False, restarting=True
-        ),
+        release_guard=lambda: perform_exit_cleanup(reason="relaunch", restore_wallpaper=False, restarting=True),
         cleanup_tray=_cleanup_tray_icon_on_exit,
         recover_guard=_recover_relaunch_guard,
         log=log,
@@ -672,7 +684,7 @@ def get_startup_folder_path_windows():
         return buf.value
     except Exception as e:
         log(f"获取 Windows 启动文件夹失败: {e}")
-        return os.path.join(os.path.expanduser('~'), r'AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup')
+        return os.path.join(os.path.expanduser("~"), r"AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup")
 
 
 def get_startup_vbs_path(name=STARTUP_VBS_NAME):
@@ -692,7 +704,10 @@ def is_owned_startup_vbs(path):
 
 remote_version = "1"
 remote_release_notes = ""
-remote_download_urls = {"GitHub Release": "", t("发布页"): "https://github.com/purrfecto114-lgtm/ShangBackground/releases/latest"}
+remote_download_urls = {
+    "GitHub Release": "",
+    t("发布页"): "https://github.com/purrfecto114-lgtm/ShangBackground/releases/latest",
+}
 show_update_flag = False
 check_failed = False
 
@@ -722,6 +737,7 @@ CONFIG_MIGRATION_PENDING = False
 def get_default_config() -> dict:
     """Return a fresh factory-default configuration dictionary."""
     return build_default_config()
+
 
 def load_config():
     """加载配置文件，如果不存在则返回默认配置。
@@ -782,7 +798,7 @@ def load_config():
                 "hotkey_next": "Ctrl+Alt+N",
                 "hotkey_random": "Ctrl+Alt+R",
                 "hotkey_jump": "Ctrl+Alt+J",
-                    }
+            }
             for _key, _legacy in _legacy_hotkey_defaults.items():
                 if _key not in data:
                     data[_key] = _new_hotkey_defaults[_key]
@@ -794,12 +810,12 @@ def load_config():
 
             # 应用内热键（QShortcut）—— 三端同步
             _app_sc_default = {
-                "previous":     "PgUp",
-                "next":         "PgDown",
-                "random":       "R",
-                "bing":         "F5",
-                "settings":     "Ctrl+,",
-                "exit":         "Ctrl+Q",
+                "previous": "PgUp",
+                "next": "PgDown",
+                "random": "R",
+                "bing": "F5",
+                "settings": "Ctrl+,",
+                "exit": "Ctrl+Q",
                 "hide_to_tray": "Esc",
             }
             if not isinstance(data.get("app_shortcuts"), dict):
@@ -937,15 +953,11 @@ def load_config():
             data, normalized_changed = normalize_runtime_config(data, defaults=default)
             converted = converted or normalized_changed
 
-            cleaned_history = HistoryRepository.normalize_items(
-                data.get("history", []), keep_missing=True
-            )
+            cleaned_history = HistoryRepository.normalize_items(data.get("history", []), keep_missing=True)
             if cleaned_history != data.get("history", []):
                 data["history"] = cleaned_history
                 converted = True
-            cleaned_favorites = FavoritesRepository.normalize_items(
-                data.get("favorites", []), keep_missing=True
-            )
+            cleaned_favorites = FavoritesRepository.normalize_items(data.get("favorites", []), keep_missing=True)
             if cleaned_favorites != data.get("favorites", []):
                 data["favorites"] = cleaned_favorites
                 converted = True
@@ -1021,7 +1033,17 @@ def save_config() -> bool:
             if "tray_click_action" not in config:
                 config["tray_click_action"] = "next"
             if "tray_menu_items" not in config:
-                config["tray_menu_items"] = ["show", "previous", "next", "random", "bing", "jump", "settings", "about", "exit"]
+                config["tray_menu_items"] = [
+                    "show",
+                    "previous",
+                    "next",
+                    "random",
+                    "bing",
+                    "jump",
+                    "settings",
+                    "about",
+                    "exit",
+                ]
             if "log_enabled" not in config:
                 config["log_enabled"] = False
             if "log_file_path" not in config:
@@ -1059,7 +1081,12 @@ def save_config() -> bool:
             config["ctx_jump_to_wallpaper"] = bool(config.get("ctx_jump_to_wallpaper", False))
             for _stale_ctx_key in ("ctx_personalize", "ctx_global_settings", "ctx_set_wallpaper"):
                 config.pop(_stale_ctx_key, None)
-            for _key, _default in {"hotkey_previous": "Ctrl+Alt+U", "hotkey_next": "Ctrl+Alt+N", "hotkey_random": "Ctrl+Alt+R", "hotkey_jump": "Ctrl+Alt+J"}.items():
+            for _key, _default in {
+                "hotkey_previous": "Ctrl+Alt+U",
+                "hotkey_next": "Ctrl+Alt+N",
+                "hotkey_random": "Ctrl+Alt+R",
+                "hotkey_jump": "Ctrl+Alt+J",
+            }.items():
                 config.setdefault(_key, _default)
             config["global_hotkeys_enabled"] = bool(config.get("global_hotkeys_enabled", True))
             config["app_shortcuts_enabled"] = bool(config.get("app_shortcuts_enabled", True))
@@ -1069,16 +1096,16 @@ def save_config() -> bool:
                 _pl = "balanced"
             config["performance_level"] = _pl
             # 保持旧 performance_mode 布尔同步 (向后兼容老代码读取)
-            config["performance_mode"] = (_pl == "performance")
+            config["performance_mode"] = _pl == "performance"
 
             # 应用内热键（QShortcut）—— 三端同步
             _app_sc_default = {
-                "previous":     "PgUp",
-                "next":         "PgDown",
-                "random":       "R",
-                "bing":         "F5",
-                "settings":     "Ctrl+,",
-                "exit":         "Ctrl+Q",
+                "previous": "PgUp",
+                "next": "PgDown",
+                "random": "R",
+                "bing": "F5",
+                "settings": "Ctrl+,",
+                "exit": "Ctrl+Q",
                 "hide_to_tray": "Esc",
             }
             if not isinstance(config.get("app_shortcuts"), dict):
@@ -1114,16 +1141,14 @@ def save_config() -> bool:
                 config["bing_next_index"] = max(0, int(config.get("bing_next_index", 0)))
             except Exception:
                 config["bing_next_index"] = 0
-            config["history"] = HistoryRepository.normalize_items(
-                config.get("history", []), keep_missing=True
-            )
-            config["favorites"] = FavoritesRepository.normalize_items(
-                config.get("favorites", []), keep_missing=True
-            )
+            config["history"] = HistoryRepository.normalize_items(config.get("history", []), keep_missing=True)
+            config["favorites"] = FavoritesRepository.normalize_items(config.get("favorites", []), keep_missing=True)
             if config.get("current_wallpaper"):
                 config["current_wallpaper"] = _normalize_wallpaper_path(config.get("current_wallpaper", ""))
             if config.get("slideshow_last_wallpaper"):
-                config["slideshow_last_wallpaper"] = _normalize_wallpaper_path(config.get("slideshow_last_wallpaper", ""))
+                config["slideshow_last_wallpaper"] = _normalize_wallpaper_path(
+                    config.get("slideshow_last_wallpaper", "")
+                )
             config["mode"] = normalize_mode_key(config.get("mode", "幻灯片放映"))
             config["fit_mode"] = normalize_style_key(config.get("fit_mode", "填充"))
             changed = CONFIG_REPOSITORY.save(config)
@@ -1141,6 +1166,8 @@ _TRANSITION_TEMP_DIR = os.path.join(DATA_DIR, "transition_frames")
 
 config = get_default_config()
 WALLPAPER_LIBRARY = WallpaperLibrary(lambda: config, persist=save_config, lock=_config_lock)
+
+
 class _ServiceRegistry:
     services: ApplicationServices | None = None
     runtime_state: RuntimeState | None = None
@@ -1245,9 +1272,7 @@ def _build_application_services() -> ApplicationServices:
         log=log,
         set_error=_set_last_operation_error,
         cancel_timer=lambda timer: _cancel_slideshow_timer(timer),
-        timer_factory=lambda delay, callback, args: threading.Timer(
-            delay, callback, args=args
-        ),
+        timer_factory=lambda delay, callback, args: threading.Timer(delay, callback, args=args),
         request_cancel=lambda: request_cancel_operations(t("程序退出")),
         release_single_instance=release_single_instance_mutex,
     )
@@ -1335,9 +1360,8 @@ def perform_exit_cleanup(
     )
 
 
-def report_usage(): return None
-
-
+def report_usage():
+    return None
 
 
 def request_cancel_operations(reason: str = ""):
@@ -1483,9 +1507,11 @@ def surface_missed_ipc_actions() -> int:
     for entry in missed:
         payload = entry.get("payload")
         log(
-            "未送达的桌面动作: " + str(entry.get("command", ""))
+            "未送达的桌面动作: "
+            + str(entry.get("command", ""))
             + (f" payload={payload}" if payload else "")
-            + " time=" + str(entry.get("time", ""))
+            + " time="
+            + str(entry.get("time", ""))
         )
     count = len(missed)
     message = t("上次退出前有 {count} 个桌面动作未能送达（主实例无响应），详见日志").format(count=count)
@@ -1497,6 +1523,7 @@ def _show_tray_notification(message: str) -> None:
     """Show a tray balloon notification (called on GUI thread)."""
     try:
         from PySide6.QtWidgets import QSystemTrayIcon
+
         tray = globals().get("tray_icon_obj", None)
         if tray is not None and isinstance(tray, QSystemTrayIcon):
             tray.showMessage(
@@ -1538,11 +1565,9 @@ def _invalidate_current_wallpaper_cache() -> None:
     _get_application_services().wallpaper.invalidate_current_cache()
 
 
-
 def get_current_wallpaper(*, use_cache: bool = True):
     """Compatibility facade for the WallpaperService current-state query."""
     return _get_application_services().wallpaper.get_current(use_cache=use_cache)
-
 
 
 list_wallpaper_history = WALLPAPER_LIBRARY.list_history
@@ -1570,14 +1595,8 @@ def push_wallpaper(path, *, update_current: bool = True, refresh_preview: bool =
         raise
     if changed:
         normalized = _normalize_wallpaper_path(path)
-        log(
-            "已记录壁纸: "
-            + os.path.basename(normalized)
-            + " | 历史总数: "
-            + str(wallpaper_history_count())
-        )
+        log("已记录壁纸: " + os.path.basename(normalized) + " | 历史总数: " + str(wallpaper_history_count()))
     return changed
-
 
 
 def _queue_ui_preview_update(path: str | None = None) -> None:
@@ -1585,6 +1604,7 @@ def _queue_ui_preview_update(path: str | None = None) -> None:
     try:
         if root is None or not hasattr(root, "after"):
             return
+
         def _refresh():
             try:
                 window = getattr(root, "window", None)
@@ -1594,6 +1614,7 @@ def _queue_ui_preview_update(path: str | None = None) -> None:
                     update_preview(path or config.get("current_wallpaper", ""))
             except Exception as exc:
                 log(f"刷新预览失败: {exc}")
+
         root.after(0, _refresh)
     except Exception as exc:
         log(f"无法排队刷新预览: {exc}")
@@ -1632,7 +1653,9 @@ def _remember_slideshow_wallpaper(path: str, *, persist: bool = False) -> bool:
     if not matched:
         folder = _normalize_wallpaper_path(config.get("slide_folder", ""))
         try:
-            if not folder or os.path.commonpath([os.path.abspath(folder), os.path.abspath(path)]) != os.path.abspath(folder):
+            if not folder or os.path.commonpath([os.path.abspath(folder), os.path.abspath(path)]) != os.path.abspath(
+                folder
+            ):
                 return False
         except Exception:
             return False
@@ -1680,7 +1703,6 @@ def set_wallpaper_direct(
     if success:
         log_time_diff(operation_name, path)
     return success
-
 
 
 def get_windows_wallpaper_style():
@@ -1763,12 +1785,7 @@ def apply_browsed_wallpaper(path, operation_name="浏览壁纸") -> bool:
             except Exception as exc:
                 log_error("重置幻灯片计时器失败", exc)
         return success
-    return bool(
-        switch_wallpaper_mode(
-            "图片", updates={"single_image": normalized}
-        )
-    )
-
+    return bool(switch_wallpaper_mode("图片", updates={"single_image": normalized}))
 
 
 def _require_wallpaper_action(action: str) -> None:
@@ -1905,10 +1922,7 @@ def random_wallpaper():
         last_operation_error = t("请先设置幻灯片文件夹")
         raise RuntimeError(last_operation_error)
 
-    images = tuple(
-        _normalize_wallpaper_path(path)
-        for path in random_copy.get_original_image_paths(folder)
-    )
+    images = tuple(_normalize_wallpaper_path(path) for path in random_copy.get_original_image_paths(folder))
     if not images:
         log("文件夹中没有图片")
         last_operation_error = t("文件夹中没有图片")
@@ -1977,13 +1991,8 @@ def set_fit_mode(mode):
 
 
 def get_next_wallpaper(images: tuple[str, ...] | list[str] | None = None):
-    candidates = (
-        tuple(images)
-        if images is not None
-        else RUNTIME_STATE.slideshow.snapshot().images
-    )
+    candidates = tuple(images) if images is not None else RUNTIME_STATE.slideshow.snapshot().images
     return _get_application_services().slideshow.next_image(candidates, config)
-
 
 
 def _cancel_slideshow_timer(timer) -> None:
@@ -2003,16 +2012,13 @@ def _schedule_slide_timer(generation: int) -> bool:
     return _get_application_services().slideshow._schedule(generation, config)
 
 
-
 @_serialized_wallpaper_operation
 def slide_next(generation: int | None = None):
     return _get_application_services().slideshow.advance(generation)
 
 
-
 def reset_slide_timer():
     return _get_application_services().slideshow.reset()
-
 
 
 @_serialized_wallpaper_operation
@@ -2020,11 +2026,9 @@ def start_slideshow(is_startup: bool = False):
     return _get_application_services().slideshow.start(is_startup=is_startup)
 
 
-
 @_serialized_wallpaper_operation
 def stop_slideshow():
     return _get_application_services().slideshow.stop()
-
 
 
 @_serialized_wallpaper_operation
@@ -2051,11 +2055,7 @@ def restore_configured_wallpaper_mode(expected_mode: str, *, is_startup: bool = 
     if expected == "视频":
         return bool(start_video_wallpaper(config.get("video_file")))
     if expected == "HTML":
-        return bool(
-            start_html_wallpaper(
-                config.get("html_file", "") or config.get("html_url", "")
-            )
-        )
+        return bool(start_html_wallpaper(config.get("html_file", "") or config.get("html_url", "")))
     return True
 
 
@@ -2069,7 +2069,6 @@ def start_video_wallpaper(path: str | None = None):
         raise RuntimeError(str(exc)) from exc
 
 
-
 @_serialized_wallpaper_operation
 def stop_video_wallpaper():
     """Stop every dynamic wallpaper through MediaService."""
@@ -2080,10 +2079,8 @@ def stop_video_wallpaper():
         return False
 
 
-
 def is_video_wallpaper_running():
     return _get_application_services().media.is_running("video")
-
 
 
 def set_video_paused(paused: bool) -> bool:
@@ -2091,19 +2088,16 @@ def set_video_paused(paused: bool) -> bool:
 
 
 def set_video_volume(muted: bool, volume: int) -> bool:
-    return _get_application_services().media.set_option(
-        "video", "volume", (bool(muted), int(volume))
-    )
-
+    return _get_application_services().media.set_option("video", "volume", (bool(muted), int(volume)))
 
 
 # ====================== HTML 壁纸控制 ===========================
+
 
 def _sync_html_wallpaper_runtime_options_from_config() -> None:
     service = _get_application_services().media
     service.set_option("html", "auto_pause", bool(config.get("html_auto_pause", True)))
     service.set_option("html", "frame_rate", int(config.get("html_frame_rate", 30)))
-
 
 
 @_serialized_wallpaper_operation
@@ -2116,7 +2110,6 @@ def start_html_wallpaper(path: str | None = None):
         raise RuntimeError(str(exc)) from exc
 
 
-
 @_serialized_wallpaper_operation
 def stop_html_wallpaper() -> bool:
     try:
@@ -2127,20 +2120,16 @@ def stop_html_wallpaper() -> bool:
         return False
 
 
-
 def is_html_wallpaper_running() -> bool:
     return _get_application_services().media.is_running("html")
-
 
 
 def html_wallpaper_runtime_set_option(key: str, value) -> bool:
     return _get_application_services().media.set_option("html", key, value)
 
 
-
 def html_wallpaper_get_last_path() -> str:
     return _get_application_services().media.last_target("html")
-
 
 
 def restart_html_wallpaper(path: str | None = None) -> bool:
@@ -2151,8 +2140,8 @@ def restart_html_wallpaper(path: str | None = None) -> bool:
         return False
 
 
-
 # ====================== 全局热键兼容门面 ======================
+
 
 def _dispatch_global_hotkey_action(action: str):
     """Dispatch one registered action without blocking the backend listener."""
@@ -2244,7 +2233,7 @@ def create_gradient_wallpaper_optimized(color1, color2, angle=0):
             return None
         screen_width = get_screen_size(root)[0]
         screen_height = get_screen_size(root)[1]
-        diag = int(math.ceil(math.sqrt(screen_width ** 2 + screen_height ** 2)))
+        diag = int(math.ceil(math.sqrt(screen_width**2 + screen_height**2)))
         diag = max(diag, screen_width, screen_height, 2)
         mask = Image.linear_gradient("L").resize((diag, diag))
         # Pillow 的线性渐变默认从上到下；旋转后居中裁切到屏幕大小。
@@ -2303,7 +2292,8 @@ def apply_solid():
     return False
 
 
-def update_preview(_img_path): return None
+def update_preview(_img_path):
+    return None
 
 
 def show_main_window_now():
@@ -2348,13 +2338,17 @@ def request_show_main_window():
 
 
 _WINFUNCTYPE = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
-WNDPROC = _WINFUNCTYPE(
-    ctypes.c_ssize_t,
-    ctypes.c_void_p,
-    ctypes.c_uint,
-    ctypes.c_void_p,
-    ctypes.c_void_p,
-) if IS_WINDOWS else (lambda func: func)
+WNDPROC = (
+    _WINFUNCTYPE(
+        ctypes.c_ssize_t,
+        ctypes.c_void_p,
+        ctypes.c_uint,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+    )
+    if IS_WINDOWS
+    else (lambda func: func)
+)
 
 
 def handle_system_setting_change() -> None:
@@ -2394,7 +2388,7 @@ def window_proc(hwnd, msg, wparam, lparam):
             cds = ctypes.cast(lparam_i, ctypes.POINTER(COPYDATASTRUCT)).contents
             if cds.dwData == 1:
                 data = ctypes.string_at(cds.lpData, cds.cbData)
-                command = data.decode('utf-8').rstrip('\x00')
+                command = data.decode("utf-8").rstrip("\x00")
                 log(f"收到消息: {command}")
                 if command in {"previous", "next", "random"} or command.startswith("set_wallpaper|"):
                     queue_ipc_wallpaper_command(command)
@@ -2450,15 +2444,7 @@ def create_message_window():
                 log(f"注册窗口类失败: {err}")
                 return None
         hwnd = ctypes.windll.user32.CreateWindowExW(
-            0,
-            WND_CLASS_NAME,
-            "",
-            0,
-            0, 0, 0, 0,
-            _hwnd_message_parent(),
-            0,
-            wc.hInstance,
-            0
+            0, WND_CLASS_NAME, "", 0, 0, 0, 0, 0, _hwnd_message_parent(), 0, wc.hInstance, 0
         )
         if not hwnd:
             log("创建窗口失败")
@@ -2509,11 +2495,11 @@ def _context_command_parts(*args):
 def _context_command_target_error() -> str:
     parts = _context_command_parts()
     if not parts or not os.path.exists(parts[0]):
-        return f"右键菜单命令目标不存在: {parts[0] if parts else '<empty>'}"
+        return f"{t('右键菜单命令目标不存在：')}{parts[0] if parts else '<empty>'}"
     if not is_frozen():
         script = parts[1] if len(parts) > 1 else ""
         if not script or not os.path.isfile(script):
-            return f"右键菜单源码入口不存在: {script}"
+            return f"{t('右键菜单源码入口不存在：')}{script}"
     return ""
 
 
@@ -2722,9 +2708,7 @@ def _notify_shell_association_changed() -> None:
     try:
         SHCNE_ASSOCCHANGED = 0x08000000
         SHCNF_IDLIST = 0x0000
-        ctypes.windll.shell32.SHChangeNotify(
-            SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None
-        )
+        ctypes.windll.shell32.SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None)
         # SHChangeNotify 无返回值；未抛异常即视为已送达。置位会话标志，
         # 让 is_context_menu_synced() 恢复纯注册表视角。
         _shell_association_notified = True

@@ -4,8 +4,16 @@
 # these in, and pinned in one place instead of inline version constraints
 # scattered across workflow files (v1.6.1).
 #
-# Note: pyright is intentionally NOT listed — CI does not run it; the
-# pyrightconfig.json only serves local IDE checks. Adding an unused pin
-# here would misrepresent the actual release gate.
+# Runtime libs with test-visible imports: 8 tests (incl. two security /
+# P0 acceptance tests) import PySide6 / psutil directly. Without them here
+# those tests silently skip on every CI run and never execute (audit
+# finding: "450 tests green" was overstated by the always-skip set).
+# QT_QPA_PLATFORM=offscreen is set in ci.yml so headless runners work.
+PySide6-Essentials==6.11.1
+psutil>=5.9,<8
+# Note: pyright is installed only inside the advisory CI job (ci.yml),
+# not on every test leg — it would slow the matrix without gating
+# anything while the error budget is still being worked down.
 pytest>=8,<10
+pytest-cov>=7,<8
 ruff>=0.12,<1

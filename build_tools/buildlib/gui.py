@@ -979,7 +979,9 @@ class ActionBar:
         secondary = self.ttk.Frame(frame, style="App.TFrame")
         secondary.grid(row=1, column=0, sticky="ew", pady=(7, 0))
 
-        self._start_btn = self.ttk.Button(primary, text="Start build", style="Primary.TButton", command=self._on_start_cb)
+        self._start_btn = self.ttk.Button(
+            primary, text="Start build", style="Primary.TButton", command=self._on_start_cb
+        )
         self._start_btn.pack(side="left")
         ToolTip(self._start_btn, "Start the build process (Ctrl+Return).")
 

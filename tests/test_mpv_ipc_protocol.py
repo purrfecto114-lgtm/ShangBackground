@@ -5,6 +5,7 @@
 跨 read_bytes 分片按行重组、get/set/observe_property 线上帧格式、
 非法命令不写线上、事件队列 deque(maxlen=256) 的挤出与排空语义。
 """
+
 from __future__ import annotations
 
 import collections
@@ -216,10 +217,7 @@ def test_take_events_drains_and_evicts_beyond_maxlen_256():
     """等待应答期间涌入 300 条事件：deque(maxlen=256) 挤出最旧，保留 45..300。"""
 
     def responder(message: dict) -> list:
-        chunks = [
-            json.dumps({"event": "tick", "seq": seq}).encode("utf-8") + b"\n"
-            for seq in range(1, 301)
-        ]
+        chunks = [json.dumps({"event": "tick", "seq": seq}).encode("utf-8") + b"\n" for seq in range(1, 301)]
         chunks.append(_success(message, None))
         return chunks
 

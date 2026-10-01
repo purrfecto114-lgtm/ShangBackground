@@ -6,6 +6,7 @@ helpers.  ``LegacyModuleMpvBackend`` adapts those functions to one explicit
 contract so application services do not need to know whether playback uses
 ctypes/libmpv, an external mpv process, mpvpaper, or a native platform player.
 """
+
 from __future__ import annotations
 
 import threading
@@ -111,11 +112,7 @@ class PollingPropertyObserver:
                 value = None
             deliver: tuple[Callable[[Any], None], ...] = ()
             with self._lock:
-                if (
-                    generation == self._generation
-                    and version == self._callbacks_version
-                    and value != self._last_value
-                ):
+                if generation == self._generation and version == self._callbacks_version and value != self._last_value:
                     self._last_value = value
                     deliver = snapshot
             for callback in deliver:

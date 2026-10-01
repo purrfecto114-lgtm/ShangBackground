@@ -92,6 +92,7 @@ def _open_terminal_with_command(command_text: str) -> bool:
     except Exception as exc:
         try:
             from app.log_setup import get_logger
+
             get_logger("dependencies").warning("open_terminal failed: %s", exc, exc_info=True)
         except Exception:
             pass
@@ -102,6 +103,7 @@ def shutil_which(name: str):
     """Lazy shutil.which to keep top-level imports minimal."""
     try:
         import shutil
+
         return shutil.which(name)
     except Exception:
         return None
@@ -133,9 +135,13 @@ def _try_pyside_prompt(missing, packages, parent=None) -> bool | None:
     msg.setIcon(QMessageBox.Icon.Warning)
     msg.setWindowTitle(t("运行依赖缺失"))
     msg.setText(
-        t("检测到缺少运行依赖：") + "\n\n" + names + "\n\n" +
-        t("请在终端执行以下命令安装（推荐 --user 模式，避免权限问题）：") + "\n\n" +
-        command_text
+        t("检测到缺少运行依赖：")
+        + "\n\n"
+        + names
+        + "\n\n"
+        + t("请在终端执行以下命令安装（推荐 --user 模式，避免权限问题）：")
+        + "\n\n"
+        + command_text
     )
     copy_btn = msg.addButton(t("复制命令"), QMessageBox.ButtonRole.AcceptRole)
     open_term_btn = msg.addButton(t("打开终端并粘贴"), QMessageBox.ButtonRole.ActionRole)
@@ -154,6 +160,7 @@ def _try_pyside_prompt(missing, packages, parent=None) -> bool | None:
     if clicked is copy_btn:
         try:
             from PySide6.QtGui import QGuiApplication
+
             QGuiApplication.clipboard().setText(command_text)
             # Show a tiny confirmation
             info = QMessageBox()
@@ -164,6 +171,7 @@ def _try_pyside_prompt(missing, packages, parent=None) -> bool | None:
         except Exception as exc:
             try:
                 from app.log_setup import get_logger
+
                 get_logger("dependencies").warning("clipboard copy failed: %s", exc, exc_info=True)
             except Exception:
                 pass
@@ -171,6 +179,7 @@ def _try_pyside_prompt(missing, packages, parent=None) -> bool | None:
         # Copy first so user can paste in the new terminal
         try:
             from PySide6.QtGui import QGuiApplication
+
             QGuiApplication.clipboard().setText(command_text)
         except Exception:
             pass
@@ -179,9 +188,7 @@ def _try_pyside_prompt(missing, packages, parent=None) -> bool | None:
             info = QMessageBox()
             info.setIcon(QMessageBox.Icon.Information)
             info.setWindowTitle(t("无法自动打开终端"))
-            info.setText(
-                t("无法自动打开终端。命令已复制到剪贴板，请手动打开 cmd/PowerShell 并粘贴执行。")
-            )
+            info.setText(t("无法自动打开终端。命令已复制到剪贴板，请手动打开 cmd/PowerShell 并粘贴执行。"))
             info.exec()
     return not any(dep.get("required") for dep in missing)
 
@@ -201,10 +208,12 @@ def _prompt_in_gui_fallback(missing, packages) -> bool | None:
         root.withdraw()
         messagebox.showerror(
             "ShangBackground 依赖缺失",
-            t("缺少运行依赖：") + "\n"
+            t("缺少运行依赖：")
+            + "\n"
             + ", ".join(dep["package"] for dep in missing)
             + "\n\n"
-            + t("请在终端执行（推荐 --user 模式）：") + "\n"
+            + t("请在终端执行（推荐 --user 模式）：")
+            + "\n"
             + command_text,
         )
         root.destroy()

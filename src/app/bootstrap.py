@@ -1,4 +1,5 @@
 """Explicit dependency assembly for application services."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, MutableMapping
@@ -149,8 +150,6 @@ class ModuleMediaBackend:
             return _backend_result(module.restart_html_wallpaper(target))
         self.stop(kind)
         return self.start(kind, target, options=options)
-
-
 
 
 class CallbackWallpaperBackend:

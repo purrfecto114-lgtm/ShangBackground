@@ -13,6 +13,6 @@ def test_plain_json_resources_are_accepted(tmp_path):
 
 
 def test_disguised_gzip_json_is_rejected(tmp_path):
-    (tmp_path / "en.json").write_bytes(gzip.compress(b'{}'))
+    (tmp_path / "en.json").write_bytes(gzip.compress(b"{}"))
     with pytest.raises(RuntimeError, match="gzip-compressed resource"):
         assert_plain_json_resources(tmp_path)

@@ -252,9 +252,7 @@ def start_html_wallpaper(path: str) -> Tuple[bool, str]:
             pass
         log_file = open(_log_path, "a", encoding="utf-8", buffering=1)
         log_file.write(f"\n{'=' * 60}\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] starting HTML wallpaper subprocess\n")
-        log_file.write(
-            f"auto_pause={auto_pause} frame_rate={frame_rate}\n"
-        )
+        log_file.write(f"auto_pause={auto_pause} frame_rate={frame_rate}\n")
         log_file.write(f"runtime={selected_runtime.name} runner={script_path}\n")
         log_file.flush()
     except Exception:

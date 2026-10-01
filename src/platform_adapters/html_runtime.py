@@ -297,7 +297,6 @@ def build_wallpaper_api_script(platform_info: dict[str, object]) -> str:
 """.strip()
 
 
-
 def build_frame_limiter_script(frame_rate: int) -> str:
     """Return a host-side RAF limiter with deterministic pause/resume behavior.
 

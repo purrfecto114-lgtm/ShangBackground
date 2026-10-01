@@ -1,4 +1,5 @@
 """Shared parsing helpers for platform global-hotkey backends."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

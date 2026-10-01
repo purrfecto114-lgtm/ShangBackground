@@ -13,6 +13,7 @@ schema=2 现状：仅保存一个本地可恢复壁纸路径（wallpaper 字段�
 tests/test_session_wallpaper_service.py"，但该文件在本仓库此前并不存在
 （服务行为此前由集成测试间接覆盖），故按规格中的 FakeBackend 模式新建。
 """
+
 from __future__ import annotations
 
 import json
@@ -342,7 +343,9 @@ def test_restore_with_state_skips_path_set(tmp_path: Path):
 def test_restore_with_state_failure_falls_back_to_path(tmp_path: Path):
     """插件状态恢复失败 + target 可恢复 → 诚实降级为图片路径恢复。"""
     image = _image_file(tmp_path)
-    backend = StatefulFakeBackend(current=str(image), state=_state_dict(str(image), plugin="org.kde.image"), restore_ok=False)
+    backend = StatefulFakeBackend(
+        current=str(image), state=_state_dict(str(image), plugin="org.kde.image"), restore_ok=False
+    )
     service, _state, config, logs, session_file = _make_service(tmp_path, backend)
     assert service.capture() is True
 

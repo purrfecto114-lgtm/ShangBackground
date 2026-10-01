@@ -12,6 +12,7 @@ Keep all read-only bundled resources (``img``, ``lang``) resolved from the
 runtime resource root, and all user-writable files resolved from the per-user
 data directory below.
 """
+
 from __future__ import annotations
 
 import os
@@ -330,6 +331,7 @@ def entry_script_path() -> str:
         return app_executable_path()
     return os.fspath(RESOURCE_ROOT / "main.py")
 
+
 # ---------------------------------------------------------------------------
 # Per-user writable storage paths
 # ---------------------------------------------------------------------------
@@ -384,6 +386,7 @@ def config_path(name: str = "settings.json") -> str:
 # ---------------------------------------------------------------------------
 # Bundled binaries (mpv, etc.)
 # ---------------------------------------------------------------------------
+
 
 def _runtime_platform_id() -> str:
     if sys.platform.startswith("win"):
@@ -470,6 +473,7 @@ def mpv_bundled_exe() -> str | None:
 # here without requiring administrator privileges.
 # ---------------------------------------------------------------------------
 
+
 def mpv_user_install_path(*, create: bool = False) -> Path:
     """Return the optional per-user MPV directory without probing side effects."""
     root = APP_DATA_DIR / "bin" / "mpv"
@@ -478,6 +482,7 @@ def mpv_user_install_path(*, create: bool = False) -> Path:
             root.mkdir(parents=True, exist_ok=True)
         except OSError:
             import tempfile
+
             root = Path(tempfile.gettempdir()) / "shangbackground-mpv"
             root.mkdir(parents=True, exist_ok=True)
     return root
@@ -493,6 +498,7 @@ def mpv_user_install_exe() -> str | None:
     name = "mpv.exe" if sys.platform.startswith("win") else "mpv"
     candidate = mpv_user_install_path(create=False) / name
     return os.fspath(candidate) if candidate.is_file() else None
+
 
 def external_media_runtime_allowed() -> bool:
     """Whether a packaged build may execute user/PATH media runtimes.
@@ -533,8 +539,8 @@ def resolve_mpv_path() -> str | None:
         return user_exe
     try:
         import shutil
+
         name = "mpv.exe" if sys.platform.startswith("win") else "mpv"
         return shutil.which(name)
     except Exception:
         return None
-

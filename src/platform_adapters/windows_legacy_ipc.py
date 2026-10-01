@@ -1,4 +1,5 @@
 """Legacy WM_COPYDATA compatibility used only for older Windows instances."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -18,8 +19,9 @@ def message_parent(hwnd_type: type, hwnd_message: int):
             return ctypes.c_void_p((1 << bits) + hwnd_message)
 
 
-def find_window(*, timeout: float, class_name: str, hwnd_type: type, hwnd_message: int,
-                is_windows: bool, log: Callable[[str], None]):
+def find_window(
+    *, timeout: float, class_name: str, hwnd_type: type, hwnd_message: int, is_windows: bool, log: Callable[[str], None]
+):
     if not is_windows:
         return None
     deadline = time.time() + max(0.0, float(timeout))
@@ -38,9 +40,20 @@ def find_window(*, timeout: float, class_name: str, hwnd_type: type, hwnd_messag
         time.sleep(0.1)
 
 
-def send_command(*, target: Any, command: str, copydata_type: type, hwnd_type: type,
-                 uint_type: type, wparam_type: type, lparam_type: type, wm_copydata: int,
-                 is_windows: bool, win_int: Callable[[Any], int], log: Callable[[str], None]) -> bool:
+def send_command(
+    *,
+    target: Any,
+    command: str,
+    copydata_type: type,
+    hwnd_type: type,
+    uint_type: type,
+    wparam_type: type,
+    lparam_type: type,
+    wm_copydata: int,
+    is_windows: bool,
+    win_int: Callable[[Any], int],
+    log: Callable[[str], None],
+) -> bool:
     if not is_windows or not target:
         return False
     try:
@@ -58,9 +71,12 @@ def send_command(*, target: Any, command: str, copydata_type: type, hwnd_type: t
         # pattern as the context-menu fastpath) and a 1s budget.
         result = ctypes.c_size_t(0)
         sent = ctypes.windll.user32.SendMessageTimeoutW(
-            hwnd_type(win_int(target)), uint_type(wm_copydata), wparam_type(0), lparam,
+            hwnd_type(win_int(target)),
+            uint_type(wm_copydata),
+            wparam_type(0),
+            lparam,
             0x0002,  # SMTO_ABORTIFHUNG
-            1000,    # timeout in ms
+            1000,  # timeout in ms
             ctypes.byref(result),
         )
         if not sent:

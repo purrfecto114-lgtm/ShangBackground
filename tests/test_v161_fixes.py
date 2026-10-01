@@ -8,6 +8,7 @@ Covers:
 - slideshow fast-fail validation order (no dynamic-wallpaper stop before
   folder/image validation fails)
 """
+
 from __future__ import annotations
 
 import json
@@ -40,14 +41,10 @@ def test_initialize_application_reapplies_persisted_language():
     assert "init_i18n(config)" in init_block
 
 
-def test_i18n_reapply_changes_active_language(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+def test_i18n_reapply_changes_active_language(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Behavioral half: re-running init_i18n with a config that requests
     English must actually switch the active language."""
-    (tmp_path / "en.json").write_text(
-        json.dumps({"设置": "Settings"}, ensure_ascii=False), encoding="utf-8"
-    )
+    (tmp_path / "en.json").write_text(json.dumps({"设置": "Settings"}, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(i18n, "LANG_DIR", str(tmp_path))
     monkeypatch.setattr(i18n, "_CURRENT_LANG", "zh")
     monkeypatch.setattr(i18n, "_TRANSLATIONS", {})
@@ -72,9 +69,7 @@ def test_internal_video_player_dispatcher_forwards_volume_ipc(monkeypatch):
     captured: dict[str, object] = {}
 
     def _fake_run_player(path, *, muted, volume, volume_ipc=""):
-        captured.update(
-            path=path, muted=muted, volume=volume, volume_ipc=volume_ipc
-        )
+        captured.update(path=path, muted=muted, volume=volume, volume_ipc=volume_ipc)
 
     # The internal-video-player subprocess is a macOS-only code path; on
     # Linux the real backend module has no run_player, so inject a fake
@@ -149,9 +144,7 @@ def test_mode_service_order_respects_explicit_html():
 
 
 def test_mode_service_appends_html_only_when_feature_enabled(monkeypatch):
-    monkeypatch.setattr(
-        "app.wallpaper_mode_service._html_mode_available", lambda: False
-    )
+    monkeypatch.setattr("app.wallpaper_mode_service._html_mode_available", lambda: False)
     service = _make_mode_service(("图片", "视频"))
     assert "HTML" not in service._order
     # resolve("next") must cycle within the available modes only, never
@@ -160,9 +153,7 @@ def test_mode_service_appends_html_only_when_feature_enabled(monkeypatch):
 
 
 def test_mode_service_appends_html_when_feature_enabled(monkeypatch):
-    monkeypatch.setattr(
-        "app.wallpaper_mode_service._html_mode_available", lambda: True
-    )
+    monkeypatch.setattr("app.wallpaper_mode_service._html_mode_available", lambda: True)
     service = _make_mode_service(("图片", "视频"))
     assert "HTML" in service._order
 
@@ -241,10 +232,7 @@ def test_setting_change_filter_is_kept_alive_after_install():
     text = Path("src/app/entry.py").read_text(encoding="utf-8")
     assert "_INSTALLED_SETTING_CHANGE_FILTER" in text
     # The install path must assign the filter into the owner slot.
-    assert (
-        "_WallpaperSettingChangeFilter._INSTALLED_SETTING_CHANGE_FILTER = self._qt_filter"
-        in text
-    )
+    assert "_WallpaperSettingChangeFilter._INSTALLED_SETTING_CHANGE_FILTER = self._qt_filter" in text
 
 
 # ---------------------------------------------------------------------------
@@ -331,8 +319,7 @@ def test_bing_startup_auto_update_uses_queued_signal_not_worker_thread_timer():
     # Only inspect executable lines: the rework comment legitimately mentions
     # the old QTimer.singleShot call it replaced.
     code_text = "\n".join(
-        line for line in worker_block.splitlines()
-        if line.strip() and not line.strip().startswith("#")
+        line for line in worker_block.splitlines() if line.strip() and not line.strip().startswith("#")
     )
     assert "QTimer.singleShot" not in code_text, (
         "worker thread must not schedule QTimer.singleShot (never fires without an event loop)"

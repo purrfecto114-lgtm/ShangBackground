@@ -4,6 +4,7 @@ The dismissal is deliberately scoped to the current application version and
 exact missing-dependency set.  A new release or a changed dependency state
 therefore prompts again.  Required dependencies can never be suppressed.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
@@ -64,9 +65,7 @@ def suppress_dependency_warning(missing: Iterable[Mapping[str, Any]]) -> bool:
         try:
             from app.log_setup import get_logger
 
-            get_logger("dependencies").warning(
-                "failed to persist dependency-warning dismissal: %s", exc, exc_info=True
-            )
+            get_logger("dependencies").warning("failed to persist dependency-warning dismissal: %s", exc, exc_info=True)
         except Exception:
             pass
         return False

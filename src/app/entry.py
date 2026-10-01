@@ -6,7 +6,12 @@ import signal
 import sys
 
 from core import engine as core
-from app.config import UPDATE_CHECK_ON_STARTUP, UPDATE_CHECK_STARTUP_DELAY_MS, is_supported_video_path, normalize_mode_key
+from app.config import (
+    UPDATE_CHECK_ON_STARTUP,
+    UPDATE_CHECK_STARTUP_DELAY_MS,
+    is_supported_video_path,
+    normalize_mode_key,
+)
 from app.build_features import is_feature_enabled
 from core.local_ipc import LocalCommandServer
 from app.i18n import t
@@ -40,6 +45,7 @@ if PYSIDE_AVAILABLE:
 else:  # pragma: no cover - names are guarded by PYSIDE_AVAILABLE in main()
     QApplication = QIcon = QMessageBox = QTimer = None
     apply_application_font = None
+
 
 def _notify_second_instance_blocked() -> None:
     """Show a real "already running" notice from a second process.
@@ -107,9 +113,7 @@ class _WallpaperSettingChangeFilter:
                             # message (UINT, right after hwnd). The offset is
                             # sizeof(void*) — 8 on x64/arm64, 4 on x86 builds.
                             message_offset = ctypes.sizeof(ctypes.c_void_p)
-                            message_id = ctypes.c_uint.from_address(
-                                msg_ptr + message_offset
-                            ).value
+                            message_id = ctypes.c_uint.from_address(msg_ptr + message_offset).value
                             if message_id == 0x001A:  # WM_SETTINGCHANGE
                                 core.handle_system_setting_change()
                     except Exception:
@@ -188,10 +192,18 @@ def main() -> int:
     # Shared source tree: platform selection follows the current host.
 
     is_action_launch = _is_action_launch(args)
-    direct_action_launch = any((
-        args.previous, args.next, args.random, bool(args.set_wallpaper),
-        args.jump_to_wallpaper, args.show, args.settings, getattr(args, "quit", False),
-    ))
+    direct_action_launch = any(
+        (
+            args.previous,
+            args.next,
+            args.random,
+            bool(args.set_wallpaper),
+            args.jump_to_wallpaper,
+            args.show,
+            args.settings,
+            getattr(args, "quit", False),
+        )
+    )
 
     # One cross-platform lock and one authenticated local command channel.
     if _is_already_running():
@@ -224,6 +236,7 @@ def main() -> int:
         print(f"PySide6 不可用：{PYSIDE_IMPORT_ERROR}")
         try:
             from app.dependencies import prompt_install_dependencies
+
             prompt_install_dependencies(None, _dependency_availability_for_pyside())
         except Exception as exc:
             print(f"依赖提示不可用：{exc}")
@@ -243,6 +256,7 @@ def main() -> int:
     # intermediate code path toggled it.
     try:
         from app.log_setup import set_file_logging_enabled
+
         set_file_logging_enabled(bool(core.config.get("log_enabled", False)))
     except Exception:
         pass
@@ -296,9 +310,7 @@ def main() -> int:
     # coalescing worker now, in parallel with UI construction, so Explorer's
     # cold-start context menu does not wait for the full Widgets tree.
     cold_context_action_started = False
-    pending_context_command = str(
-        getattr(core, "pending_startup_context_command", "") or ""
-    )
+    pending_context_command = str(getattr(core, "pending_startup_context_command", "") or "")
     if pending_context_command and pending_context_command not in {"jump", "show", "settings"}:
         core.pending_startup_context_command = None
         core.queue_ipc_wallpaper_command(pending_context_command)
@@ -320,6 +332,7 @@ def main() -> int:
 
     def _handle_local_command(command: str, payload) -> None:
         """Run authenticated IPC commands on the Qt main thread."""
+
         def _run() -> None:
             try:
                 if command == "show":
@@ -347,6 +360,7 @@ def main() -> int:
                     core.queue_ipc_wallpaper_command(command)
             except Exception as exc:
                 core.log_error(f"本地 IPC 命令执行失败({command})", exc)
+
         QTimer.singleShot(0, _run)
 
     local_server = LocalCommandServer(_handle_local_command, app)
@@ -360,6 +374,7 @@ def main() -> int:
     # dynamic-wallpaper restoration, while the main window remains hidden.
     pending_context_command = getattr(core, "pending_startup_context_command", None)
     if pending_context_command:
+
         def _run_pending_context_command_early():
             try:
                 command_text = str(getattr(core, "pending_startup_context_command", "") or "")
@@ -379,14 +394,13 @@ def main() -> int:
                 window.set_status(t("已响应桌面右键菜单动作"))
             except Exception as exc:
                 core.log_error("启动后执行桌面右键菜单动作失败", exc)
+
         QTimer.singleShot(0, _run_pending_context_command_early)
 
     def _emergency_exit_cleanup(*_args):
         try:
             window._closing_for_exit = True
-            window._perform_exit_cleanup_once(
-                restore_wallpaper=True, reason="signal_or_about_to_quit"
-            )
+            window._perform_exit_cleanup_once(restore_wallpaper=True, reason="signal_or_about_to_quit")
         except Exception as exc:
             try:
                 core.log(f"退出兜底清理失败: {exc}")
@@ -401,6 +415,7 @@ def main() -> int:
         try:
             _sig = getattr(signal, _sig_name)
             _old_handler = signal.getsignal(_sig)
+
             def _handler(signum, frame, _old_handler=_old_handler):
                 _emergency_exit_cleanup()
                 if callable(_old_handler) and _old_handler not in (signal.SIG_DFL, signal.SIG_IGN):
@@ -412,19 +427,21 @@ def main() -> int:
                     app.quit()
                 except Exception:
                     pass
+
             signal.signal(_sig, _handler)
         except Exception:
             pass
+
     def _post_show_runtime_startup():
         # 先让主窗口完成首帧显示；依赖检查、IPC、统计和幻灯片启动都延后，避免抢占 GUI 启动。
         try:
             from app.dependencies import prompt_install_dependencies
+
             if not prompt_install_dependencies(None, _dependency_availability_for_pyside()):
                 window.exit_app()
                 return
         except Exception as exc:
             core.log(f"PySide6 依赖检查跳过: {exc}")
-
 
         if getattr(args, "sync_context_on_start", False) and core.IS_WINDOWS:
             QTimer.singleShot(250, lambda: window.sync_context_menu(show_message=True, only_if_needed=True))
@@ -443,9 +460,7 @@ def main() -> int:
                 600,
                 lambda: window._run_mode_transition(
                     t("正在启动幻灯片放映…"),
-                    lambda: core.restore_configured_wallpaper_mode(
-                        "幻灯片放映", is_startup=True
-                    ),
+                    lambda: core.restore_configured_wallpaper_mode("幻灯片放映", is_startup=True),
                 ),
             )
         elif is_feature_enabled("video") and _startup_mode == "视频" and core.config.get("video_file"):
@@ -462,8 +477,10 @@ def main() -> int:
                 )
             else:
                 core.log("跳过启动恢复视频壁纸：视频文件无效或格式不支持")
-        elif is_feature_enabled("html") and _startup_mode == "HTML" and (
-            core.config.get("html_file") or core.config.get("html_url")
+        elif (
+            is_feature_enabled("html")
+            and _startup_mode == "HTML"
+            and (core.config.get("html_file") or core.config.get("html_url"))
         ):
             QTimer.singleShot(
                 600,
@@ -504,9 +521,7 @@ def main() -> int:
     code = app.exec()
     if window.tray:
         window.tray.hide()
-    window._perform_exit_cleanup_once(
-        restore_wallpaper=True, reason="event_loop_return"
-    )
+    window._perform_exit_cleanup_once(restore_wallpaper=True, reason="event_loop_return")
     return int(code)
 
 

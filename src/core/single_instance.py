@@ -5,6 +5,7 @@ TCP port, so an unrelated local service cannot make the application believe it
 is already running.  The locked file also carries a short-lived IPC identity
 (token + endpoint name) used by :mod:`core.local_ipc`.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -63,9 +64,7 @@ def lock_path() -> Path:
 
 
 def endpoint_name() -> str:
-    digest = hashlib.sha256(
-        f"{APP_LOCK_ID}:{_user_lock_suffix()}".encode("utf-8", errors="ignore")
-    ).hexdigest()[:24]
+    digest = hashlib.sha256(f"{APP_LOCK_ID}:{_user_lock_suffix()}".encode("utf-8", errors="ignore")).hexdigest()[:24]
     return f"{APP_LOCK_ID}-{digest}"
 
 

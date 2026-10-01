@@ -116,8 +116,6 @@ def _read_options_if_changed(path: str, cache: dict[str, object]) -> dict[str, A
         return {}
 
 
-
-
 def _profile_path_for_source(source: str, *, max_profiles: int = 12) -> Path:
     """Return an isolated WebView profile and prune old unused profiles.
 
@@ -134,15 +132,13 @@ def _profile_path_for_source(source: str, *, max_profiles: int = 12) -> Path:
     current = profile_root / key
     try:
         candidates = [
-            item
-            for item in profile_root.iterdir()
-            if item.is_dir() and not item.is_symlink() and item != current
+            item for item in profile_root.iterdir() if item.is_dir() and not item.is_symlink() and item != current
         ]
         candidates.sort(
             key=lambda item: item.stat().st_mtime_ns,
             reverse=True,
         )
-        for stale in candidates[max(0, int(max_profiles) - 1):]:
+        for stale in candidates[max(0, int(max_profiles) - 1) :]:
             try:
                 shutil.rmtree(stale)
             except OSError:
@@ -244,11 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     backend = _desktop_backend(platform)
-    mouse_through = (
-        default_html_mouse_through(platform)
-        if args.mouse_through is None
-        else bool(args.mouse_through)
-    )
+    mouse_through = default_html_mouse_through(platform) if args.mouse_through is None else bool(args.mouse_through)
     if args.windowed_test_mode:
         geometry = (80, 80, max(320, args.test_width), max(240, args.test_height))
     else:

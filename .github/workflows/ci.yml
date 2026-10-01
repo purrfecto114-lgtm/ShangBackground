@@ -72,6 +72,46 @@ jobs:
             done
           done
 
+  pyright-advisory:
+    # v1.6.1: static type feedback without gating. Current error budget is
+    # ~480 (dynamic-attribute patterns in main_window/engine dominate);
+    # pyright basic resolves the platform facade aliases with zero facade
+    # errors, so the report is meaningful even while non-blocking.
+    name: Pyright (advisory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements/base.txt
+
+      - name: Install type-check inputs
+        run: |
+          python -m pip install --upgrade "pip>=25" pyright
+          python -m pip install PySide6-Essentials==6.11.1 "dbus-next>=0.2.3,<1"
+
+      - name: Run pyright (report only)
+        run: python -m pyright --outputjson --level error | tee pyright-report.json || true
+
+      - name: Upload pyright report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pyright-report
+          path: pyright-report.json
+          if-no-files-found: ignore
+
   tests:
     name: Tests (${{ matrix.label }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
@@ -133,7 +173,11 @@ jobs:
         run: python -m pip install --upgrade "pip>=25" -r requirements/test.txt
 
       - name: Run tests
-        run: python -m pytest -q
+        run: python -m pytest -q --cov=src --cov=build_tools --cov-report=term
+        env:
+          # Headless Qt platform plugin: PySide6 tests must actually run on
+          # CI runners without a display instead of silently skipping.
+          QT_QPA_PLATFORM: offscreen
 
       - name: Check runtime version entry point
         shell: bash

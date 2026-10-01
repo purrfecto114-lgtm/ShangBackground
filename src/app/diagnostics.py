@@ -248,10 +248,13 @@ def collect_diagnostics() -> DiagnosticReport:
         # DLL conflicts; the external mpv.exe handles playback.
         if libmpv_path and _video_mode not in ("system", "disabled"):
             from app.libmpv_runtime import probe_libmpv
+
             libmpv_ok, libmpv_detail = probe_libmpv(libmpv_path)
         else:
             libmpv_ok = False
-            libmpv_detail = f"skipped (mode={_video_mode})" if _video_mode in ("system", "disabled") else "libmpv not found"
+            libmpv_detail = (
+                f"skipped (mode={_video_mode})" if _video_mode in ("system", "disabled") else "libmpv not found"
+            )
     except Exception as exc:
         libmpv_path = None
         libmpv_ok, libmpv_detail = False, str(exc)
@@ -300,8 +303,14 @@ def collect_diagnostics() -> DiagnosticReport:
         checks.append(
             _command_check(
                 (
-                    "plasma-apply-wallpaperimage", "qdbus6", "qdbus",
-                    "gsettings", "xfconf-query", "pcmanfm", "feh", "nitrogen",
+                    "plasma-apply-wallpaperimage",
+                    "qdbus6",
+                    "qdbus",
+                    "gsettings",
+                    "xfconf-query",
+                    "pcmanfm",
+                    "feh",
+                    "nitrogen",
                 ),
                 "static wallpaper backend",
             )
@@ -317,21 +326,24 @@ def collect_diagnostics() -> DiagnosticReport:
             if not scope.get("reachable"):
                 checks.append(
                     DiagnosticCheck(
-                        "kde-wallpaper-restore", "warn",
+                        "kde-wallpaper-restore",
+                        "warn",
                         f"无法读取 Plasma 壁纸插件状态：{scope.get('detail', 'unknown')}",
                     )
                 )
             elif scope.get("restorable"):
                 checks.append(
                     DiagnosticCheck(
-                        "kde-wallpaper-restore", "pass",
+                        "kde-wallpaper-restore",
+                        "pass",
                         f"恢复范围：本地静态图片（{scope.get('detail', '')}）",
                     )
                 )
             else:
                 checks.append(
                     DiagnosticCheck(
-                        "kde-wallpaper-restore", "warn",
+                        "kde-wallpaper-restore",
+                        "warn",
                         f"当前 Plasma 壁纸插件包含非图片插件：{scope.get('detail', '')}。"
                         "退出恢复会重选原插件并恢复 org.kde.image 的图片/填充模式",
                         hint="v1.6.3 schema=3：插件本身会被恢复，但 slideshow/color/"
@@ -340,9 +352,7 @@ def collect_diagnostics() -> DiagnosticReport:
                     )
                 )
         if session == "wayland":
-            module = _module_check(
-                "dbus_next", "Wayland global shortcuts", required=False, install="dbus-next"
-            )
+            module = _module_check("dbus_next", "Wayland global shortcuts", required=False, install="dbus-next")
             if module.status == "pass" and not session_bus_available():
                 module.status = "warn"
                 module.detail += "; no D-Bus session bus endpoint detected"
@@ -351,14 +361,13 @@ def collect_diagnostics() -> DiagnosticReport:
             # mpvpaper 命令存在性自行重判（KDE Wayland 曾因此误显示 pass）。
             checks.append(_wayland_video_check(linux_video_wallpaper_capability()))
         elif session == "x11":
-            checks.append(
-                _module_check("pynput", "X11 global hotkeys", required=False, install="pynput")
-            )
+            checks.append(_module_check("pynput", "X11 global hotkeys", required=False, install="pynput"))
             checks.append(_command_check(("xwinwrap",), "X11 desktop video embedding"))
         else:
             checks.append(
                 DiagnosticCheck(
-                    "graphical-session", "warn",
+                    "graphical-session",
+                    "warn",
                     "neither XDG_SESSION_TYPE, WAYLAND_DISPLAY nor DISPLAY identifies a GUI session",
                 )
             )
@@ -367,11 +376,15 @@ def collect_diagnostics() -> DiagnosticReport:
             [
                 _module_check("pynput", "global hotkeys", required=False, install="pynput"),
                 _module_check(
-                    "AppKit", "macOS AppKit", required=False,
+                    "AppKit",
+                    "macOS AppKit",
+                    required=False,
                     missing_hint="part of the macOS system Python (python.org or Homebrew builds include it)",
                 ),
                 _module_check(
-                    "Quartz", "macOS Quartz", required=False,
+                    "Quartz",
+                    "macOS Quartz",
+                    required=False,
                     missing_hint="part of the macOS system Python (python.org or Homebrew builds include it)",
                 ),
             ]

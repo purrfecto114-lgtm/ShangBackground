@@ -36,13 +36,27 @@ ARCH_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
     "x86": ("x86", "i386", "i686", "win32"),
     "universal": ("universal", "noarch", "all"),
 }
-PACKAGE_EXTENSIONS = (".exe", ".msi", ".zip", ".7z", ".tar.gz", ".tar.xz", ".tgz", ".appimage", ".deb", ".rpm", ".dmg", ".pkg")
+PACKAGE_EXTENSIONS = (
+    ".exe",
+    ".msi",
+    ".zip",
+    ".7z",
+    ".tar.gz",
+    ".tar.xz",
+    ".tgz",
+    ".appimage",
+    ".deb",
+    ".rpm",
+    ".dmg",
+    ".pkg",
+)
 SOURCE_MARKERS = ("source", "src", "源码", "source code")
 
 
 def _detect_host_arch() -> str:
     """Detect the host CPU architecture for asset matching."""
     import platform as _platform
+
     machine = _platform.machine().lower().replace("-", "_")
     if machine in ("amd64", "x64", "x86_64"):
         return "x86_64"
@@ -66,9 +80,7 @@ def _is_repository_github_url(value: str | None) -> bool:
     if host == "github.com":
         return path.lower() == repo_path or path.lower().startswith(repo_path + "/")
     api_path = f"/repos/{GITHUB_REPO.lower()}"
-    return host == "api.github.com" and (
-        path.lower() == api_path or path.lower().startswith(api_path + "/")
-    )
+    return host == "api.github.com" and (path.lower() == api_path or path.lower().startswith(api_path + "/"))
 
 
 def _github_url_or_default(value: str | None, default: str) -> str:
@@ -115,8 +127,7 @@ def parse_version(value: str | None) -> tuple[int, int, int]:
     match = VERSION_RE.search(text)
     if not match:
         raise ValueError(
-            "无法解析版本号，需要两段或三段式版本，如 1.3 / 1.3.0 / v1.3.0 / "
-            f"app_ver=1.3：{text or '<empty>'}"
+            f"无法解析版本号，需要两段或三段式版本，如 1.3 / 1.3.0 / v1.3.0 / app_ver=1.3：{text or '<empty>'}"
         )
     major, minor, patch = match.groups()
     return int(major), int(minor), int(patch or 0)
@@ -209,9 +220,7 @@ def _annotate_asset(asset: dict[str, Any], platform_id: str = PLATFORM_ID) -> di
     return item
 
 
-def select_compatible_assets(
-    assets: list[dict[str, Any]], platform_id: str = PLATFORM_ID
-) -> list[dict[str, Any]]:
+def select_compatible_assets(assets: list[dict[str, Any]], platform_id: str = PLATFORM_ID) -> list[dict[str, Any]]:
     """Return all usable release assets for the current platform, sorted best-first.
 
     Future releases may publish several choices for one platform, for example a
@@ -224,9 +233,7 @@ def select_compatible_assets(
     return compatible
 
 
-def select_best_asset(
-    assets: list[dict[str, Any]], platform_id: str = PLATFORM_ID
-) -> dict[str, Any]:
+def select_best_asset(assets: list[dict[str, Any]], platform_id: str = PLATFORM_ID) -> dict[str, Any]:
     compatible = select_compatible_assets(assets, platform_id)
     return dict(compatible[0]) if compatible else {}
 
@@ -286,9 +293,7 @@ def fetch_latest_github_release(timeout: int | None = None) -> ReleaseInfo:
     )
 
 
-def check_latest_release(
-    current_version: str, timeout: int | None = None
-) -> tuple[bool, ReleaseInfo]:
+def check_latest_release(current_version: str, timeout: int | None = None) -> tuple[bool, ReleaseInfo]:
     info = fetch_latest_github_release(timeout=timeout)
     return parse_version(info.version) > parse_version(current_version), info
 

@@ -9,6 +9,7 @@ capture_state/restore_state 端口时，会话记录额外携带插件级状态
 - 无状态后端 / 捕获失败 → 逐字节走 schema=2 现状路径；
 - schema=2 旧文件读取时仅在后端支持状态恢复时转换（converted_from=2）。
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable, MutableMapping, Sequence
@@ -240,7 +241,9 @@ class SessionWallpaperService:
                 backend_state = snapshot.backend_state
             # schema=3：插件级状态恢复（后端不支持时回落现状路径逻辑）。
             if self._valid_backend_state(backend_state) and getattr(self._backend, "restore_state", None) is not None:
-                return self._restore_backend_state(backend_state, target, style, stop_dynamic=stop_dynamic, finalize=finalize)
+                return self._restore_backend_state(
+                    backend_state, target, style, stop_dynamic=stop_dynamic, finalize=finalize
+                )
             if not target:
                 self._log("没有可恢复的启动前壁纸记录")
                 return False
@@ -402,10 +405,7 @@ class SessionWallpaperService:
                 # can repaint again later. Keep checking the full stability
                 # window before clearing the crash-recovery anchor.
                 continue
-            self._log(
-                "检测到动态壁纸退出后的桌面重绘覆盖了恢复结果，正在重试: "
-                + observed
-            )
+            self._log("检测到动态壁纸退出后的桌面重绘覆盖了恢复结果，正在重试: " + observed)
             self._restore_style(style)
             self._backend.set_wallpaper(target)
             self._refresh_shell_quietly()
@@ -457,10 +457,7 @@ class SessionWallpaperService:
     def same_path(left: str | None, right: str | None) -> bool:
         try:
             return bool(
-                left
-                and right
-                and os.path.normcase(os.path.abspath(left))
-                == os.path.normcase(os.path.abspath(right))
+                left and right and os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
             )
         except Exception:
             return False

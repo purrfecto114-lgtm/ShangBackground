@@ -84,7 +84,12 @@ def test_worker_stop_during_process_launch_is_not_lost(monkeypatch: pytest.Monke
     assert not worker.running
 
 
-def test_build_gui_creates_real_tk_layout_under_xvfb():
+def _xvfb_run_or_skip() -> str:
+    """Return the xvfb-run path, or skip: xvfb-run being present is not
+    enough — it must actually be able to start a display and run a command
+    (e.g. this sandbox has xvfb-run but no xauth, so every launch fails).
+    Presence-only probing made these tests hard-fail in minimal
+    environments instead of skipping."""
     import shutil
     import subprocess
     import sys
@@ -92,6 +97,29 @@ def test_build_gui_creates_real_tk_layout_under_xvfb():
     xvfb_run = shutil.which("xvfb-run")
     if xvfb_run is None:
         pytest.skip("xvfb-run is unavailable")
+    try:
+        probe = subprocess.run(
+            [xvfb_run, "-a", sys.executable, "-c", "print('ok')"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pytest.skip("xvfb-run cannot launch in this environment")
+    if probe.returncode != 0:
+        pytest.skip(
+            "xvfb-run cannot start a display here "
+            f"(exit {probe.returncode}: {(probe.stderr or b'').decode(errors='replace').strip()[:120]})"
+        )
+    return xvfb_run
+
+
+def test_build_gui_creates_real_tk_layout_under_xvfb():
+    import subprocess
+    import sys
+
+    xvfb_run = _xvfb_run_or_skip()
     script = """
 import time
 import tkinter as tk
@@ -155,14 +183,11 @@ def test_app_state_rejects_invalid_preset_values():
 
 
 def test_build_gui_tracks_canvas_width_when_resized_under_xvfb():
-    import shutil
     import subprocess
     import sys
 
-    xvfb_run = shutil.which("xvfb-run")
-    if xvfb_run is None:
-        pytest.skip("xvfb-run is unavailable")
-    script = r'''
+    xvfb_run = _xvfb_run_or_skip()
+    script = r"""
 import tkinter as tk
 from build_tools.buildlib.gui import create_app
 root = tk.Tk()
@@ -178,7 +203,7 @@ for geometry in ("1600x1000", "900x640", "1400x900"):
     if abs(canvas_width - content_width) > 2:
         raise SystemExit(f"width mismatch at {geometry}: canvas={canvas_width}, content={content_width}")
 root.destroy()
-'''
+"""
     result = subprocess.run(
         [xvfb_run, "-a", sys.executable, "-c", script],
         cwd=Path(__file__).resolve().parents[1],

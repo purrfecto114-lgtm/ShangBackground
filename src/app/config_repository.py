@@ -4,6 +4,7 @@ This module owns file selection, bounded JSON loading, backup recovery and
 atomic writes. Configuration defaults and migrations remain application policy
 and are deliberately kept outside this repository.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

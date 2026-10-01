@@ -1,4 +1,5 @@
 """Tests for the UPX (Ultimate Packer for eXecutables) detection module."""
+
 from __future__ import annotations
 
 from pathlib import Path

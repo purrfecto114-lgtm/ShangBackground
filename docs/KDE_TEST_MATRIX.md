@@ -72,7 +72,7 @@
 
 ```bash
 # 1. 版本与诊断
-python src/main.py --version            # 预期输出 1.6.3
+python src/main.py --version            # 预期输出 1.6.1（历史注：1.6.1–1.6.4 为内部里程碑号，已压平发布；此处随当前 CLI 版本号校准）
 python src/main.py --doctor-json > doctor-<环境编号>.json
 #   核对项：static wallpaper backend / kde-wallpaper-restore /
 #           Wayland video embedding（Wayland 会话）/ X11 desktop video embedding（X11 会话）

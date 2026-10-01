@@ -18,6 +18,7 @@
 按脚本内容路由 mock 返回（探针含 ``print("ID:"``、写脚本含
 ``SHANGBACKGROUND_KDE_SET_DONE``）。
 """
+
 from __future__ import annotations
 
 import json
@@ -131,7 +132,7 @@ def _full_output(monkeypatch: pytest.MonkeyPatch, *, plasma_rc: int, script_ok: 
     monkeypatch.setattr(
         integration,
         "_run_args",
-        lambda cmd, timeout=8: (spawn.append(list(cmd)) or (plasma_rc, "", "")),
+        lambda cmd, timeout=8: spawn.append(list(cmd)) or (plasma_rc, "", ""),
     )
     monkeypatch.setattr(
         integration,
@@ -233,10 +234,7 @@ def test_per_screen_write_script_forbids_plasma_apply_command(monkeypatch: pytes
 def test_per_screen_unmappable_screen_rejects_without_writing(monkeypatch: pytest.MonkeyPatch):
     """探针的 containment 全部 screen!=N → (False, 可操作错误)，且只有
     探针被 spawn——没有任何写脚本、没有任何直接命令、不触碰任何桌面。"""
-    probe_out = (
-        "ID:12  SCREEN:0  PLUGIN:org.kde.image\n"
-        "ID:14  SCREEN:2  PLUGIN:org.kde.image\n"
-    )
+    probe_out = "ID:12  SCREEN:0  PLUGIN:org.kde.image\nID:14  SCREEN:2  PLUGIN:org.kde.image\n"
     result, outcome, calls, run_args_calls = _per_screen(monkeypatch, probe_out=probe_out, screen_index=1)
     ok, message = result
     assert ok is False

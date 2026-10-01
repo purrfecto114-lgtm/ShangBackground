@@ -15,6 +15,7 @@ layer-shell 兼容性未经独立探针验证，不得宣称 ready。
 5. KDE 无 mpvpaper 时视频为 unsupported。
 6. X11 KDE 会话不受影响（x11 分支走 xwinwrap 判定）。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -113,5 +114,7 @@ def test_kde_x11_session_not_affected(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(capabilities, "_has", lambda _name: False)
     monkeypatch.setattr(capabilities, "_libmpv_ready", lambda: True)
     env = {"XDG_SESSION_TYPE": "x11", "XDG_CURRENT_DESKTOP": "KDE"}
-    result = capabilities.probe_capabilities(env, which=lambda name: "/usr/bin/xwinwrap" if name == "xwinwrap" else None)
+    result = capabilities.probe_capabilities(
+        env, which=lambda name: "/usr/bin/xwinwrap" if name == "xwinwrap" else None
+    )
     assert result["video_wallpaper"]["runtime_ready"] is True

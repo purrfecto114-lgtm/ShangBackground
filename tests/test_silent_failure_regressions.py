@@ -10,6 +10,7 @@
 - P1-4: IPC 转发全链失败时写入死信队列，下次启动播报
 - P1-5: 安装器在安装时捕获、卸载时回滚 WallpaperStyle/TileWallpaper
 """
+
 from __future__ import annotations
 
 import argparse
@@ -24,6 +25,7 @@ from app.wallpaper_service import WallpaperService
 # ---------------------------------------------------------------------------
 # P0-1: 右键/IPC 路径必须与 GUI 按钮一样反馈失败
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     ("command", "func_name", "fallback"),
@@ -60,9 +62,7 @@ def test_ipc_wallpaper_command_failure_without_error_uses_fallback(
     ("command", "func_name"),
     [("previous", "previous_wallpaper"), ("next", "next_wallpaper"), ("random", "random_wallpaper")],
 )
-def test_ipc_wallpaper_command_success_returns_true(
-    monkeypatch: pytest.MonkeyPatch, command: str, func_name: str
-):
+def test_ipc_wallpaper_command_success_returns_true(monkeypatch: pytest.MonkeyPatch, command: str, func_name: str):
     from core import engine
 
     monkeypatch.setattr(engine, func_name, lambda: True)
@@ -90,6 +90,7 @@ def test_ipc_wallpaper_command_raise_surfaces_via_existing_notify_path(
 # ---------------------------------------------------------------------------
 # P0-1b: _notify_ipc_failure 不再用关键词白名单过滤
 # ---------------------------------------------------------------------------
+
 
 def test_notify_ipc_failure_passes_non_keyword_messages(monkeypatch: pytest.MonkeyPatch):
     from core import engine
@@ -125,6 +126,7 @@ def test_notify_ipc_failure_without_gui_channel_logs(monkeypatch: pytest.MonkeyP
 # ---------------------------------------------------------------------------
 # P0-2: configure_fit_mode 显式 bool 契约
 # ---------------------------------------------------------------------------
+
 
 class _FakeWinregOk:
     HKEY_CURRENT_USER = object()
@@ -190,6 +192,7 @@ def test_configure_fit_mode_com_success_skips_registry(monkeypatch: pytest.Monke
 # ---------------------------------------------------------------------------
 # P0-2: WallpaperService 消费后端的显式 False（旧死代码分支激活）
 # ---------------------------------------------------------------------------
+
 
 class _FitBackend:
     def __init__(self, fit_result, current: str = "") -> None:
@@ -280,6 +283,7 @@ def test_bootstrap_module_adapter_propagates_fit_mode_result():
 # P0-3: set_fit_mode 假成功修复
 # ---------------------------------------------------------------------------
 
+
 def test_set_fit_mode_failure_sets_error_and_returns_false(monkeypatch: pytest.MonkeyPatch):
     from core import engine
 
@@ -328,6 +332,7 @@ def test_set_fit_mode_success_returns_true(monkeypatch: pytest.MonkeyPatch, tmp_
 # ---------------------------------------------------------------------------
 # P1-1: 右键菜单"永久不同步"自锁修复
 # ---------------------------------------------------------------------------
+
 
 def test_context_menu_not_synced_until_explorer_notified_this_session(
     monkeypatch: pytest.MonkeyPatch,
@@ -400,6 +405,7 @@ def test_shell_association_notify_failure_keeps_flag_false(monkeypatch: pytest.M
 # P1-3: Windows 多显示器能力口径
 # ---------------------------------------------------------------------------
 
+
 def test_windows_multi_monitor_capability_describes_null_monitor_reality():
     from platform_adapters.backends.windows import capabilities
 
@@ -413,6 +419,7 @@ def test_windows_multi_monitor_capability_describes_null_monitor_reality():
 # ---------------------------------------------------------------------------
 # P1-4: 未送达 IPC 动作的死信队列
 # ---------------------------------------------------------------------------
+
 
 def test_missed_command_journal_roundtrip(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     from core import local_ipc
@@ -435,9 +442,7 @@ def test_missed_command_journal_roundtrip(monkeypatch: pytest.MonkeyPatch, tmp_p
 def test_missed_command_journal_is_bounded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     from core import local_ipc
 
-    monkeypatch.setattr(
-        local_ipc, "MISSED_COMMANDS_FILE", str(tmp_path / "missed_ipc_actions.json")
-    )
+    monkeypatch.setattr(local_ipc, "MISSED_COMMANDS_FILE", str(tmp_path / "missed_ipc_actions.json"))
     for index in range(local_ipc.MISSED_COMMANDS_LIMIT + 5):
         local_ipc.record_missed_command("previous", index)
     entries = local_ipc.drain_missed_commands()
@@ -445,9 +450,7 @@ def test_missed_command_journal_is_bounded(monkeypatch: pytest.MonkeyPatch, tmp_
     assert entries[-1]["payload"] == local_ipc.MISSED_COMMANDS_LIMIT + 4
 
 
-def test_missed_command_journal_survives_corrupt_file(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+def test_missed_command_journal_survives_corrupt_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     from core import local_ipc
 
     journal = tmp_path / "missed_ipc_actions.json"
@@ -464,7 +467,9 @@ def test_dispatch_failure_records_dead_letter(monkeypatch: pytest.MonkeyPatch):
     from core import local_ipc
 
     recorded: list[tuple] = []
-    monkeypatch.setattr(local_ipc, "record_missed_command", lambda command, payload=None: recorded.append((command, payload)) or True)
+    monkeypatch.setattr(
+        local_ipc, "record_missed_command", lambda command, payload=None: recorded.append((command, payload)) or True
+    )
     monkeypatch.setattr(support, "_context_command_from_args", lambda _args: "previous")
     monkeypatch.setattr(support, "_context_payload_from_args", lambda _args: None)
     monkeypatch.setattr(support.single_instance, "read_identity", lambda: {})
@@ -474,9 +479,15 @@ def test_dispatch_failure_records_dead_letter(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(support.core, "log", lambda msg: logged.append(msg))
 
     args = argparse.Namespace(
-        previous=True, next=False, random=False, set_wallpaper=None,
-        jump_to_wallpaper=False, quit=False, show=False,
-        wait_for_exit=False, context_menu_dispatched_child=False,
+        previous=True,
+        next=False,
+        random=False,
+        set_wallpaper=None,
+        jump_to_wallpaper=False,
+        quit=False,
+        show=False,
+        wait_for_exit=False,
+        context_menu_dispatched_child=False,
     )
     assert support._dispatch_action_to_existing_instance(args) is False
     assert recorded == [("previous", None)]
@@ -488,15 +499,23 @@ def test_dispatch_success_skips_dead_letter(monkeypatch: pytest.MonkeyPatch):
     from core import local_ipc
 
     recorded: list[tuple] = []
-    monkeypatch.setattr(local_ipc, "record_missed_command", lambda command, payload=None: recorded.append((command, payload)) or True)
+    monkeypatch.setattr(
+        local_ipc, "record_missed_command", lambda command, payload=None: recorded.append((command, payload)) or True
+    )
     monkeypatch.setattr(support, "_context_command_from_args", lambda _args: "previous")
     monkeypatch.setattr(support, "_context_payload_from_args", lambda _args: None)
     monkeypatch.setattr(local_ipc, "send_command", lambda *_args, **_kwargs: True)
 
     args = argparse.Namespace(
-        previous=True, next=False, random=False, set_wallpaper=None,
-        jump_to_wallpaper=False, quit=False, show=False,
-        wait_for_exit=False, context_menu_dispatched_child=False,
+        previous=True,
+        next=False,
+        random=False,
+        set_wallpaper=None,
+        jump_to_wallpaper=False,
+        quit=False,
+        show=False,
+        wait_for_exit=False,
+        context_menu_dispatched_child=False,
     )
     assert support._dispatch_action_to_existing_instance(args) is True
     assert recorded == []
@@ -542,6 +561,7 @@ def test_surface_missed_ipc_actions_silent_when_empty(monkeypatch: pytest.Monkey
 # P1-5: 安装器的适应方式捕获/回滚（源码级钉：CI 无 ISCC，无法编译验证）
 # ---------------------------------------------------------------------------
 
+
 def test_installer_captures_and_rolls_back_wallpaper_style():
     text = Path("packaging/windows/shangbackground.iss").read_text(encoding="utf-8")
     # 安装时捕获（ssInstall 早于任何文件复制）
@@ -557,6 +577,7 @@ def test_installer_captures_and_rolls_back_wallpaper_style():
 # ---------------------------------------------------------------------------
 # P2 快赢项：VLC 静音保留音量（REVIEW 3.2 同源修复）
 # ---------------------------------------------------------------------------
+
 
 def test_windows_vlc_muting_preserves_configured_volume(monkeypatch: pytest.MonkeyPatch):
     from platform_adapters.backends.windows import video

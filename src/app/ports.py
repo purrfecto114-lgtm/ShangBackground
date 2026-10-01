@@ -4,6 +4,7 @@ The ports intentionally describe only the operations used by the application
 services.  Platform adapters may expose many more helpers, but those helpers do
 not belong in these stable service contracts.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping

@@ -1,4 +1,5 @@
 """Dynamic video/HTML wallpaper lifecycle service."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, MutableMapping
@@ -89,9 +90,7 @@ class MediaService:
     def start_html(self, path: str | None = None) -> bool:
         with self._lock:
             config = self._config
-            raw = path if path is not None else (
-                config.get("html_file", "") or config.get("html_url", "")
-            )
+            raw = path if path is not None else (config.get("html_file", "") or config.get("html_url", ""))
             target = str(raw or "").strip()
             if target and not target.lower().startswith(("http://", "https://")):
                 target = normalize_wallpaper_path(target)
@@ -153,24 +152,27 @@ class MediaService:
                 raise MediaStopError("；".join(errors))
             return any_running
 
+    # ── 热路径读：绝不获取操作锁 ──────────────────────────────────────────
+    # 模式切换事务持有操作锁 14-18 秒，而 GUI 以 700ms/40ms 双频轮询这三个
+    # 方法（视频页状态刷新 + 音量滑块跟随）。带锁版本会让每次轮询排队等
+    # 待整个事务结束——实测单次界面停顿 2900ms。后端探针/选项文件/目标
+    # 读取都是纯读或独立于事务的 I/O，无锁访问安全（v1.6.1 审计 P1-1）。
+
     def is_running(self, kind: MediaKind) -> bool:
-        with self._lock:
-            return self._probe(kind)
+        return self._probe(kind)
 
     def set_option(self, kind: MediaKind, key: str, value: Any) -> bool:
-        with self._lock:
-            try:
-                return bool(self._backend.set_option(kind, str(key), value))
-            except Exception as exc:
-                self._log(f"热更新 {kind} 壁纸选项失败({key}={value}): {exc}")
-                return False
+        try:
+            return bool(self._backend.set_option(kind, str(key), value))
+        except Exception as exc:
+            self._log(f"热更新 {kind} 壁纸选项失败({key}={value}): {exc}")
+            return False
 
     def last_target(self, kind: MediaKind) -> str:
-        with self._lock:
-            try:
-                return str(self._backend.last_target(kind) or "")
-            except Exception:
-                return ""
+        try:
+            return str(self._backend.last_target(kind) or "")
+        except Exception:
+            return ""
 
     def restart_html(self, path: str | None = None) -> bool:
         with self._lock:

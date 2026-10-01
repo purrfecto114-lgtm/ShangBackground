@@ -4,6 +4,7 @@ The GUI changes settings from several code paths and some of those calls can
 happen on worker threads.  Keeping the actual disk transaction here makes the
 write semantics easy to test without importing Qt or the platform backends.
 """
+
 from __future__ import annotations
 
 import json
@@ -112,9 +113,7 @@ def atomic_write_json(
     temp_name: str | None = None
     backup_temp_name: str | None = None
     try:
-        fd, temp_name = tempfile.mkstemp(
-            prefix=f".{target.name}.", suffix=".tmp", dir=os.fspath(target.parent)
-        )
+        fd, temp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=os.fspath(target.parent))
         os.close(fd)
         temp_path = Path(temp_name)
         _write_file(temp_path, payload, mode=mode)

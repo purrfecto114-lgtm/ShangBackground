@@ -40,7 +40,7 @@ def _dispatch_internal_mode() -> int | None:
         # Linux the internal-video-player mode is currently unused, but the
         # argument-parsing contract must stay identical across the three trees
         # to avoid CLI drift.
-        rest = sys.argv[index + 2:]
+        rest = sys.argv[index + 2 :]
         muted = "--muted" in rest
         volume = 100
         if "--volume" in rest:
@@ -93,7 +93,6 @@ def _dispatch_internal_mode() -> int | None:
         from platform_adapters.native_html_runner import main as run_native_html_main
 
         return int(run_native_html_main())
-
 
     return None
 
@@ -152,7 +151,6 @@ def main() -> int:
 _LEGACY_EXPORTS = {
     "PreviewCanvas": ("ui.preview_canvas", "PreviewCanvas"),
     "QtRootShim": ("ui.qt_root_shim", "QtRootShim"),
-    "BingSyncWorker": ("services.bing_sync", "BingSyncWorker"),
     "ShangBackgroundWindow": ("ui.main_window", "ShangBackgroundWindow"),
 }
 

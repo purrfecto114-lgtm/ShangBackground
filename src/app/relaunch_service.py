@@ -1,4 +1,5 @@
 """Cross-platform relaunch orchestration separated from the runtime engine."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
@@ -15,10 +16,21 @@ class RelaunchService:
     """Persist session state, release guards, and start the replacement process."""
 
     _SKIP_FLAGS = {
-        "--previous", "--next", "--random", "--show", "--hide",
-        "--jump-to-wallpaper", "--settings", "--from-context-menu", "--sync-context-on-start",
-        "--inherit-session-wallpaper", "--context-menu-dispatched-child",
-        "--quit", "--wait-for-exit", "--internal-video-player", "--muted",
+        "--previous",
+        "--next",
+        "--random",
+        "--show",
+        "--hide",
+        "--jump-to-wallpaper",
+        "--settings",
+        "--from-context-menu",
+        "--sync-context-on-start",
+        "--inherit-session-wallpaper",
+        "--context-menu-dispatched-child",
+        "--quit",
+        "--wait-for-exit",
+        "--internal-video-player",
+        "--muted",
     }
     _SKIP_VALUE_FLAGS = {
         "--set-wallpaper",
@@ -123,6 +135,7 @@ class RelaunchService:
         args = ["--relaunch-wait-pid", str(pid)]
         try:
             import psutil
+
             created_at = float(psutil.Process(pid).create_time())
         except Exception:
             created_at = 0.0
@@ -207,18 +220,26 @@ class RelaunchService:
             return False, f"executable not found: {executable}"
         try:
             from ctypes import wintypes
+
             shell32 = ctypes.WinDLL("shell32", use_last_error=True)
             kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
             class SHELLEXECUTEINFOW(ctypes.Structure):
                 _fields_ = [
-                    ("cbSize", wintypes.DWORD), ("fMask", wintypes.ULONG),
-                    ("hwnd", wintypes.HWND), ("lpVerb", wintypes.LPCWSTR),
-                    ("lpFile", wintypes.LPCWSTR), ("lpParameters", wintypes.LPCWSTR),
-                    ("lpDirectory", wintypes.LPCWSTR), ("nShow", ctypes.c_int),
-                    ("hInstApp", wintypes.HINSTANCE), ("lpIDList", ctypes.c_void_p),
-                    ("lpClass", wintypes.LPCWSTR), ("hkeyClass", wintypes.HKEY),
-                    ("dwHotKey", wintypes.DWORD), ("hIcon", wintypes.HANDLE),
+                    ("cbSize", wintypes.DWORD),
+                    ("fMask", wintypes.ULONG),
+                    ("hwnd", wintypes.HWND),
+                    ("lpVerb", wintypes.LPCWSTR),
+                    ("lpFile", wintypes.LPCWSTR),
+                    ("lpParameters", wintypes.LPCWSTR),
+                    ("lpDirectory", wintypes.LPCWSTR),
+                    ("nShow", ctypes.c_int),
+                    ("hInstApp", wintypes.HINSTANCE),
+                    ("lpIDList", ctypes.c_void_p),
+                    ("lpClass", wintypes.LPCWSTR),
+                    ("hkeyClass", wintypes.HKEY),
+                    ("dwHotKey", wintypes.DWORD),
+                    ("hIcon", wintypes.HANDLE),
                     ("hProcess", wintypes.HANDLE),
                 ]
 

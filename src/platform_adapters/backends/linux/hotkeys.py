@@ -1,4 +1,5 @@
 """Linux global-hotkey backend and X11 foreground guard."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping

@@ -24,25 +24,35 @@ from platform_adapters.mpv_ipc import MpvIpcClient, verify_media_playing
 
 try:
     from app.paths import (
-        app_executable_path, entry_script_path, external_media_runtime_allowed,
-        is_packaged_runtime, mpv_bundled_exe,
+        app_executable_path,
+        entry_script_path,
+        external_media_runtime_allowed,
+        is_packaged_runtime,
+        mpv_bundled_exe,
     )
     from app.libmpv_runtime import runtime_available as libmpv_runtime_available
     from app.build_features import use_internal_libmpv
     from app.mpv_backend import PollingPropertyObserver
 except Exception:  # pragma: no cover - allow import without app package
+
     def mpv_bundled_exe():
         return None
+
     def libmpv_runtime_available():
         return False
+
     def is_packaged_runtime():
         return False
+
     def external_media_runtime_allowed():
         return True
+
     def app_executable_path():
         return sys.executable
+
     def entry_script_path():
         return sys.argv[0]
+
     def use_internal_libmpv():
         # app 包不可用时内部 libmpv 运行时同样不可用。
         return False
@@ -205,9 +215,7 @@ def _heal_dead_player_state() -> None:
     process_state.remove_state(PID_FILE)
 
 
-def _mpv_ipc_transact(
-    ipc_path: str, command, timeout: float = _RUNTIME_IPC_OPEN_TIMEOUT
-) -> tuple[bool, Any]:
+def _mpv_ipc_transact(ipc_path: str, command, timeout: float = _RUNTIME_IPC_OPEN_TIMEOUT) -> tuple[bool, Any]:
     """执行一次 JSON IPC 事务：发送命令并等待 mpv 应答。
 
     运行时路径默认短超时：socket 缺失（播放器已退出）时快速失败并自愈状态，
@@ -286,7 +294,7 @@ def _group_has_live_members(group_id: int) -> bool | None:
         try:
             # comm 可含空格与括号：定位最后一个 ')' 之后的字段。
             # ) 之后依次为 state(0) ppid(1) pgrp(2)。
-            rest = stat[stat.rindex(b")") + 2:].split()
+            rest = stat[stat.rindex(b")") + 2 :].split()
             if int(rest[2]) != group_id:
                 continue
             if rest[0] != b"Z":
@@ -389,7 +397,9 @@ def _start_process(cmd: list[str], fail_name: str, ipc_path: str = "") -> tuple[
         _CURRENT_PROC = process
         try:
             ownership = process_state.write_state(
-                PID_FILE, process.pid, kind=PROCESS_KIND,
+                PID_FILE,
+                process.pid,
+                kind=PROCESS_KIND,
                 extra={"ipc_path": ipc_path or "", "command": list(cmd)},
             )
             if isinstance(ownership, dict) and ownership.get("identity_unavailable"):
@@ -475,7 +485,9 @@ def _probe_executable(path: str | None, *args: str) -> tuple[bool, str]:
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or f"exit {result.returncode}").strip()
         return False, detail[-800:]
-    return True, (result.stdout or result.stderr).strip().splitlines()[0] if (result.stdout or result.stderr).strip() else "ok"
+    return True, (result.stdout or result.stderr).strip().splitlines()[0] if (
+        result.stdout or result.stderr
+    ).strip() else "ok"
 
 
 def _resolve_mpv() -> str | None:
@@ -518,11 +530,14 @@ def _wayland_layer_shell_session() -> bool:
     只影响启动尝试，不改变 capabilities.py 的能力声明（报告要求 3）。
     """
     tokens = " ".join(
-        filter(None, (
-            os.environ.get("XDG_CURRENT_DESKTOP", ""),
-            os.environ.get("XDG_SESSION_DESKTOP", ""),
-            os.environ.get("DESKTOP_SESSION", ""),
-        ))
+        filter(
+            None,
+            (
+                os.environ.get("XDG_CURRENT_DESKTOP", ""),
+                os.environ.get("XDG_SESSION_DESKTOP", ""),
+                os.environ.get("DESKTOP_SESSION", ""),
+            ),
+        )
     ).lower()
     if any(os.environ.get(name) for name in ("SWAYSOCK", "HYPRLAND_INSTANCE_SIGNATURE", "WAYFIRE_SOCKET")):
         return True
@@ -547,12 +562,18 @@ def _internal_libmpv_x11_command(
         player = [app_executable_path()]
     else:
         player = [sys.executable, entry_script_path()]
-    player.extend([
-        "--internal-libmpv-player", os.path.abspath(video_path),
-        "--wid", "WID",
-        "--ipc-path", ipc_path,
-        "--volume", str(max(0, min(100, int(volume)))),
-    ])
+    player.extend(
+        [
+            "--internal-libmpv-player",
+            os.path.abspath(video_path),
+            "--wid",
+            "WID",
+            "--ipc-path",
+            ipc_path,
+            "--volume",
+            str(max(0, min(100, int(volume)))),
+        ]
+    )
     if muted:
         player.append("--muted")
     return [xwinwrap, "-ov", "-fs", "--", *player]
@@ -572,11 +593,14 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
             # 与 _wayland_layer_shell_session 同源的三令牌判定（验收轮修正：
             # 仅 DESKTOP_SESSION=plasma 的会话此前会落到通用文案，错过实验开关指引）。
             desktop_tokens = " ".join(
-                filter(None, (
-                    os.environ.get("XDG_CURRENT_DESKTOP", ""),
-                    os.environ.get("XDG_SESSION_DESKTOP", ""),
-                    os.environ.get("DESKTOP_SESSION", ""),
-                ))
+                filter(
+                    None,
+                    (
+                        os.environ.get("XDG_CURRENT_DESKTOP", ""),
+                        os.environ.get("XDG_SESSION_DESKTOP", ""),
+                        os.environ.get("DESKTOP_SESSION", ""),
+                    ),
+                )
             ).lower()
             desktop = (
                 os.environ.get("XDG_CURRENT_DESKTOP")
@@ -610,20 +634,20 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
                 "loop-file=inf"
             )
             mpv_options = (
-                f"{safe_options} volume={clamped_volume} "
-                f"mute={'yes' if muted else 'no'} input-ipc-server={ipc_path}"
+                f"{safe_options} volume={clamped_volume} mute={'yes' if muted else 'no'} input-ipc-server={ipc_path}"
             )
             # Current mpvpaper documents ALL as the selector for every output.
             # Keep an opt-in override for users who want one named connector.
             output = os.environ.get("SHANGBACKGROUND_MPVPAPER_OUTPUT", "").strip() or "ALL"
             return _start_process([mpvpaper, "-o", mpv_options, output, abs_video], "mpvpaper", ipc_path=ipc_path)
-        return False, "当前 Wayland 合成器可尝试 mpvpaper layer-shell，但未找到可执行文件。请安装 mpvpaper，或切换到 X11 后使用 xwinwrap + mpv。"
+        return (
+            False,
+            "当前 Wayland 合成器可尝试 mpvpaper layer-shell，但未找到可执行文件。请安装 mpvpaper，或切换到 X11 后使用 xwinwrap + mpv。",
+        )
     xwinwrap = shutil.which("xwinwrap")
     if not xwinwrap:
         return False, "Linux X11 视频壁纸需要 xwinwrap。请使用发行版包管理器安装。"
-    internal_cmd = _internal_libmpv_x11_command(
-        xwinwrap, abs_video, ipc_path, muted, clamped_volume
-    )
+    internal_cmd = _internal_libmpv_x11_command(xwinwrap, abs_video, ipc_path, muted, clamped_volume)
     if internal_cmd is not None:
         ok, message = _start_process(internal_cmd, "xwinwrap/libmpv", ipc_path=ipc_path)
         if ok:
@@ -631,10 +655,7 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
     mpv = _resolve_mpv()
     if not mpv:
         detail = _LAST_MPV_PROBE_ERROR or "未找到"
-        return False, (
-            "Linux X11 视频壁纸需要内置 libmpv 或可运行的 mpv。"
-            f"当前外部 mpv 状态：{detail}。"
-        )
+        return False, (f"Linux X11 视频壁纸需要内置 libmpv 或可运行的 mpv。当前外部 mpv 状态：{detail}。")
     mpv_args = [
         mpv,
         "--wid=WID",
@@ -763,8 +784,12 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("video_path")
     parser.add_argument("--muted", action="store_true")
-    parser.add_argument("--volume", type=int, default=100,
-                        help="audio volume 0-100 (default: 100); preserved while muted so unmuting restores it immediately")
+    parser.add_argument(
+        "--volume",
+        type=int,
+        default=100,
+        help="audio volume 0-100 (default: 100); preserved while muted so unmuting restores it immediately",
+    )
     args = parser.parse_args()
     ok, message = start_video_wallpaper(args.video_path, muted=args.muted, volume=args.volume)
     if not ok:

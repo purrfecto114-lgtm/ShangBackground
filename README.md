@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.6.0-0ea5e9?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-v1.6.1-0ea5e9?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/PySide6-6.11-41cd52?style=flat-square&logo=qt&logoColor=white" alt="PySide6">
   <img src="https://img.shields.io/badge/License-GPLv3-blue?style=flat-square" alt="GPLv3">
@@ -84,6 +84,14 @@ python src/main.py
 ```
 
 当前发布源码包只保留应用源码和独立构建工具；内部测试树、审计脚本与阶段性验证产物不随包分发。
+
+### 首次启动发行版（未签名构建的打开方式）
+
+Release 产物目前未做开发者证书签名与公证（macOS 自 v1.6.1 起做 ad-hoc 签名，仅保证可启动）。首次运行被系统拦下属于预期行为，不是文件损坏：
+
+- **macOS**：双击后若提示"无法验证开发者"，打开「系统设置 → 隐私与安全性」，在页面底部对该应用点「仍要打开」（旧系统可右键图标 → 打开）。每次下载新版本需要重复一次。
+- **Windows**：SmartScreen 可能显示"Windows 已保护你的电脑"；点「更多信息」→「仍要运行」。该提示会随下载量累积自动消失。
+- 所有产物的完整性以 Release 页的 `SHA256SUMS.txt` 为准。
 
 ## 模块化构建
 

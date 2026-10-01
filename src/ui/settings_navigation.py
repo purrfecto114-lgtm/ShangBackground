@@ -1,4 +1,5 @@
 """Settings-page registration, tokenized search, activation, and focus behavior."""
+
 from __future__ import annotations
 
 import re
@@ -43,7 +44,9 @@ def _normalize_text(value: object) -> str:
 
 
 def _query_tokens(query: str) -> tuple[str, ...]:
-    tokens = tuple(token for token in (_normalize_text(part) for part in _QUERY_SPLIT_RE.split(str(query or ""))) if token)
+    tokens = tuple(
+        token for token in (_normalize_text(part) for part in _QUERY_SPLIT_RE.split(str(query or ""))) if token
+    )
     return tuple(dict.fromkeys(tokens))
 
 

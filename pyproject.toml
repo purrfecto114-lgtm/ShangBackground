@@ -14,7 +14,22 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
-select = ["E9", "F63", "F7", "F82", "F"]
+# v1.6.1: was E9+F only — a gate that cannot fail on real problems. This is
+# the maximal rule set that passes today with zero violations (verified
+# locally, ruff 0.16.x); W/G/B/ASYNC/ISC/PYI need ~12 small fixes, I/UP are
+# large autofix campaigns — queue them separately.
+select = [
+    "E9", "F",        # correctness backbone (previous gate)
+    "A",              # builtins shadowing
+    "T10",            # debugger remnants
+    "TID",            # banned imports
+    "YTT",            # sys.version pitfalls
+    "ICN",            # import conventions
+    "INT",            # gettext pitfalls
+    "LOG",            # logging pitfalls
+    "RSE",            # raised parentheses
+    "SLOT",           # __slots__ correctness
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]

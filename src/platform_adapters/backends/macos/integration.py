@@ -5,7 +5,6 @@ import subprocess
 from pathlib import Path
 
 
-
 def _run_args(args: list[str], timeout: int = 10) -> tuple[int, str, str]:
     """Run a command without a shell and return (returncode, stdout, stderr).
 
@@ -53,6 +52,7 @@ def run_osascript(script: str) -> str:
 def get_screen_size(root=None):
     try:
         from PySide6.QtWidgets import QApplication
+
         app = QApplication.instance()
         if app is not None:
             screen = app.primaryScreen()
@@ -124,8 +124,8 @@ def quote_applescript_text(value: str) -> str:
 
 def _nsurl_file_url(path: str):
     from Foundation import NSURL
-    return NSURL.fileURLWithPath_(path)
 
+    return NSURL.fileURLWithPath_(path)
 
 
 _MACOS_FIT_MODE = "填充"
@@ -135,6 +135,7 @@ def _macos_desktop_image_options(workspace, screen) -> dict:
     """Preserve existing options and apply the supported ShangBackground fit."""
     try:
         import AppKit
+
         options = dict(workspace.desktopImageOptionsForScreen_(screen) or {})
         mode = str(_MACOS_FIT_MODE or "填充")
         mapping = {
@@ -170,7 +171,9 @@ def _set_macos_wallpaper_appkit(path: str) -> tuple[bool, str]:
         errors: list[str] = []
         changed = 0
         for screen in screens:
-            result = workspace.setDesktopImageURL_forScreen_options_error_(url, screen, _macos_desktop_image_options(workspace, screen), None)
+            result = workspace.setDesktopImageURL_forScreen_options_error_(
+                url, screen, _macos_desktop_image_options(workspace, screen), None
+            )
             if isinstance(result, tuple):
                 ok = bool(result[0])
                 err = result[1] if len(result) > 1 else None
@@ -255,7 +258,6 @@ def get_current_wallpaper_platform() -> str:
         raise RuntimeError(f"无法读取当前 macOS 壁纸: AppKit: {detail} | osascript: {exc}") from exc
 
 
-
 def configure_fit_mode(fit_mode, winreg_module=None, log=None):
     """Store the fit mode applied through NSWorkspace on the next image set."""
     del winreg_module
@@ -293,6 +295,7 @@ def is_desktop_foreground() -> bool:
     if we can't tell).
     """
     import time as _time
+
     global _LAST_FOREGROUND_CACHE
     now = _time.monotonic()
     cached_val, cached_at = _LAST_FOREGROUND_CACHE
@@ -308,6 +311,7 @@ def _detect_desktop_foreground_uncached() -> bool:
     """Use NSWorkspace without triggering System Events Automation prompts."""
     try:
         from AppKit import NSWorkspace
+
         app = NSWorkspace.sharedWorkspace().frontmostApplication()
         bundle = str(app.bundleIdentifier() or "").strip().lower() if app is not None else ""
         return not bundle or bundle in {"com.apple.finder", "com.apple.dock"} or "shangbackground" in bundle

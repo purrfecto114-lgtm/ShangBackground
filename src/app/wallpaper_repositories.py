@@ -7,6 +7,7 @@ UI code no longer edits the shared configuration dictionary directly.
 The boundary is intentionally free of Qt and platform-adapter imports.  It can
 therefore be tested in isolation and reused by future application services.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
@@ -72,10 +73,7 @@ def normalize_wallpaper_paths(
     limit: int | None = None,
 ) -> list[str]:
     """Normalize, de-duplicate and optionally filter a stored path sequence."""
-    if (
-        isinstance(values, (str, bytes, os.PathLike, Mapping))
-        or not isinstance(values, Iterable)
-    ):
+    if isinstance(values, (str, bytes, os.PathLike, Mapping)) or not isinstance(values, Iterable):
         source: Iterable[object] = ()
     else:
         source = values
@@ -147,9 +145,7 @@ class _ConfigPathCollectionRepository:
         current = cls.normalize_items(values)
         if not normalized or not identity:
             return current
-        return cls.normalize_items(
-            [normalized, *[item for item in current if wallpaper_path_key(item) != identity]]
-        )
+        return cls.normalize_items([normalized, *[item for item in current if wallpaper_path_key(item) != identity]])
 
     def _items_from_config(
         self,
@@ -189,10 +185,7 @@ class _ConfigPathCollectionRepository:
             return False
         with self._lock:
             config = self._config
-            return any(
-                wallpaper_path_key(item) == identity
-                for item in self._items_from_config(config)
-            )
+            return any(wallpaper_path_key(item) == identity for item in self._items_from_config(config))
 
     def _replace_in_config(
         self,
@@ -255,9 +248,7 @@ class _ConfigPathCollectionRepository:
         try:
             succeeded = bool(self._persist())
         except Exception as exc:
-            raise CollectionPersistenceError(
-                f"无法保存 {self.config_key} 集合"
-            ) from exc
+            raise CollectionPersistenceError(f"无法保存 {self.config_key} 集合") from exc
         if not succeeded:
             raise CollectionPersistenceError(f"无法保存 {self.config_key} 集合")
 

@@ -1,4 +1,5 @@
 """Factory defaults kept outside the legacy runtime engine."""
+
 from __future__ import annotations
 
 from app.config import (

@@ -185,11 +185,7 @@ def get_original_image_paths(folder_path: str) -> list[str]:
 def get_probability_weights(folder_path: str) -> dict[str, float]:
     folder_abs = _folder_key(folder_path)
     folder_data = _folder_data(_load_config(), folder_abs)
-    return {
-        str(filename): _safe_weight(value)
-        for filename, value in folder_data.items()
-        if isinstance(filename, str)
-    }
+    return {str(filename): _safe_weight(value) for filename, value in folder_data.items() if isinstance(filename, str)}
 
 
 def _migrate_folders(config: dict) -> dict:
@@ -256,7 +252,11 @@ def weighted_choice(folder_path: str, current_path: str = "") -> str | None:
 
     current_abs = os.path.realpath(os.path.abspath(current_path)) if current_path else ""
     if current_abs and len(eligible) > 1:
-        filtered = [(path, weight) for path, weight in zip(eligible, weights) if os.path.realpath(os.path.abspath(path)) != current_abs]
+        filtered = [
+            (path, weight)
+            for path, weight in zip(eligible, weights)
+            if os.path.realpath(os.path.abspath(path)) != current_abs
+        ]
         if filtered:
             eligible, weights = map(list, zip(*filtered))
     return random.choices(eligible, weights=weights, k=1)[0]

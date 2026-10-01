@@ -33,12 +33,10 @@ def test_windows_mixin_does_not_reoverride_shared_hotkey_flow():
 
     tree = ast.parse(MAIN_WINDOW.read_text(encoding="utf-8"))
     windows_mixin = next(
-        node for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "_WindowsMainWindowMixin"
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "_WindowsMainWindowMixin"
     )
     method_names = {
-        node.name for node in windows_mixin.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        node.name for node in windows_mixin.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     stale_overrides = {
         "set_context_hotkey",

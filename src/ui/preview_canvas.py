@@ -8,6 +8,7 @@ from PySide6.QtCore import QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QImageReader, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import QFrame, QSizePolicy
 
+
 class PreviewCanvas(QFrame):
     """首页壁纸预览画布。
 
@@ -99,8 +100,11 @@ class PreviewCanvas(QFrame):
             painter.fillPath(image_path, inner_fill)
 
             if not self._pixmap.isNull():
-                scaled = (self._pixmap if self._pixmap.size().boundedTo(image_rect.size()) == self._pixmap.size()
-                          else self._pixmap.scaled(image_rect.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                scaled = (
+                    self._pixmap
+                    if self._pixmap.size().boundedTo(image_rect.size()) == self._pixmap.size()
+                    else self._pixmap.scaled(image_rect.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                )
                 x = image_rect.x() + (image_rect.width() - scaled.width()) // 2
                 y = image_rect.y() + (image_rect.height() - scaled.height()) // 2
                 painter.save()

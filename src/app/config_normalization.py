@@ -5,6 +5,7 @@ widgets coerce them.  This module establishes one Qt-free boundary so corrupt,
 old, or externally edited settings cannot crash the GUI or poison later saves.
 Unknown keys are preserved for forward compatibility.
 """
+
 from __future__ import annotations
 
 import re
@@ -115,7 +116,6 @@ def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError, OverflowError):
         return default
     return max(minimum, min(maximum, converted))
-
 
 
 def _html_frame_rate(value: Any, default: int = 30) -> int:
@@ -231,7 +231,14 @@ def normalize_runtime_config(
 
     # Every known key exists after normalization, but unknown keys survive.
     for key, fallback in base.items():
-        normalized.setdefault(key, fallback.copy() if isinstance(fallback, dict) else list(fallback) if isinstance(fallback, list) else fallback)
+        normalized.setdefault(
+            key,
+            fallback.copy()
+            if isinstance(fallback, dict)
+            else list(fallback)
+            if isinstance(fallback, list)
+            else fallback,
+        )
 
     for key in _TEXT_KEYS:
         normalized[key] = _text(normalized.get(key), str(base.get(key, "")))
@@ -244,11 +251,15 @@ def normalize_runtime_config(
     for key in _COLOR_KEYS:
         fallback = str(base.get(key, "#ffffff"))
         value = normalized.get(key)
-        normalized[key] = value.lower() if isinstance(value, str) and _COLOR_RE.fullmatch(value.strip()) else fallback.lower()
+        normalized[key] = (
+            value.lower() if isinstance(value, str) and _COLOR_RE.fullmatch(value.strip()) else fallback.lower()
+        )
 
     normalized["mode"] = normalize_mode_key(normalized.get("mode"), str(base["mode"]))
     normalized["fit_mode"] = normalize_style_key(normalized.get("fit_mode"), str(base["fit_mode"]))
-    normalized["html_frame_rate"] = _html_frame_rate(normalized.get("html_frame_rate"), int(base.get("html_frame_rate", 30)))
+    normalized["html_frame_rate"] = _html_frame_rate(
+        normalized.get("html_frame_rate"), int(base.get("html_frame_rate", 30))
+    )
     normalized["dpi_scale"] = _bounded_float(normalized.get("dpi_scale"), float(base["dpi_scale"]), 0.75, 2.0)
     tray_items = normalized.get("tray_menu_items")
     if _bool(normalized.get("ctx_global_settings"), False):

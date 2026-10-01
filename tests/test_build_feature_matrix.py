@@ -24,6 +24,7 @@ def _plan(features: frozenset[str]) -> BuildPlan:
         metadata={},
     )
     from pathlib import Path
+
     return BuildPlan(
         tool="pyinstaller",
         target="linux",

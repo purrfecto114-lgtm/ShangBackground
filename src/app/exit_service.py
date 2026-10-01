@@ -4,6 +4,7 @@ The service is intentionally Qt-free.  Presentation and entry-point code may
 call it from normal exit, closeEvent, aboutToQuit or signal handlers; only the
 first caller performs cleanup and every later caller receives the same report.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -120,15 +121,11 @@ class ExitService:
             restore_requested = bool(restore_wallpaper) and not bool(restarting)
             steps: list[ExitStepResult] = []
             steps.append(self._execute("cancel_operations", self._request_cancel))
-            steps.append(
-                self._execute("stop_slideshow", self._stop_slideshow, false_is_failure=True)
-            )
+            steps.append(self._execute("stop_slideshow", self._stop_slideshow, false_is_failure=True))
             # ``MediaService.stop_all`` returns False when nothing was running;
             # that is a successful no-op, not a cleanup failure.
             steps.append(self._execute("stop_media", self._stop_media, false_is_failure=False))
-            steps.append(
-                self._execute("stop_hotkeys", self._stop_hotkeys, false_is_failure=True)
-            )
+            steps.append(self._execute("stop_hotkeys", self._stop_hotkeys, false_is_failure=True))
 
             if not restore_requested:
                 detail = "restart" if restarting else "disabled"

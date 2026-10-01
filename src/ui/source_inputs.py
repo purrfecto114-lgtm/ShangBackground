@@ -1,4 +1,5 @@
 """Bindings that make editable source fields honest, validated and persistent."""
+
 from __future__ import annotations
 
 import functools

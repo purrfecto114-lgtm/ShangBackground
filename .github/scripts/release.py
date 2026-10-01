@@ -4,6 +4,7 @@
 This module intentionally uses only the Python standard library so the release
 workflow can validate metadata before installing application dependencies.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -135,9 +136,7 @@ def validate_metadata() -> ReleaseMetadata:
     )
     missing = [fragment for fragment in expected_fragments if fragment not in version_info]
     if missing:
-        raise ReleaseError(
-            "src/main_version_info.txt does not match APP_VERSION; missing: " + ", ".join(missing)
-        )
+        raise ReleaseError("src/main_version_info.txt does not match APP_VERSION; missing: " + ", ".join(missing))
 
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     badge = f"version-{metadata.tag}-"
@@ -215,8 +214,7 @@ def _is_packaging_artifact(relative: PurePosixPath) -> bool:
     Added in v1.6.1 as defense-in-depth with regression tests.
     """
     return (
-        any(part in _EXCLUDED_DIRECTORY_NAMES for part in relative.parts)
-        or relative.suffix in _EXCLUDED_FILE_SUFFIXES
+        any(part in _EXCLUDED_DIRECTORY_NAMES for part in relative.parts) or relative.suffix in _EXCLUDED_FILE_SUFFIXES
     )
 
 
@@ -283,9 +281,7 @@ def _expected_bundle_root(source: Path, target: str) -> Path:
     for candidate in candidates:
         if candidate.is_file():
             return source
-    raise ReleaseError(
-        f"Expected packaged executable is missing. Checked: {', '.join(str(c) for c in candidates)}"
-    )
+    raise ReleaseError(f"Expected packaged executable is missing. Checked: {', '.join(str(c) for c in candidates)}")
 
 
 def package_binary(source: Path, output_dir: Path, target: str, arch: str) -> Path:

@@ -5,6 +5,7 @@ changes that span a collection and adjacent configuration fields, such as
 recording history together with ``current_wallpaper`` or resetting the
 slideshow resume pointer.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, MutableMapping

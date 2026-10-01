@@ -6,6 +6,7 @@ thread.  Portal registration may display a compositor-provided consent dialog;
 ``start`` therefore reports that the portal session was created while binding
 continues asynchronously.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -73,11 +74,7 @@ class PortalGlobalShortcuts:
     def start(self, bindings: Mapping[str, str], dispatch: Callable[[str], None]) -> bool:
         """Create a portal session; shortcut consent/binding continues in-thread."""
         self.stop()
-        normalized = {
-            str(action): trigger
-            for action, value in bindings.items()
-            if (trigger := to_xdg_shortcut(value))
-        }
+        normalized = {str(action): trigger for action, value in bindings.items() if (trigger := to_xdg_shortcut(value))}
         if not normalized or not callable(dispatch):
             return False
         self._bindings = normalized
@@ -140,10 +137,12 @@ class PortalGlobalShortcuts:
                 raise RuntimeError(f"XDG GlobalShortcuts portal version is unsupported: {version}")
 
             create_token = _token("create")
-            request_path = await portal.call_create_session({
-                "handle_token": Variant("s", create_token),
-                "session_handle_token": Variant("s", _token("session")),
-            })
+            request_path = await portal.call_create_session(
+                {
+                    "handle_token": Variant("s", create_token),
+                    "session_handle_token": Variant("s", _token("session")),
+                }
+            )
             response, results = await self._wait_request(bus, str(request_path))
             if response != 0:
                 raise RuntimeError(f"GlobalShortcuts CreateSession rejected (response={response})")
@@ -174,13 +173,9 @@ class PortalGlobalShortcuts:
                 )
                 for action, trigger in self._bindings.items()
             ]
-            bind_task = asyncio.create_task(
-                self._bind(portal, bus, session_path, shortcuts, Variant)
-            )
+            bind_task = asyncio.create_task(self._bind(portal, bus, session_path, shortcuts, Variant))
             stop_task = asyncio.create_task(self._wait_until_stopped())
-            done, pending = await asyncio.wait(
-                {bind_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
-            )
+            done, pending = await asyncio.wait({bind_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
             if bind_task in done:
                 # v1.6.1 fix: BindShortcuts is what actually asks the user for
                 # authorization; a rejection raised here after start() had
@@ -251,9 +246,7 @@ class PortalGlobalShortcuts:
                 await request.call_close()
             except Exception:
                 pass
-            raise RuntimeError(
-                f"GlobalShortcuts portal request timed out after {self._request_timeout:g}s"
-            ) from exc
+            raise RuntimeError(f"GlobalShortcuts portal request timed out after {self._request_timeout:g}s") from exc
         finally:
             try:
                 request.off_response(on_response)

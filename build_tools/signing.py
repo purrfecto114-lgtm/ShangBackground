@@ -295,16 +295,29 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # Shared arguments
     def add_common(sp: argparse.ArgumentParser) -> None:
-        sp.add_argument("--input", "--target", dest="target", type=Path, default=None, help="Target executable to inspect or sign")
-        sp.add_argument("--certificate", type=str, default=None, help="Signing certificate (PFX) path – never reads secret content")
-        sp.add_argument("--timestamp-url", type=str, default=None, help=f"RFC3161 timestamp server (default: {DEFAULT_TIMESTAMP_URL})")
+        sp.add_argument(
+            "--input", "--target", dest="target", type=Path, default=None, help="Target executable to inspect or sign"
+        )
+        sp.add_argument(
+            "--certificate", type=str, default=None, help="Signing certificate (PFX) path – never reads secret content"
+        )
+        sp.add_argument(
+            "--timestamp-url",
+            type=str,
+            default=None,
+            help=f"RFC3161 timestamp server (default: {DEFAULT_TIMESTAMP_URL})",
+        )
         sp.add_argument("--signtool", type=str, default=None, help="Explicit signtool.exe path (overrides discovery)")
         sp.add_argument("--json", action="store_true", help="Emit JSON result")
 
-    check_p = subparsers.add_parser("check", help="Diagnose signing prerequisites without invoking signtool when prerequisites are missing")
+    check_p = subparsers.add_parser(
+        "check", help="Diagnose signing prerequisites without invoking signtool when prerequisites are missing"
+    )
     add_common(check_p)
 
-    sign_p = subparsers.add_parser("sign", help="Attempt to sign and verify (still reports unsigned when prerequisites are missing)")
+    sign_p = subparsers.add_parser(
+        "sign", help="Attempt to sign and verify (still reports unsigned when prerequisites are missing)"
+    )
     add_common(sign_p)
     sign_p.add_argument("--no-verify", action="store_true", help="Skip post-sign verification")
 

@@ -1,7 +1,13 @@
 version: 2
 updates:
   - package-ecosystem: pip
-    directory: /
+    # The pip requirements live in two subdirectories; pointing at the repo
+    # root (no pyproject [project] dependencies there) made every weekly
+    # pip update a silent no-op (audit finding: PySide6 sat 3 months with
+    # zero Dependabot PRs while the actions ecosystem kept updating).
+    directories:
+      - /requirements
+      - /build_tools/requirements
     schedule:
       interval: weekly
     groups:

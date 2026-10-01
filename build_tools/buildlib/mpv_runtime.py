@@ -1,4 +1,5 @@
 """Versioned MPV runtime manager used by the rewritten build plan."""
+
 from __future__ import annotations
 
 import argparse
@@ -645,10 +646,7 @@ def _extract_zip_safely(
 
 
 def _contains_mpv_executable(path: Path) -> bool:
-    return any(
-        item.is_file() and item.name.lower() == "mpv.exe"
-        for item in path.rglob("*")
-    )
+    return any(item.is_file() and item.name.lower() == "mpv.exe" for item in path.rglob("*"))
 
 
 def _expand_nested_windows_archives(extracted: Path, *, expanded_bytes: int) -> None:
@@ -662,11 +660,7 @@ def _expand_nested_windows_archives(extracted: Path, *, expanded_bytes: int) -> 
     if _contains_mpv_executable(extracted):
         return
     candidates = sorted(
-        (
-            item
-            for item in extracted.rglob("*.zip")
-            if item.is_file() and "mpv" in item.name.lower()
-        ),
+        (item for item in extracted.rglob("*.zip") if item.is_file() and "mpv" in item.name.lower()),
         key=lambda item: item.as_posix().lower(),
     )
     if not candidates:
@@ -902,9 +896,7 @@ def _runtime_id(release: Mapping[str, object], asset_name: str, channel: str) ->
 def _copy_runtime_payload(extracted: Path, destination: Path, target: str) -> None:
     if target != "windows":
         raise RuntimeError("Automatic payload reduction is implemented for Windows archives only")
-    exe_candidates = [
-        item for item in extracted.rglob("*") if item.is_file() and item.name.lower() == "mpv.exe"
-    ]
+    exe_candidates = [item for item in extracted.rglob("*") if item.is_file() and item.name.lower() == "mpv.exe"]
     if not exe_candidates:
         raise RuntimeError(
             "Downloaded Windows archive does not contain mpv.exe; refusing to create a libmpv-only v1.5.0 bundle"
@@ -1133,10 +1125,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         subparser.add_argument("--target", choices=TARGETS, default=current_host())
         subparser.add_argument("--arch", choices=("auto", *MPV_ARCHES), default="auto")
 
-    list_parser = subparsers.add_parser("list", help="List installed versioned runtimes.", formatter_class=BuildHelpFormatter)
+    list_parser = subparsers.add_parser(
+        "list", help="List installed versioned runtimes.", formatter_class=BuildHelpFormatter
+    )
     add_location(list_parser)
 
-    path_parser = subparsers.add_parser("path", help="Print the active runtime path.", formatter_class=BuildHelpFormatter)
+    path_parser = subparsers.add_parser(
+        "path", help="Print the active runtime path.", formatter_class=BuildHelpFormatter
+    )
     add_location(path_parser)
     path_parser.add_argument("--version", default="auto")
 
@@ -1156,15 +1152,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     download_parser.add_argument("--prune", type=int, default=2, metavar="COUNT")
 
-    verify_parser = subparsers.add_parser("verify", help="Verify installed runtime structure and CPU architecture.", formatter_class=BuildHelpFormatter)
+    verify_parser = subparsers.add_parser(
+        "verify", help="Verify installed runtime structure and CPU architecture.", formatter_class=BuildHelpFormatter
+    )
     add_location(verify_parser)
     verify_parser.add_argument("--version", default="auto")
 
-    activate_parser = subparsers.add_parser("activate", help="Select which installed version is bundled by default.", formatter_class=BuildHelpFormatter)
+    activate_parser = subparsers.add_parser(
+        "activate", help="Select which installed version is bundled by default.", formatter_class=BuildHelpFormatter
+    )
     add_location(activate_parser)
     activate_parser.add_argument("version")
 
-    prune_parser = subparsers.add_parser("prune", help="Remove old inactive runtime versions.", formatter_class=BuildHelpFormatter)
+    prune_parser = subparsers.add_parser(
+        "prune", help="Remove old inactive runtime versions.", formatter_class=BuildHelpFormatter
+    )
     add_location(prune_parser)
     prune_parser.add_argument("--keep", type=int, default=2)
     return parser.parse_args(argv)

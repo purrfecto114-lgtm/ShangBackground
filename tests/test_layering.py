@@ -16,6 +16,7 @@ v1.6.1 fixed three violations of this rule:
 These tests pin the rule so a regression fails CI instead of silently
 re-coupling shared code to one platform's backend.
 """
+
 from __future__ import annotations
 
 import ast
@@ -28,16 +29,6 @@ SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
 # bootstrap is the designated assembly layer: it is allowed (and expected)
 # to import platform backends behind its importer indirection.
 SHARED_LAYER_ALLOWLIST = {"bootstrap.py"}
-
-
-def _shared_layer_files() -> list[Path]:
-    files: list[Path] = []
-    for layer in ("core", "app"):
-        directory = SRC_ROOT / layer
-        if not directory.is_dir():
-            continue
-        files.extend(sorted(directory.glob("*.py")))
-    return files
 
 
 def _backend_imports(path: Path) -> list[str]:
@@ -57,6 +48,50 @@ def _backend_imports(path: Path) -> list[str]:
     return offenders
 
 
+def _shared_layer_files() -> list[Path]:
+    files: list[Path] = []
+    for layer in ("core", "app"):
+        directory = SRC_ROOT / layer
+        if not directory.is_dir():
+            continue
+        # rglob (not glob): the backends/ sub-trees are part of the shared
+        # layers and must stay under the same import discipline. The old
+        # non-recursive glob left ~21k lines (app/backends, core/backends)
+        # outside the guard (audit finding).
+        files.extend(sorted(directory.rglob("*.py")))
+    return files
+
+
+def _ui_imports(path: Path, *, module_level_only: bool) -> list[str]:
+    """Return ``ui.*`` module names imported by ``path`` (AST-based).
+
+    ``module_level_only``: the app layer may lazily build UI objects inside
+    functions (composition-root pattern, e.g. entry.py building the window);
+    only module-level imports create a hard package dependency.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    offenders: list[str] = []
+
+    def _check(nodes: list) -> None:
+        for node in nodes:
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "ui" or alias.name.startswith("ui."):
+                        offenders.append(alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if module == "ui" or module.startswith("ui."):
+                    offenders.append(module)
+
+    if module_level_only:
+        _check(tree.body)
+    else:
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                _check([node])
+    return offenders
+
+
 def test_shared_layers_do_not_import_platform_backends():
     """core/ and app/ (except bootstrap) must not import platform backends."""
     violations: list[str] = []
@@ -71,14 +106,44 @@ def test_shared_layers_do_not_import_platform_backends():
     )
 
 
+def _layer_of(path: Path) -> str:
+    """Return the top layer name ("core" / "app") for a file under src/."""
+    return path.relative_to(SRC_ROOT).parts[0]
+
+
+def test_core_layer_never_imports_ui():
+    """core/ is the deepest layer: it must not import ``ui.*`` at any level
+    (not even lazily) — UI is assembled above it, never below it."""
+    violations: list[str] = []
+    for path in _shared_layer_files():
+        if _layer_of(path) != "core":
+            continue
+        for module in _ui_imports(path, module_level_only=False):
+            violations.append(f"{path.relative_to(SRC_ROOT)} imports {module}")
+    assert not violations, "Layering violation — core/ must never depend on ui/:\n  " + "\n  ".join(violations)
+
+
+def test_app_layer_has_no_module_level_ui_imports():
+    """app/ may build UI objects lazily inside functions (composition root),
+    but a module-level ``import ui`` would make app ↔ ui a hard package
+    cycle, resurrecting the dependency knot the layering keeps apart."""
+    violations: list[str] = []
+    for path in _shared_layer_files():
+        if _layer_of(path) != "app":
+            continue
+        for module in _ui_imports(path, module_level_only=True):
+            violations.append(f"{path.relative_to(SRC_ROOT)} imports {module} at module level")
+    assert not violations, "Layering violation — app/ must keep ui imports inside functions:\n  " + "\n  ".join(
+        violations
+    )
+
+
 def test_every_backend_integration_exposes_prime_desktop_wallpaper_host():
     """All three platform integration backends must keep the public facade
     name so ``from platform_adapters.integration import
     prime_desktop_wallpaper_host`` resolves on every platform."""
     for platform_name in ("windows", "linux", "macos"):
-        backend = (
-            SRC_ROOT / "platform_adapters" / "backends" / platform_name / "integration.py"
-        )
+        backend = SRC_ROOT / "platform_adapters" / "backends" / platform_name / "integration.py"
         assert backend.is_file(), f"missing backend file: {backend}"
         functions = {
             node.name
@@ -86,8 +151,7 @@ def test_every_backend_integration_exposes_prime_desktop_wallpaper_host():
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
         assert "prime_desktop_wallpaper_host" in functions, (
-            f"{platform_name} integration lost the public facade entry "
-            "prime_desktop_wallpaper_host"
+            f"{platform_name} integration lost the public facade entry prime_desktop_wallpaper_host"
         )
 
 
@@ -142,21 +206,20 @@ def test_session_facade_does_not_import_app_config():
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                assert not alias.name.startswith("app."), (
-                    f"session facade must not import app.* (found {alias.name})"
-                )
+                assert not alias.name.startswith("app."), f"session facade must not import app.* (found {alias.name})"
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
-            assert not module.startswith("app."), (
-                f"session facade must not import app.* (found {module})"
-            )
+            assert not module.startswith("app."), f"session facade must not import app.* (found {module})"
 
 
-@pytest.mark.parametrize("offender_source", [
-    "from platform_adapters.backends.linux.session import is_wayland_session\n",
-    "import platform_adapters.backends.windows.integration\n",
-    "from platform_adapters.backends.macos.integration import anything\n",
-])
+@pytest.mark.parametrize(
+    "offender_source",
+    [
+        "from platform_adapters.backends.linux.session import is_wayland_session\n",
+        "import platform_adapters.backends.windows.integration\n",
+        "from platform_adapters.backends.macos.integration import anything\n",
+    ],
+)
 def test_backend_import_detector_catches_violations(tmp_path: Path, offender_source: str):
     """Sanity check for the detector itself: planted violations must be
     found (prevents a silently broken guard from false-passing)."""

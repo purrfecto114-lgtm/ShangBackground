@@ -71,9 +71,7 @@ def _choose(window) -> None:
 
 
 def _finish(window, ok: bool, message: str = "failed") -> None:
-    _SharedShangBackgroundWindow._on_core_finished(
-        cast(_SharedShangBackgroundWindow, window), ok, message, None
-    )
+    _SharedShangBackgroundWindow._on_core_finished(cast(_SharedShangBackgroundWindow, window), ok, message, None)
 
 
 def test_choose_video_from_image_mode_submits_video_transaction(monkeypatch, tmp_path):

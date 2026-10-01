@@ -48,9 +48,7 @@ def test_capabilities_accept_runtime_bus_without_address(monkeypatch: pytest.Mon
     assert result["video_wallpaper"]["state"] == "best_effort"
 
 
-def test_wayland_video_uses_current_mpvpaper_selector_and_safe_options(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+def test_wayland_video_uses_current_mpvpaper_selector_and_safe_options(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     media = tmp_path / "clip.mp4"
     media.write_bytes(b"test")
     captured: dict[str, object] = {}
@@ -82,9 +80,7 @@ def test_wayland_video_uses_current_mpvpaper_selector_and_safe_options(
     assert "volume=61" in cmd[2]
 
 
-def test_wayland_mpvpaper_muting_keeps_audio_track_and_saved_volume(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+def test_wayland_mpvpaper_muting_keeps_audio_track_and_saved_volume(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     media = tmp_path / "clip.mp4"
     media.write_bytes(b"test")
     captured: dict[str, object] = {}
@@ -180,8 +176,12 @@ def test_support_exports_font_helper_without_qt_runtime():
 
 def test_platform_backend_public_api_parity():
     required_video = {
-        "validate_video_path", "start_video_wallpaper", "stop_video_wallpaper",
-        "is_video_wallpaper_running", "set_video_volume", "set_video_paused",
+        "validate_video_path",
+        "start_video_wallpaper",
+        "stop_video_wallpaper",
+        "is_video_wallpaper_running",
+        "set_video_volume",
+        "set_video_paused",
     }
     for platform in ("windows", "linux", "macos"):
         module = importlib.import_module(f"platform_adapters.backends.{platform}.video")
@@ -210,7 +210,9 @@ def test_windows_player_is_terminated_when_state_persistence_fails(monkeypatch: 
     terminated: list[object] = []
     monkeypatch.setattr(windows_video, "_launch", lambda _cmd: process)
     monkeypatch.setattr(windows_video, "_wait_for_player_ready", lambda _proc, _ipc: True)
-    monkeypatch.setattr(windows_video, "_write_state", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")))
+    monkeypatch.setattr(
+        windows_video, "_write_state", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full"))
+    )
     monkeypatch.setattr(windows_video, "_terminate_failed_player", terminated.append)
     monkeypatch.setattr(windows_video.process_state, "remove_state", lambda _path: None)
 
@@ -353,7 +355,9 @@ def test_linux_video_terminates_child_when_state_persistence_fails(monkeypatch: 
     monkeypatch.setattr(
         linux_video,
         "_wait_for_ipc",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("ownership must be durable before readiness wait")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("ownership must be durable before readiness wait")
+        ),
     )
 
     ok, message = linux_video._start_process(["player"], "播放器", "/tmp/test.sock")

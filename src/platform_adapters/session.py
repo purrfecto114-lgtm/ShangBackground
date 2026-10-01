@@ -17,6 +17,7 @@ module.  It also intentionally avoids importing ``app.config`` so that
 ``app.config`` itself can import this facade at module scope without a
 circular import.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -79,6 +80,7 @@ else:  # pragma: no cover - exercised only on non-Linux hosts
     def linux_video_wallpaper_capability() -> dict:
         """非 Linux 主机：不适用（调用方在 Linux 分支才使用）。"""
         return {"state": "unavailable", "runtime_ready": False, "backend": "linux-only", "limitations": "linux-only"}
+
 
 __all__ = [
     "detect_session_type",

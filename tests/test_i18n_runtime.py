@@ -18,9 +18,7 @@ def reset_i18n(monkeypatch: pytest.MonkeyPatch, tmp_path):
 
 
 def test_runtime_language_switch_updates_t_and_emits_event(tmp_path):
-    (tmp_path / "en.json").write_text(
-        json.dumps({"设置": "Settings"}, ensure_ascii=False), encoding="utf-8"
-    )
+    (tmp_path / "en.json").write_text(json.dumps({"设置": "Settings"}, ensure_ascii=False), encoding="utf-8")
     events = []
     unsubscribe = i18n.subscribe_language_changes(events.append)
 

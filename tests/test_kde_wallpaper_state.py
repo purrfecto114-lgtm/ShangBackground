@@ -17,6 +17,7 @@ v1.6.2 批次选择了"明确降级范围"（kde_wallpaper_restore_scope + docto
 风格对齐 tests/test_kde_restore_scope.py：monkeypatch ``_run_plasma_script`` /
 ``_run_args`` / 环境，绝不触碰真实桌面。
 """
+
 from __future__ import annotations
 
 import sys
@@ -82,11 +83,7 @@ def test_kde_snapshot_preserves_plugin_and_config(monkeypatch: pytest.MonkeyPatc
 def test_capture_keeps_remote_image_raw(monkeypatch: pytest.MonkeyPatch):
     """远程 URL：image_uri 原样、image 留空（不伪造本地路径），
     plugin 为 org.kde.image 且 FillMode 有效时 config_captured 仍为 True。"""
-    out = (
-        "ID:7  SCREEN:0  PLUGIN:org.kde.image\n"
-        "IMAGE:https://example.com/wall.jpg\n"
-        "FILLMODE:1\n"
-    )
+    out = "ID:7  SCREEN:0  PLUGIN:org.kde.image\nIMAGE:https://example.com/wall.jpg\nFILLMODE:1\n"
     state = _capture(monkeypatch, kde=True, out=out)
     entry = state["containments"][0]
     assert entry["image"] == ""
@@ -97,11 +94,7 @@ def test_capture_keeps_remote_image_raw(monkeypatch: pytest.MonkeyPatch):
 def test_capture_accepts_bare_local_path(monkeypatch: pytest.MonkeyPatch):
     """Plasma 也可能存绝对路径形态：image/image_uri 都能承载本地路径，
     restore 对两态都能写。"""
-    out = (
-        "ID:8  SCREEN:0  PLUGIN:org.kde.image\n"
-        "IMAGE:/home/u/q.jpg\n"
-        "FILLMODE:0\n"
-    )
+    out = "ID:8  SCREEN:0  PLUGIN:org.kde.image\nIMAGE:/home/u/q.jpg\nFILLMODE:0\n"
     state = _capture(monkeypatch, kde=True, out=out)
     entry = state["containments"][0]
     assert entry["image"] == "/home/u/q.jpg"
@@ -124,11 +117,7 @@ def test_capture_image_plugin_without_fillmode_keeps_image(monkeypatch: pytest.M
     若把缺省 FillMode 视为"配置不完整"，恢复时只写插件名会丢掉 Image，
     比 schema=2 更差。诚实语义=缺省键保持缺省（fill_mode=None，恢复不写）。
     """
-    out = (
-        "ID:9  SCREEN:0  PLUGIN:org.kde.image\n"
-        "IMAGE:file:///home/u/r.jpg\n"
-        "FILLMODE:\n"
-    )
+    out = "ID:9  SCREEN:0  PLUGIN:org.kde.image\nIMAGE:file:///home/u/r.jpg\nFILLMODE:\n"
     state = _capture(monkeypatch, kde=True, out=out)
     entry = state["containments"][0]
     assert entry["fill_mode"] is None
@@ -223,7 +212,7 @@ def test_restore_writes_plugin_and_config(monkeypatch: pytest.MonkeyPatch):
     assert "wallpaperPlugin" in script
     assert 'writeConfig("Image"' in script
     assert 'writeConfig("FillMode"' in script
-    assert 'reloadConfig()' in script
+    assert "reloadConfig()" in script
     # 状态经 json.dumps 注入（防注入 + 可断言）：id 与插件名原样进入脚本。
     assert '"id": 12' in script
     assert '"org.kde.image"' in script
@@ -332,7 +321,11 @@ def _run_set_with_dbus_env(monkeypatch: pytest.MonkeyPatch, *, address: str, run
     _dbus_env(monkeypatch, address=address, runtime_dir=runtime_dir)
     calls: list[list[str]] = []
     monkeypatch.setattr(integration.shutil, "which", lambda name: "/usr/bin/qdbus6" if name == "qdbus6" else None)
-    monkeypatch.setattr(integration, "_run_args", lambda cmd, timeout=10: (calls.append(list(cmd)) or (0, "SHANGBACKGROUND_KDE_SET_DONE:1", "")))
+    monkeypatch.setattr(
+        integration,
+        "_run_args",
+        lambda cmd, timeout=10: calls.append(list(cmd)) or (0, "SHANGBACKGROUND_KDE_SET_DONE:1", ""),
+    )
     monkeypatch.setattr(integration, "_ensure_existing_file", lambda path: "/tmp/wp.png")
     monkeypatch.setattr(integration, "_file_uri", lambda path: f"file://{path}")
     monkeypatch.setattr(integration, "_verify_kde_wallpaper", lambda abs_path, timeout=0.5: (True, abs_path))
@@ -404,10 +397,18 @@ def test_module_wallpaper_backend_passes_state_through():
     module.get_current_wallpaper_platform = lambda: "/tmp/a.jpg"
     module.configure_fit_mode = lambda mode: None
     module.set_wallpaper_platform = lambda path: None
-    module.capture_wallpaper_state = lambda: {"schema": 3, "kind": "kde-plasma-containments", "containments": [{"plugin": "org.kde.image"}]}
+    module.capture_wallpaper_state = lambda: {
+        "schema": 3,
+        "kind": "kde-plasma-containments",
+        "containments": [{"plugin": "org.kde.image"}],
+    }
     module.restore_wallpaper_state = lambda state: (True, "恢复 1 个 containment 的壁纸插件状态")
     backend = ModuleWallpaperBackend(module)
-    assert backend.capture_state() == {"schema": 3, "kind": "kde-plasma-containments", "containments": [{"plugin": "org.kde.image"}]}
+    assert backend.capture_state() == {
+        "schema": 3,
+        "kind": "kde-plasma-containments",
+        "containments": [{"plugin": "org.kde.image"}],
+    }
     result = backend.restore_state({"schema": 3})
     assert result.ok is True
     assert "1 个 containment" in result.message
@@ -456,7 +457,9 @@ def test_callback_wallpaper_backend_normalizes_restore_results():
     assert result.ok is False
     assert "not supported" in result.message
     # 提供回调后满足可选协议（runtime_checkable 正向检查）。
-    backend = CallbackWallpaperBackend(capture_state=lambda: {"schema": 3}, restore_state=lambda state: (True, ""), **base)
+    backend = CallbackWallpaperBackend(
+        capture_state=lambda: {"schema": 3}, restore_state=lambda state: (True, ""), **base
+    )
     assert isinstance(backend, StatefulWallpaperBackend)
     assert backend.capture_state() == {"schema": 3}
 
@@ -477,11 +480,18 @@ def test_stateful_wallpaper_backend_protocol_contract():
     from app.ports import StatefulWallpaperBackend
 
     class Full:
-        def get_current(self): return ""
+        def get_current(self):
+            return ""
+
         def configure_fit_mode(self, mode): ...
         def set_wallpaper(self, path): ...
-        def capture_state(self): return {"schema": 3}
-        def restore_state(self, state): from app.ports import BackendResult; return BackendResult(True, "")
+        def capture_state(self):
+            return {"schema": 3}
+
+        def restore_state(self, state):
+            from app.ports import BackendResult
+
+            return BackendResult(True, "")
 
     assert isinstance(Full(), StatefulWallpaperBackend)
 
@@ -503,4 +513,6 @@ def test_engine_wires_state_callbacks_on_linux():
 
     source = (_Path(__file__).resolve().parents[1] / "src" / "core" / "engine.py").read_text(encoding="utf-8")
     assert "capture_state=(lambda: _capture_wallpaper_state()) if _capture_wallpaper_state else None," in source
-    assert "restore_state=(lambda state: _restore_wallpaper_state(state)) if _restore_wallpaper_state else None," in source
+    assert (
+        "restore_state=(lambda state: _restore_wallpaper_state(state)) if _restore_wallpaper_state else None," in source
+    )

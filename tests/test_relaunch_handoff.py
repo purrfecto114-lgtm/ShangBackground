@@ -83,9 +83,7 @@ def test_uac_cancellation_happens_before_exit_cleanup(tmp_path: Path):
     events: list[object] = []
     service = _service(tmp_path, events=events)
     service.is_windows_admin = lambda: False
-    service._shell_execute_runas = lambda _exe, args, _cwd: (
-        events.append(("runas", list(args))) or (False, "cancelled")
-    )
+    service._shell_execute_runas = lambda _exe, args, _cwd: events.append(("runas", list(args))) or (False, "cancelled")
 
     assert service.restart_as_admin() is False
     names = [item[0] if isinstance(item, tuple) else item for item in events]
@@ -114,8 +112,10 @@ def test_filtered_restart_args_drop_stale_handoff_parent(tmp_path: Path):
 
 def test_wait_for_relaunch_parent_ignores_pid_reuse_identity_mismatch():
     import os
+
     try:
         import psutil
+
         created = psutil.Process(os.getpid()).create_time() - 1000.0
     except ImportError:
         created = 0.0  # When psutil is unavailable, use a sentinel that triggers the mismatch path
@@ -125,6 +125,7 @@ def test_wait_for_relaunch_parent_ignores_pid_reuse_identity_mismatch():
         relaunch_wait_created_at=created,
     )
     assert _wait_for_relaunch_parent(args, timeout=0.1) is True
+
 
 def test_nonwindows_restart_uses_same_safe_argument_filter_and_base_workdir(tmp_path: Path):
     events: list[object] = []
@@ -175,4 +176,3 @@ def test_nonwindows_failed_spawn_keeps_live_instance_intact(tmp_path: Path):
     service._popen = fail_popen
     assert service.restart() is False
     assert events == ["capture", "persist", "launch-failed"]
-

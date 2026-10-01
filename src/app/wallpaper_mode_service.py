@@ -1,4 +1,5 @@
 """Wallpaper-mode switching coordinator."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
@@ -237,7 +238,6 @@ class WallpaperModeService:
                 )
             return True
 
-
     @staticmethod
     def _activation_result(raw: bool | ModeActivationResult) -> ModeActivationResult:
         if isinstance(raw, ModeActivationResult):
@@ -278,9 +278,7 @@ class WallpaperModeService:
                 # always True), so bool() here mis-reported failed rollbacks as
                 # "runtime restored". Normalize through _activation_result,
                 # exactly like the forward path in switch().
-                runtime_restored = self._activation_result(
-                    self._activate(previous_mode, config)
-                ).ok
+                runtime_restored = self._activation_result(self._activate(previous_mode, config)).ok
                 if not runtime_restored:
                     errors.append(f"旧模式重新激活返回失败({previous_mode})")
                     self._log(f"回滚壁纸模式运行状态失败({previous_mode}): 激活返回 False")

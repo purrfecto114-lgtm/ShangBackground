@@ -6,6 +6,7 @@
 2. 若已在 PySide6 GUI 中运行，可传入 QApplication，用 primaryScreen().geometry()。
 3. 检测失败时回退到 DEFAULT_RESOLUTION。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -55,13 +56,18 @@ def tuple_to_resolution(size: Tuple[int, int]) -> str:
 def detect_with_macos() -> Optional[Tuple[int, int]]:
     """Detect screen resolution on macOS via system_profiler."""
     import subprocess
+
     try:
         result = subprocess.run(
             ["system_profiler", "SPDisplaysDataType"],
-            capture_output=True, text=True,
-            encoding="utf-8", errors="surrogateescape", timeout=10,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
+            timeout=10,
         )
         import re
+
         match = re.search(r"Resolution:\s*(\d+)\s*x\s*(\d+)", result.stdout)
         if match:
             return _normalize(match.group(1), match.group(2))
@@ -74,6 +80,7 @@ def detect_with_pyside6(app=None) -> Optional[Tuple[int, int]]:
     try:
         if app is None:
             from PySide6.QtWidgets import QApplication
+
             app = QApplication.instance()
         if app is None:
             return None

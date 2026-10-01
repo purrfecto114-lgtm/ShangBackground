@@ -1,4 +1,5 @@
 """Runtime feasibility probing for Linux desktop sessions."""
+
 from __future__ import annotations
 
 import importlib.util
@@ -18,8 +19,6 @@ def _has(name: str) -> bool:
         return False
 
 
-
-
 def _libmpv_ready() -> bool:
     try:
         from app.libmpv_runtime import runtime_available
@@ -28,8 +27,14 @@ def _libmpv_ready() -> bool:
     except Exception:
         return False
 
+
 def _tokens(env: dict[str, str]) -> str:
-    return " ".join(filter(None, (env.get("XDG_CURRENT_DESKTOP", ""), env.get("XDG_SESSION_DESKTOP", ""), env.get("DESKTOP_SESSION", "")))).lower()
+    return " ".join(
+        filter(
+            None,
+            (env.get("XDG_CURRENT_DESKTOP", ""), env.get("XDG_SESSION_DESKTOP", ""), env.get("DESKTOP_SESSION", "")),
+        )
+    ).lower()
 
 
 def _layer_shell_session(env: dict[str, str]) -> bool:
@@ -51,7 +56,9 @@ def _kde_session(env: dict[str, str]) -> bool:
     return "kde" in tokens or "plasma" in tokens
 
 
-def probe_capabilities(env: dict[str, str] | None = None, which: Callable[[str], str | None] = shutil.which) -> dict[str, dict[str, object]]:
+def probe_capabilities(
+    env: dict[str, str] | None = None, which: Callable[[str], str | None] = shutil.which
+) -> dict[str, dict[str, object]]:
     env = dict(os.environ if env is None else env)
     session = detect_session_type(env)
     desktop = _tokens(env) or "unknown"
@@ -62,7 +69,9 @@ def probe_capabilities(env: dict[str, str] | None = None, which: Callable[[str],
     )
 
     html_runtime = select_html_runtime()
-    html_dependencies_ready = html_runtime.name != "disabled" and not missing_runtime_modules(html_runtime, platform="linux")
+    html_dependencies_ready = html_runtime.name != "disabled" and not missing_runtime_modules(
+        html_runtime, platform="linux"
+    )
     pynput = _has("pynput")
 
     static_backend = ""
@@ -88,7 +97,9 @@ def probe_capabilities(env: dict[str, str] | None = None, which: Callable[[str],
         wlroots = _layer_shell_session(env)
         kde = _kde_session(env)
         mpvpaper = bool(which("mpvpaper"))
-        video_limitations = "X11 uses third-party embedding; Wayland requires a compositor-specific desktop-layer protocol."
+        video_limitations = (
+            "X11 uses third-party embedding; Wayland requires a compositor-specific desktop-layer protocol."
+        )
         if wlroots:
             # mpvpaper 官方支持的平台（sway/hyprland/wayfire/river 等）。
             video_ready = mpvpaper
@@ -127,7 +138,9 @@ def probe_capabilities(env: dict[str, str] | None = None, which: Callable[[str],
         external = bool(which("mpv"))
         video_ready = xwinwrap and bool(embedded or external)
         video_state = "best_effort"
-        video_limitations = "X11 uses third-party embedding; Wayland requires a compositor-specific desktop-layer protocol."
+        video_limitations = (
+            "X11 uses third-party embedding; Wayland requires a compositor-specific desktop-layer protocol."
+        )
         if embedded:
             video_backend = "xwinwrap + direct libmpv"
         elif external:
@@ -142,7 +155,9 @@ def probe_capabilities(env: dict[str, str] | None = None, which: Callable[[str],
         video_ready = False
         video_state = "unavailable"
         video_backend = "no graphical session detected"
-        video_limitations = "X11 uses third-party embedding; Wayland requires a compositor-specific desktop-layer protocol."
+        video_limitations = (
+            "X11 uses third-party embedding; Wayland requires a compositor-specific desktop-layer protocol."
+        )
         html_state = "unavailable"
         html_ready = False
         hotkey_state = "unavailable"
@@ -173,13 +188,60 @@ def probe_capabilities(env: dict[str, str] | None = None, which: Callable[[str],
         multi_backend = static_backend
         multi_limitations = "Behavior and per-monitor selection vary by desktop environment and version."
     return {
-        "static_wallpaper": {"state": "supported" if static_ready else "best_effort", "runtime_ready": static_ready, "backend": static_backend, "limitations": f"Desktop/session detected: {desktop}/{session}; support is desktop-environment specific."},
-        "video_wallpaper": {"state": video_state, "runtime_ready": video_ready, "backend": video_backend, "limitations": video_limitations},
-        "html_wallpaper": {"state": html_state, "runtime_ready": html_ready, "backend": runtime_backend_label(html_runtime, "linux") if session == "x11" else "none", "limitations": "The current implementation is X11-only and is not a Wayland layer-shell client."},
-        "global_hotkeys": {"state": hotkey_state, "runtime_ready": hotkey_ready, "backend": "pynput/X11 + active-window guard" if session == "x11" else "XDG GlobalShortcuts portal v1/v2 via dbus-next", "limitations": "Single-modifier X11 bindings are guarded outside desktop windows; Wayland registration requires user consent and a distribution-provided portal backend."},
-        "mouse_through": {"state": "best_effort" if session == "x11" else "unsupported", "runtime_ready": session == "x11", "backend": "X11 Shape input region" if session == "x11" else "none", "limitations": "The X11 HTML window supports input-region toggling; the current Wayland backend cannot request desktop-layer input transparency."},
-        "tray": {"state": "best_effort", "runtime_ready": True, "backend": "QSystemTrayIcon / desktop status notifier", "limitations": "Availability depends on the desktop shell and tray extension."},
-        "autostart": {"state": "supported", "runtime_ready": bool(autostart_dir.parent.exists()), "backend": "XDG ~/.config/autostart desktop entry", "limitations": "Starts after login in desktop environments implementing the XDG autostart specification."},
-        "single_instance": {"state": "supported", "runtime_ready": True, "backend": "per-user file lock + authenticated QLocalServer IPC", "limitations": "Network/home filesystems with unusual locking semantics require validation."},
-        "multi_monitor_static": {"state": multi_state, "runtime_ready": multi_ready, "backend": multi_backend, "limitations": multi_limitations},
+        "static_wallpaper": {
+            "state": "supported" if static_ready else "best_effort",
+            "runtime_ready": static_ready,
+            "backend": static_backend,
+            "limitations": f"Desktop/session detected: {desktop}/{session}; support is desktop-environment specific.",
+        },
+        "video_wallpaper": {
+            "state": video_state,
+            "runtime_ready": video_ready,
+            "backend": video_backend,
+            "limitations": video_limitations,
+        },
+        "html_wallpaper": {
+            "state": html_state,
+            "runtime_ready": html_ready,
+            "backend": runtime_backend_label(html_runtime, "linux") if session == "x11" else "none",
+            "limitations": "The current implementation is X11-only and is not a Wayland layer-shell client.",
+        },
+        "global_hotkeys": {
+            "state": hotkey_state,
+            "runtime_ready": hotkey_ready,
+            "backend": "pynput/X11 + active-window guard"
+            if session == "x11"
+            else "XDG GlobalShortcuts portal v1/v2 via dbus-next",
+            "limitations": "Single-modifier X11 bindings are guarded outside desktop windows; Wayland registration requires user consent and a distribution-provided portal backend.",
+        },
+        "mouse_through": {
+            "state": "best_effort" if session == "x11" else "unsupported",
+            "runtime_ready": session == "x11",
+            "backend": "X11 Shape input region" if session == "x11" else "none",
+            "limitations": "The X11 HTML window supports input-region toggling; the current Wayland backend cannot request desktop-layer input transparency.",
+        },
+        "tray": {
+            "state": "best_effort",
+            "runtime_ready": True,
+            "backend": "QSystemTrayIcon / desktop status notifier",
+            "limitations": "Availability depends on the desktop shell and tray extension.",
+        },
+        "autostart": {
+            "state": "supported",
+            "runtime_ready": bool(autostart_dir.parent.exists()),
+            "backend": "XDG ~/.config/autostart desktop entry",
+            "limitations": "Starts after login in desktop environments implementing the XDG autostart specification.",
+        },
+        "single_instance": {
+            "state": "supported",
+            "runtime_ready": True,
+            "backend": "per-user file lock + authenticated QLocalServer IPC",
+            "limitations": "Network/home filesystems with unusual locking semantics require validation.",
+        },
+        "multi_monitor_static": {
+            "state": multi_state,
+            "runtime_ready": multi_ready,
+            "backend": multi_backend,
+            "limitations": multi_limitations,
+        },
     }

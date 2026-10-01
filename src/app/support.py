@@ -14,6 +14,7 @@ from core import local_ipc
 from app.i18n import t, init_i18n, get_language
 from app.config import APP_VERSION as CONFIG_APP_VERSION
 from app.paths import TRANSLATIONS_DIR, font_directories, image_path
+
 # Load configured UI language before any translated constants/widgets are created.
 init_i18n(core.config)
 
@@ -30,15 +31,15 @@ def _open_path_in_linux_file_manager(path: str) -> tuple[bool, str]:
     """Open or reveal a path using the host Linux file manager."""
     target = os.path.abspath(os.path.expanduser(str(path or "")))
     if not target:
-        return False, "路径为空"
+        return False, t("路径为空")
     folder = target if os.path.isdir(target) else os.path.dirname(target)
-    last_error = "未找到可用的文件管理器"
+    last_error = t("未找到可用的文件管理器")
     if os.path.isfile(target) and shutil.which("dolphin"):
         try:
             subprocess.Popen(["dolphin", "--select", target])
             return True, ""
         except Exception as exc:
-            last_error = f"dolphin --select 失败: {exc}"
+            last_error = f"{t('打开文件管理器失败：')}dolphin --select: {exc}"
     if folder and os.path.isdir(folder):
         for opener in (("xdg-open", folder), ("gio", "open", folder)):
             if shutil.which(opener[0]):
@@ -46,7 +47,7 @@ def _open_path_in_linux_file_manager(path: str) -> tuple[bool, str]:
                     subprocess.Popen(list(opener))
                     return True, ""
                 except Exception as exc:
-                    last_error = f"{' '.join(opener)} 失败: {exc}"
+                    last_error = f"{t('打开文件管理器失败：')}{' '.join(opener)}: {exc}"
     return False, last_error
 
 
@@ -56,29 +57,32 @@ def _set_windows_app_identity() -> None:
         return
     try:
         import ctypes
+
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
     except Exception:
         pass
     try:
         import ctypes
+
         ctypes.windll.kernel32.SetConsoleTitleW(APP_DISPLAY_NAME)
     except Exception:
         pass
 
 
-
 def _is_action_launch(args: argparse.Namespace) -> bool:
-    return any([
-        getattr(args, "previous", False),
-        getattr(args, "next", False),
-        getattr(args, "random", False),
-        getattr(args, "show", False),
-        getattr(args, "settings", False),
-        bool(getattr(args, "set_wallpaper", None)),
-        getattr(args, "jump_to_wallpaper", False),
-        getattr(args, "from_context_menu", False),
-        getattr(args, "quit", False),
-    ])
+    return any(
+        [
+            getattr(args, "previous", False),
+            getattr(args, "next", False),
+            getattr(args, "random", False),
+            getattr(args, "show", False),
+            getattr(args, "settings", False),
+            bool(getattr(args, "set_wallpaper", None)),
+            getattr(args, "jump_to_wallpaper", False),
+            getattr(args, "from_context_menu", False),
+            getattr(args, "quit", False),
+        ]
+    )
 
 
 def _parse_early_args() -> argparse.Namespace:
@@ -138,6 +142,7 @@ def _wait_for_relaunch_parent(args: argparse.Namespace, timeout: float = 30.0) -
 
     # Best-effort fallback for unexpected psutil errors only (not ImportError).
     import time
+
     deadline = time.monotonic() + max(0.1, float(timeout))
     while time.monotonic() < deadline:
         try:
@@ -177,6 +182,7 @@ def _open_sidebar_standalone() -> None:
 
     if not folder or not os.path.isdir(folder):
         from PySide6.QtWidgets import QMessageBox
+
         QMessageBox.information(None, t("提示"), t("请先在软件中设置壁纸文件夹"))
         return
 
@@ -193,7 +199,10 @@ def _open_sidebar_standalone() -> None:
 
         sidebar_log = core.config.get("log_file_path") if core.config.get("log_enabled", False) else None
         sidebar = WallpaperSidebar(
-            None, folder, current, sidebar_log,
+            None,
+            folder,
+            current,
+            sidebar_log,
             show_message=lambda t, m: None,
             switch_wallpaper=_switch,
         )
@@ -204,6 +213,7 @@ def _open_sidebar_standalone() -> None:
     except Exception as exc:
         core.log(f"打开侧边栏失败: {exc}")
         import traceback
+
         core.log(traceback.format_exc())
 
 
@@ -407,6 +417,7 @@ def _activate_existing_window() -> bool:
         pass
     try:
         import ctypes
+
         user32 = ctypes.windll.user32
         hwnd = user32.FindWindowW(core.WND_CLASS_NAME, None)
         if not hwnd:
@@ -444,6 +455,7 @@ PYSIDE_IMPORT_ERROR = None
 try:
     from PySide6.QtCore import QTranslator, QLibraryInfo, QLocale
     from PySide6.QtGui import QFontDatabase
+
     PYSIDE_AVAILABLE = True
 except Exception as exc:  # pragma: no cover - 运行环境缺 PySide6 时回退
     PYSIDE_AVAILABLE = False
@@ -467,9 +479,11 @@ def _install_qt_chinese_translator(app) -> None:
             paths.append(QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath))
         except Exception:
             pass
-        paths.extend([
-            os.fspath(TRANSLATIONS_DIR),
-        ])
+        paths.extend(
+            [
+                os.fspath(TRANSLATIONS_DIR),
+            ]
+        )
         for base_name in ("qtbase_zh_CN", "qt_zh_CN"):
             for path in paths:
                 if not path:
@@ -520,6 +534,7 @@ def apply_application_font(app) -> str:
         return ""
     font_weight_str = str(core.config.get("font_weight", "normal")).lower()
     from PySide6.QtGui import QFont
+
     weight_map = {
         "normal": QFont.Weight.Normal,
         "medium": QFont.Weight.Medium,
@@ -556,9 +571,15 @@ def apply_application_font(app) -> str:
             core.log(f"字体加载失败: {font_file.name}: {exc}")
 
     fallback = [
-        core.config.get("font_family", ""), "Microsoft YaHei UI",
-        "Microsoft YaHei", "SimHei", "Noto Sans CJK SC",
-        "Source Han Sans SC", "PingFang SC", "Segoe UI", "Arial",
+        core.config.get("font_family", ""),
+        "Microsoft YaHei UI",
+        "Microsoft YaHei",
+        "SimHei",
+        "Noto Sans CJK SC",
+        "Source Han Sans SC",
+        "PingFang SC",
+        "Segoe UI",
+        "Arial",
     ]
     available = set(QFontDatabase.families())
     for family in fallback:

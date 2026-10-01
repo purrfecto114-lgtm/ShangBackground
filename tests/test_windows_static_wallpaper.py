@@ -208,7 +208,6 @@ def test_static_apply_has_deterministic_transition_and_fallback_order(
     assert calls == expected
 
 
-
 def test_static_apply_never_touches_workerw_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     image = tmp_path / "wallpaper.jpg"
     image.write_bytes(b"image")
@@ -238,6 +237,7 @@ def test_com_activation_allows_inproc_or_local_shell_server(monkeypatch: pytest.
         assert wallpaper is not None
 
     assert contexts == [integration._CLSCTX_SERVER]
+
 
 def test_position_cache_is_invalidated_after_explorer_restart(monkeypatch: pytest.MonkeyPatch):
     handles = iter((101, 202))

@@ -6,6 +6,7 @@
 2. 若已在 PySide6 GUI 中运行，可传入 QApplication，用 primaryScreen().geometry()。
 3. 检测失败时回退到 DEFAULT_RESOLUTION。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -55,6 +56,7 @@ def tuple_to_resolution(size: Tuple[int, int]) -> str:
 def detect_with_windows_api() -> Optional[Tuple[int, int]]:
     try:
         import ctypes
+
         user32 = ctypes.windll.user32
         try:
             ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -72,6 +74,7 @@ def detect_with_pyside6(app=None) -> Optional[Tuple[int, int]]:
     try:
         if app is None:
             from PySide6.QtWidgets import QApplication
+
             app = QApplication.instance()
         if app is None:
             return None

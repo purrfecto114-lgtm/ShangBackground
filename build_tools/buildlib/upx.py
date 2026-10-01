@@ -40,6 +40,7 @@ its default ``--best --lzma`` flags. v1.4.2 proved this configuration
 works well in practice; the theoretical LZMA decompression overhead
 was not a real-world bottleneck.
 """
+
 from __future__ import annotations
 
 import os
@@ -175,9 +176,7 @@ def resolve_upx_for_build(target: str, *, enabled: bool) -> str | None:
                 "Install UPX via apt:  sudo apt-get install -y upx\n"
                 "or set SHANGBACKGROUND_UPX_BINARY to the absolute path of upx."
             )
-        raise RuntimeError(
-            f"UPX was requested for the {target} build but no upx binary was found.\n{hint}"
-        )
+        raise RuntimeError(f"UPX was requested for the {target} build but no upx binary was found.\n{hint}")
     if not upx_meets_minimum(binary):
         actual = upx_version(binary)
         raise RuntimeError(

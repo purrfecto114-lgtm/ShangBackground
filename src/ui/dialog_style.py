@@ -22,6 +22,7 @@ body notes.  Previously the codebase used five different title sizes
 weight tokens (``bold`` vs ``700``).  They are now funnelled through
 :func:`dialog_title_style` and :func:`dialog_note_style`.
 """
+
 from __future__ import annotations
 
 from typing import Optional
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 try:  # ``t`` lives in app.i18n and is intentionally optional at import time.
     from app.i18n import t as _t
 except Exception:  # pragma: no cover - defensive import for early-boot paths
+
     def _t(key: str, default: Optional[str] = None) -> str:
         return default if default is not None else key
 
@@ -112,6 +114,7 @@ def apply_dialog_hero_title(widget, extra: str = "") -> None:
 # Severity mapping
 # ---------------------------------------------------------------------------
 
+
 def _icon_for_level(level: str) -> QMessageBox.Icon:
     level_name = (level or "info").lower()
     if level_name in {"warning", "warn"}:
@@ -126,6 +129,7 @@ def _icon_for_level(level: str) -> QMessageBox.Icon:
 # ---------------------------------------------------------------------------
 # Public helpers
 # ---------------------------------------------------------------------------
+
 
 def show_message(
     parent: Optional[QWidget],
@@ -249,6 +253,7 @@ def show_non_modal_warning(
                     _tracker.remove(_dlg)
                 except Exception:
                     pass
+
             dlg.destroyed.connect(_forget)
         dlg.show()
         return dlg

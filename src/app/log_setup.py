@@ -39,6 +39,7 @@ on every platform, which is `%LOCALAPPDATA%/ShangBackground/logs` on Windows,
 `~/.config/shangbackground/logs` on Linux, and
 `~/Library/Application Support/ShangBackground/logs` on macOS.
 """
+
 from __future__ import annotations
 
 import collections
@@ -52,6 +53,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+
 # Defer the import to avoid circular imports at module load time.
 def _resolve_log_dir(explicit: Optional[str] = None) -> Path:
     if explicit:
@@ -60,6 +62,7 @@ def _resolve_log_dir(explicit: Optional[str] = None) -> Path:
         return p
     try:
         from app.paths import user_data_dir  # type: ignore
+
         base = Path(user_data_dir("ShangBackground"))
     except Exception:
         # Last-resort fallback
@@ -120,9 +123,7 @@ class _RingBufferHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:  # noqa: A003
         try:
             entry = {
-                "timestamp": time.strftime(
-                    _DATE_FORMAT, time.localtime(record.created)
-                ),
+                "timestamp": time.strftime(_DATE_FORMAT, time.localtime(record.created)),
                 "epoch": float(record.created),
                 "level": record.levelname,
                 "level_no": int(record.levelno),
@@ -132,9 +133,8 @@ class _RingBufferHandler(logging.Handler):
             # Include exception info if present, so the GUI can show tracebacks.
             if record.exc_info:
                 import traceback
-                entry["traceback"] = "".join(
-                    traceback.format_exception(*record.exc_info)
-                )
+
+                entry["traceback"] = "".join(traceback.format_exception(*record.exc_info))
             with _RING_LOCK:
                 _RING_BUFFER.append(entry)
         except Exception:
@@ -172,9 +172,7 @@ def get_recent_logs(
         if level_no and int(entry.get("level_no", 0)) < level_no:
             continue
         if search_lower:
-            haystack = (
-                str(entry.get("message", "")) + " " + str(entry.get("logger", ""))
-            ).lower()
+            haystack = (str(entry.get("message", "")) + " " + str(entry.get("logger", ""))).lower()
             if search_lower not in haystack:
                 continue
         out.append(entry)
@@ -191,11 +189,7 @@ def purge_log_files() -> tuple[int, int]:
     """
     global _FILE_HANDLER, _HTML_HANDLER, _ERROR_HANDLER, _FILES_ENABLED
 
-    handlers = tuple(
-        handler
-        for handler in (_FILE_HANDLER, _HTML_HANDLER, _ERROR_HANDLER)
-        if handler is not None
-    )
+    handlers = tuple(handler for handler in (_FILE_HANDLER, _HTML_HANDLER, _ERROR_HANDLER) if handler is not None)
     root = logging.getLogger()
     for handler in handlers:
         try:
@@ -365,9 +359,9 @@ class _SafeTimedRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
         super().handleError(record)
 
 
-def _build_file_handlers(log_path: Path, formatter: logging.Formatter, numeric_level: int) -> tuple[
-    Optional[logging.Handler], Optional[logging.Handler], Optional[logging.Handler]
-]:
+def _build_file_handlers(
+    log_path: Path, formatter: logging.Formatter, numeric_level: int
+) -> tuple[Optional[logging.Handler], Optional[logging.Handler], Optional[logging.Handler]]:
     """Construct the three file handlers (main / html / error) without attaching
     them to the root logger.  Returns ``(file_h, html_h, error_h)``; any handler
     that fails to construct is returned as None.
@@ -402,12 +396,10 @@ def _build_file_handlers(log_path: Path, formatter: logging.Formatter, numeric_l
                 if getattr(record, "channel", "") == "html_wallpaper":
                     return False
                 name = record.name or ""
-                if (
-                    name.startswith("html_wallpaper")
-                    or name.startswith("platform_adapters.html_wallpaper")
-                        ):
+                if name.startswith("html_wallpaper") or name.startswith("platform_adapters.html_wallpaper"):
                     return False
                 return True
+
         fh.addFilter(_NotHtmlFilter())
         file_h = fh
     except Exception as exc:
@@ -483,6 +475,7 @@ def configure_logging(
         if console is None:
             try:
                 from app.paths import is_packaged_runtime  # type: ignore
+
                 console = not is_packaged_runtime()
             except Exception:
                 console = not bool(getattr(sys, "frozen", False))
@@ -552,7 +545,10 @@ def configure_logging(
             startup_logger.info("=" * 60)
             startup_logger.info(
                 "ShangBackground starting — log_dir=%s, level=%s, console=%s, files_enabled=%s",
-                log_path, level, console, files_enabled,
+                log_path,
+                level,
+                console,
+                files_enabled,
             )
             startup_logger.info("Python %s on %s", sys.version.split()[0], sys.platform)
         except Exception:

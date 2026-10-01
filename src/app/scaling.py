@@ -4,6 +4,7 @@
 Qt 的进程级 DPI 缩放环境变量需要在 QApplication 创建之前设置，
 因此这里保持为纯 Python 小模块，供 main.py 在最早阶段调用。
 """
+
 from __future__ import annotations
 
 import os

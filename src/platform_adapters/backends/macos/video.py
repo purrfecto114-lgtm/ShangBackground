@@ -54,6 +54,7 @@ def _mpv_ipc_path() -> str:
     stem = f"shangbg-avplayer-{secrets.token_hex(8)}.sock"
     return os.path.join(base, stem)
 
+
 def validate_video_path(path: str | None) -> bool:
     return bool(path and os.path.isfile(path) and path.lower().endswith(VIDEO_EXTENSIONS))
 
@@ -135,8 +136,9 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
         # Fail explicitly instead of reporting a normal borderless window as
         # success.
         return False, (
-            "缺少 macOS 原生视频壁纸依赖：" + ", ".join(missing) +
-            "。请安装 requirements/macos.txt 中的 PyObjC/Cocoa/Quartz/AVFoundation 依赖。"
+            "缺少 macOS 原生视频壁纸依赖："
+            + ", ".join(missing)
+            + "。请安装 requirements/macos.txt 中的 PyObjC/Cocoa/Quartz/AVFoundation 依赖。"
         )
     cmd = [sys.executable]
     if not getattr(sys, "frozen", False):
@@ -157,7 +159,9 @@ def start_video_wallpaper(video_path: str, muted: bool = True, volume: int = 100
         process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         _CURRENT_PROC = process
         ownership = process_state.write_state(
-            PID_FILE, process.pid, kind=PROCESS_KIND,
+            PID_FILE,
+            process.pid,
+            kind=PROCESS_KIND,
             extra={"ipc_path": ipc_path or "", "command": list(cmd)},
         )
         if isinstance(ownership, dict) and ownership.get("identity_unavailable"):
@@ -255,6 +259,7 @@ def run_player(video_path: str, muted: bool = True, volume: int = 100, volume_ip
         NSWindowCollectionBehaviorStationary,
     )
     from Foundation import NSObject, NSNotificationCenter, NSURL
+
     try:
         import CoreMedia
     except Exception:
@@ -465,9 +470,8 @@ def run_player(video_path: str, muted: bool = True, volume: int = 100, volume_ip
     # 主线程 NSTimer 每 100ms 检查 pending_volume 并应用到所有 AVPlayer。
     # 足以让用户感觉“实时”，又不会过度占用主线程。
     from Foundation import NSTimer
-    NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-        0.1, applier, b"apply:", None, True
-    )
+
+    NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(0.1, applier, b"apply:", None, True)
     app.run()
 
 
@@ -497,14 +501,23 @@ def set_video_paused(paused: bool) -> bool:
     except Exception:
         return False
 
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-player", dest="video_path")
     parser.add_argument("--muted", action="store_true")
-    parser.add_argument("--volume", type=int, default=100,
-                        help="audio volume 0-100 (default: 100); preserved while muted so unmuting restores it immediately")
-    parser.add_argument("--volume-ipc", dest="volume_ipc", default="",
-                        help="Unix socket path for live volume control from parent process")
+    parser.add_argument(
+        "--volume",
+        type=int,
+        default=100,
+        help="audio volume 0-100 (default: 100); preserved while muted so unmuting restores it immediately",
+    )
+    parser.add_argument(
+        "--volume-ipc",
+        dest="volume_ipc",
+        default="",
+        help="Unix socket path for live volume control from parent process",
+    )
     args = parser.parse_args()
     if args.video_path:
         run_player(args.video_path, muted=args.muted, volume=args.volume, volume_ipc=args.volume_ipc)

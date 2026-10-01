@@ -5,6 +5,7 @@ ui.source_inputs 依赖 PySide6/Qt，但绑定逻辑本身 Qt-free：本文件�
 导入（PySide6.QtWidgets 与 ui.control_setup），测试结束后弹出桩模块，
 不污染真实 Qt 环境。main_window.py 则只做 AST 纯文本契约（绝不导入）。
 """
+
 from __future__ import annotations
 
 import ast
@@ -102,9 +103,7 @@ def test_use_internal_libmpv_truth_table(monkeypatch: pytest.MonkeyPatch, mode: 
     ("platform_id", "expect_wmv"),
     [("windows", True), ("linux", True), ("macos", False)],
 )
-def test_video_extensions_include_wmv_by_platform(
-    monkeypatch: pytest.MonkeyPatch, platform_id: str, expect_wmv: bool
-):
+def test_video_extensions_include_wmv_by_platform(monkeypatch: pytest.MonkeyPatch, platform_id: str, expect_wmv: bool):
     """VIDEO_EXTENSIONS 平台契约：Windows/Linux 含 .wmv，macOS 不含。
 
     该常量为模块顶层求值：用文档化的 SHANGBACKGROUND_PLATFORM_OVERRIDE +
@@ -129,9 +128,7 @@ def test_video_extensions_include_wmv_by_platform(
         importlib.reload(app_config)  # 恢复宿主平台真值
 
 
-def test_bind_with_suffixes_wraps_validator_as_partial_and_filters(
-    tmp_path: Path, source_inputs_module
-):
+def test_bind_with_suffixes_wraps_validator_as_partial_and_filters(tmp_path: Path, source_inputs_module):
     """suffixes 非 None：校验器被 functools.partial 包装（suffixes 关键字
     注入既有校验器链）；白名单外扩展名报 unsupported_type，大小写不敏感放行。"""
     source_inputs = source_inputs_module
@@ -191,9 +188,7 @@ def test_bind_existing_file_forwards_suffixes(tmp_path: Path, source_inputs_modu
     controller = _make_controller(source_inputs)
     edit = _FakeEdit(str(tmp_path / "sound.wav"))
 
-    binding = controller.bind_existing_file(
-        edit, key="video_file", label="视频文件", suffixes=(".mp4", ".mkv")
-    )
+    binding = controller.bind_existing_file(edit, key="video_file", label="视频文件", suffixes=(".mp4", ".mkv"))
 
     assert isinstance(binding.validator, functools.partial)
     assert binding.validator.func is source_inputs.validate_existing_file

@@ -10,6 +10,7 @@ Use ``build_tools/build.py mpv download`` to install a versioned runtime below
 ``src/bin/mpv/<platform>/<arch>/<runtime-id>/``.  Build backends bundle only the
 selected runtime into ``bin/mpv``.  A per-user runtime remains supported.
 """
+
 from __future__ import annotations
 
 import ctypes
@@ -106,6 +107,7 @@ def _external_runtime_allowed() -> bool:
         return True
     try:
         from app.build_features import video_runtime_mode
+
         return video_runtime_mode() == "system"
     except Exception:
         return False

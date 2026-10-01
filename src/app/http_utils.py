@@ -1,4 +1,5 @@
 """Dependency-free helpers for bounded HTTP responses."""
+
 from __future__ import annotations
 
 import json

@@ -1,4 +1,5 @@
 """Generation-safe slideshow application service."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, MutableMapping, Sequence
@@ -109,9 +110,8 @@ class SlideshowService:
             previous_timer, generation, slideshow_images = self._state.start(images)
             self._cancel(previous_timer)
             self._log(f"加载 {len(slideshow_images)} 张图片")
-            anchor = (
-                self.find(config.get("slideshow_last_wallpaper", ""), slideshow_images)
-                or self.find(config.get("current_wallpaper", ""), slideshow_images)
+            anchor = self.find(config.get("slideshow_last_wallpaper", ""), slideshow_images) or self.find(
+                config.get("current_wallpaper", ""), slideshow_images
             )
             target = slideshow_images[0] if not anchor and not is_startup else anchor
             if target and self._state.is_active(generation) and not self._is_cancelled():
@@ -147,10 +147,7 @@ class SlideshowService:
             if self._is_cancelled():
                 self._log("幻灯片重启已终止")
                 return False
-            if (
-                self._normalize_mode(str(config.get("mode", ""))) == "幻灯片放映"
-                and config.get("slide_folder")
-            ):
+            if self._normalize_mode(str(config.get("mode", ""))) == "幻灯片放映" and config.get("slide_folder"):
                 return self.start()
             self._log("当前不是幻灯片放映模式或未设置文件夹，跳过重启")
             return False
@@ -161,9 +158,8 @@ class SlideshowService:
             snapshot = self._state.snapshot()
             if not snapshot.enabled or not snapshot.images:
                 return False
-            current = (
-                self.find(config.get("current_wallpaper", ""), snapshot.images)
-                or self.find(config.get("slideshow_last_wallpaper", ""), snapshot.images)
+            current = self.find(config.get("current_wallpaper", ""), snapshot.images) or self.find(
+                config.get("slideshow_last_wallpaper", ""), snapshot.images
             )
             if current not in snapshot.images:
                 return False
@@ -194,9 +190,7 @@ class SlideshowService:
                 folder = normalize_wallpaper_path(config.get("slide_folder", ""))
                 current = str(config.get("current_wallpaper", ""))
                 next_image = (
-                    self._weighted_choice(folder, current)
-                    if folder and os.path.isdir(folder)
-                    else None
+                    self._weighted_choice(folder, current) if folder and os.path.isdir(folder) else None
                 ) or self.next_image(images, config)
             else:
                 next_image = self.next_image(images, config)
@@ -212,9 +206,7 @@ class SlideshowService:
 
     def replace_images(self, images: Sequence[str]) -> tuple[str, ...]:
         with self._lock:
-            return self._state.replace_images(
-                [normalize_wallpaper_path(path) for path in images if path]
-            )
+            return self._state.replace_images([normalize_wallpaper_path(path) for path in images if path])
 
     @staticmethod
     def find(path: object, images: Sequence[str]) -> str:

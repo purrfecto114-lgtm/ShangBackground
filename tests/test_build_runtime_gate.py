@@ -69,9 +69,7 @@ def test_linux_preflight_rejects_unresolved_qt_plugin_before_compilation(
     monkeypatch.setattr(
         diagnostics.subprocess,
         "run",
-        lambda *args, **kwargs: CompletedProcess(
-            args[0], 0, stdout="libxcb-cursor.so.0 => not found\n", stderr=""
-        ),
+        lambda *args, **kwargs: CompletedProcess(args[0], 0, stdout="libxcb-cursor.so.0 => not found\n", stderr=""),
     )
 
     with pytest.raises(RuntimeError, match="libxcb-cursor0"):
@@ -102,9 +100,7 @@ def test_nuitka_linux_preflight_requires_compiler(monkeypatch: pytest.MonkeyPatc
         diagnostics._validate_linux_build_host("nuitka")
 
 
-def test_frozen_linux_runtime_forces_xcb_and_rejects_offscreen_plugin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_frozen_linux_runtime_forces_xcb_and_rejects_offscreen_plugin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import json
 
     from build_tools.buildlib.mpv_runtime import MpvBuildSelection
@@ -123,10 +119,7 @@ def test_frozen_linux_runtime_forces_xcb_and_rejects_offscreen_plugin(
                 "target": "linux",
                 "arch": "x86_64",
                 "profile": "lite",
-                "enabled": {
-                    key: False
-                    for key in ("video", "html", "bing", "hotkeys", "updates", "fonts")
-                },
+                "enabled": {key: False for key in ("video", "html", "bing", "hotkeys", "updates", "fonts")},
                 "html_runtime": "disabled",
                 "video_runtime": {"mode": "disabled"},
             }
@@ -222,9 +215,7 @@ def test_frozen_macos_runtime_accepts_frameworks_resource_root(tmp_path: Path, m
                 "target": "macos",
                 "arch": "arm64",
                 "profile": "lite",
-                "enabled": {
-                    key: False for key in ("video", "html", "bing", "hotkeys", "updates", "fonts")
-                },
+                "enabled": {key: False for key in ("video", "html", "bing", "hotkeys", "updates", "fonts")},
                 "html_runtime": "disabled",
                 "video_runtime": {"mode": "disabled"},
             }
@@ -304,9 +295,7 @@ def test_frozen_macos_runtime_rejects_path_outside_app_bundle(tmp_path: Path, mo
                 "target": "macos",
                 "arch": "x86_64",
                 "profile": "lite",
-                "enabled": {
-                    key: False for key in ("video", "html", "bing", "hotkeys", "updates", "fonts")
-                },
+                "enabled": {key: False for key in ("video", "html", "bing", "hotkeys", "updates", "fonts")},
                 "html_runtime": "disabled",
                 "video_runtime": {"mode": "disabled"},
             }

@@ -3,6 +3,7 @@
 Loose source runs keep developer-friendly defaults. Packaged builds fail closed:
 a missing or malformed manifest enables only the core image-wallpaper feature set.
 """
+
 from __future__ import annotations
 
 import json

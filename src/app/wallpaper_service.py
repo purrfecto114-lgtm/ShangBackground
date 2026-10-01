@@ -1,4 +1,5 @@
 """Static wallpaper application service."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, MutableMapping
@@ -80,11 +81,7 @@ class WallpaperService:
     def get_current(self, *, use_cache: bool = True) -> str:
         with self._lock:
             now = time.monotonic()
-            if (
-                use_cache
-                and self._cached_current
-                and now - self._cached_at < self._cache_ttl
-            ):
+            if use_cache and self._cached_current and now - self._cached_at < self._cache_ttl:
                 return self._cached_current
             try:
                 path = str(self._backend.get_current() or "")
@@ -199,9 +196,7 @@ class WallpaperService:
                     )
             except CollectionPersistenceError as exc:
                 rollback_error = self._rollback_backend(previous_system)
-                message = (
-                    "保存壁纸历史失败: " if record_history else "保存当前壁纸位置失败: "
-                ) + str(exc)
+                message = ("保存壁纸历史失败: " if record_history else "保存当前壁纸位置失败: ") + str(exc)
                 if rollback_error:
                     message += "；恢复原壁纸失败: " + rollback_error
                 return self._fail(message)

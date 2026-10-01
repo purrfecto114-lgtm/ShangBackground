@@ -2,12 +2,14 @@
 设置壁纸右键菜单处理脚本 - macOS 版
 支持单文件和多文件选择，通过临时文件传递参数
 """
+
 import sys
 import os
 import json
 import shutil
 import time
 import subprocess
+
 try:
     import psutil
 except ImportError:
@@ -26,7 +28,11 @@ except Exception:
     RESOURCE_ROOT = Path(__file__).resolve().parents[1]
 
     def is_packaged_runtime():
-        return bool(getattr(sys, "frozen", False) or globals().get("__compiled__") is not None or getattr(sys.modules.get("__main__"), "__compiled__", None))
+        return bool(
+            getattr(sys, "frozen", False)
+            or globals().get("__compiled__") is not None
+            or getattr(sys.modules.get("__main__"), "__compiled__", None)
+        )
 
     def app_executable_path():
         return os.path.abspath(sys.argv[0] if sys.argv else sys.executable)
@@ -34,7 +40,11 @@ except Exception:
     def user_data_dir(app_name=APP_NAME):
         name = str(app_name or APP_NAME).strip() or APP_NAME
         if sys.platform.startswith("win"):
-            base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+            base = (
+                os.environ.get("LOCALAPPDATA")
+                or os.environ.get("APPDATA")
+                or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+            )
             path = os.path.join(base, name)
         elif sys.platform == "darwin":
             path = os.path.join(os.path.expanduser("~/Library/Application Support"), name)
@@ -47,6 +57,8 @@ except Exception:
             path = os.path.join(tempfile.gettempdir(), name)
             os.makedirs(path, exist_ok=True)
         return path
+
+
 try:
     from platform_adapters.integration import set_wallpaper_platform
 except Exception:
@@ -105,10 +117,10 @@ BUNDLED_CONFIG_PATH = os.path.join(BASE_DIR, "settings.json")
 BUNDLED_LEGACY_CONFIG_PATH = os.path.join(BASE_DIR, "shezhi.json")
 DIY_DIR = os.path.join(DATA_DIR, "diy")
 DIY_JSON = os.path.join(DIY_DIR, "DIY.json")
-TEMP_FILE = os.path.join(DATA_DIR, "temp_wallpaper_selection.json")
 LOG_FILE = os.path.join(os.path.expanduser("~"), "Desktop", "wallpaper_rightclick_debug.log")
 if not os.path.isdir(os.path.dirname(LOG_FILE)):
     LOG_FILE = os.path.join(tempfile.gettempdir(), "wallpaper_rightclick_debug.log")
+
 
 def _env_flag(name):
     return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
@@ -124,9 +136,7 @@ def _debug_log_destination():
     if not env_enabled and not bool(config.get("log_enabled", False)):
         return ""
     configured = str(
-        os.environ.get("SHANGBACKGROUND_RIGHTCLICK_LOG_FILE", "")
-        or config.get("log_file_path", "")
-        or LOG_FILE
+        os.environ.get("SHANGBACKGROUND_RIGHTCLICK_LOG_FILE", "") or config.get("log_file_path", "") or LOG_FILE
     ).strip()
     return os.path.abspath(os.path.expanduser(configured)) if configured else ""
 
@@ -145,17 +155,33 @@ def log_debug(msg):
     except Exception:
         # Logging must never break the right-click workflow.
         pass
+
+
 def load_config():
-    for path in (CONFIG_PATH, LEGACY_CONFIG_PATH, BUNDLED_CONFIG_PATH, BUNDLED_LEGACY_CONFIG_PATH):
-        if os.path.exists(path):
-            with open(path, 'r', encoding='utf-8') as f:
+    # v1.6.1 P1-3: 逐候选容错 + .bak 兜底。此前第一个存在的候选若损坏
+    # （半写状态/手工编辑坏 JSON），json.load 直接抛异常终结整个右键脚本。
+    candidates = (
+        CONFIG_PATH,
+        CONFIG_PATH + ".bak",
+        LEGACY_CONFIG_PATH,
+        BUNDLED_CONFIG_PATH,
+        BUNDLED_LEGACY_CONFIG_PATH,
+    )
+    for path in candidates:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
+        except Exception as exc:
+            log_debug(f"读取配置失败，尝试下一个候选（{path}）: {exc}")
     return {}
+
 
 def save_config(config):
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
     tmp_path = CONFIG_PATH + ".tmp"
-    with open(tmp_path, 'w', encoding='utf-8') as f:
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
     try:
         os.chmod(tmp_path, 0o600)
@@ -163,17 +189,25 @@ def save_config(config):
         pass
     os.replace(tmp_path, CONFIG_PATH)
 
+
 def load_diy():
     if not os.path.exists(DIY_DIR):
         os.makedirs(DIY_DIR, exist_ok=True)
     if os.path.exists(DIY_JSON):
-        with open(DIY_JSON, 'r', encoding='utf-8') as f:
+        with open(DIY_JSON, "r", encoding="utf-8") as f:
             return json.load(f)
     return []
 
+
 def save_diy(diy_list):
-    with open(DIY_JSON, 'w', encoding='utf-8') as f:
+    # v1.6.1 P1-3: 原子写（与 save_config 一致）。直接 open("w") 在写入
+    # 中途崩溃/被杀会留下半截 JSON，下次 load_diy 抛异常丢掉整个 DIY 列表。
+    os.makedirs(os.path.dirname(DIY_JSON), exist_ok=True)
+    tmp_path = DIY_JSON + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(diy_list, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, DIY_JSON)
+
 
 def set_wallpaper(path):
     """设置壁纸；优先使用 platform_adapters.integration 中按目标 OS 实现的适配器。"""
@@ -185,9 +219,15 @@ def set_wallpaper(path):
         raise FileNotFoundError(f"壁纸文件不存在: {abs_path}")
     escaped = abs_path.replace("\\", "\\\\").replace('"', '\\"')
     subprocess.run(
-        ["osascript", "-e", f'tell application "System Events" to set picture of every desktop to POSIX file "{escaped}"'],
-        check=True, timeout=10,
+        [
+            "osascript",
+            "-e",
+            f'tell application "System Events" to set picture of every desktop to POSIX file "{escaped}"',
+        ],
+        check=True,
+        timeout=10,
     )
+
 
 def _normalized_process_path(value, cwd=""):
     try:
@@ -214,9 +254,7 @@ def _process_matches_this_app(info):
         if cmdline:
             candidates.append(cmdline[0])
         return bool(target) and any(
-            _normalized_process_path(candidate, cwd) == target
-            for candidate in candidates
-            if candidate
+            _normalized_process_path(candidate, cwd) == target for candidate in candidates if candidate
         )
 
     targets = {
@@ -224,10 +262,7 @@ def _process_matches_this_app(info):
         _normalized_process_path(os.path.join(BASE_DIR, "main.pyw")),
     }
     targets.discard("")
-    return any(
-        _normalized_process_path(argument, cwd) in targets
-        for argument in cmdline[1:]
-    )
+    return any(_normalized_process_path(argument, cwd) in targets for argument in cmdline[1:])
 
 
 def kill_all_main_processes():
@@ -245,10 +280,7 @@ def kill_all_main_processes():
                 continue
             if not _process_matches_this_app(proc.info):
                 continue
-            log_debug(
-                f"终止本应用旧进程: PID={proc.info.get('pid')}, "
-                f"name={proc.info.get('name') or ''}"
-            )
+            log_debug(f"终止本应用旧进程: PID={proc.info.get('pid')}, name={proc.info.get('name') or ''}")
             proc.terminate()
             terminated.append(proc)
         except Exception as exc:
@@ -279,6 +311,7 @@ def start_main_program():
     log_debug(f"启动源码进程: {sys.executable} {main_script}")
     subprocess.Popen([sys.executable, main_script])
 
+
 def main():
     log_debug("=" * 60)
     log_debug(f"右键菜单脚本启动，时间: {datetime.now()}")
@@ -291,7 +324,7 @@ def main():
     files = [arg.strip('"') for arg in sys.argv[1:]]
     log_debug(f"原始参数列表: {files}")
 
-    image_ext = ('.jpg', '.jpeg', '.png', '.bmp', '.gif')
+    image_ext = (".jpg", ".jpeg", ".png", ".bmp", ".gif")
     images = [f for f in files if os.path.isfile(f) and os.path.splitext(f)[1].lower() in image_ext]
     log_debug(f"识别到的图片文件: {images}")
 
@@ -299,85 +332,89 @@ def main():
         log_debug("没有有效的图片文件，退出")
         return
 
-    if os.path.exists(TEMP_FILE):
-        try:
-            with open(TEMP_FILE, 'r', encoding='utf-8') as f:
-                existing = json.load(f)
-            if existing.get("timestamp", 0) > time.time() - 2:
-                log_debug(f"临时文件存在且时间戳在2秒内，跳过执行: {existing}")
-                return
-        except Exception as e:
-            log_debug(f"检查临时文件出错: {e}")
-
     config = load_config()
     log_debug(f"当前配置: mode={config.get('mode')}, slide_folder={config.get('slide_folder')}")
 
     kill_all_main_processes()
     time.sleep(0.5)
     log_debug("旧进程已结束")
-
-    if len(images) == 1:
-        img = normalize_wallpaper_path(images[0])
-        log_debug(f"单图片模式，图片: {img}")
-        try:
+    # v1.6.1 P1-3 失败保障：主进程在上面已被终止。此后任何一步失败都
+    # 必须把应用拉回来并告知用户原因——此前 set_wallpaper 失败会直接
+    # return，用户被留在"应用被杀 + 壁纸未变 + 无提示"的状态。
+    try:
+        if len(images) == 1:
+            img = normalize_wallpaper_path(images[0])
+            log_debug(f"单图片模式，图片: {img}")
             set_wallpaper(img)
-        except Exception as e:
-            # set_wallpaper 失败时必须把原因带给用户，否则下面还会弹"设置成功"
-            log_debug(f"设置壁纸失败: {e}")
-            log_debug(traceback.format_exc())
-            try:
-                escaped_msg = f"壁纸设置失败：\\n{e}\\n\\n请检查文件路径、权限与桌面环境是否支持。".replace('"', '\\"')
-                subprocess.run(
-                    ["osascript", "-e", f'display dialog "{escaped_msg}" with title "设置失败" buttons "OK" default button 1'],
-                    timeout=10, capture_output=True,
-                )
-            except Exception:
-                pass
-            return
-        config["current_wallpaper"] = img
-        history = config.get("history", [])
-        config["history"] = _prepend_history_entry(img, history)
-        config["mode"] = "图片"
-        config["single_image"] = img
-        save_config(config)
-        log_debug("配置已保存（图片模式）")
-        diy = load_diy()
-        if img not in diy:
-            diy.append(img)
-            save_diy(diy)
-            log_debug(f"已添加到DIY记录: {img}")
-    else:
-        slide_folder = os.path.join(DIY_DIR, f"temp_slide_{int(time.time())}")
-        os.makedirs(slide_folder, exist_ok=True)
-        log_debug(f"多图片模式，创建幻灯片文件夹: {slide_folder}")
-        for src in images:
-            dst = os.path.join(slide_folder, os.path.basename(src))
-            shutil.copy2(src, dst)
-            log_debug(f"复制图片: {src} -> {dst}")
-        config["mode"] = "幻灯片放映"
-        config["slide_folder"] = slide_folder
-        config["shuffle"] = False
-        save_config(config)
-        log_debug(f"配置已保存（幻灯片模式），文件夹: {slide_folder}")
-        diy = load_diy()
-        for img in images:
+            config["current_wallpaper"] = img
+            history = config.get("history", [])
+            config["history"] = _prepend_history_entry(img, history)
+            config["mode"] = "图片"
+            config["single_image"] = img
+            save_config(config)
+            log_debug("配置已保存（图片模式）")
+            diy = load_diy()
             if img not in diy:
                 diy.append(img)
-        save_diy(diy)
-        log_debug(f"已添加到DIY记录: {len(images)} 张图片")
+                save_diy(diy)
+                log_debug(f"已添加到DIY记录: {img}")
+        else:
+            slide_folder = os.path.join(DIY_DIR, f"temp_slide_{int(time.time())}")
+            os.makedirs(slide_folder, exist_ok=True)
+            log_debug(f"多图片模式，创建幻灯片文件夹: {slide_folder}")
+            for src in images:
+                dst = os.path.join(slide_folder, os.path.basename(src))
+                shutil.copy2(src, dst)
+                log_debug(f"复制图片: {src} -> {dst}")
+            config["mode"] = "幻灯片放映"
+            config["slide_folder"] = slide_folder
+            config["shuffle"] = False
+            save_config(config)
+            log_debug(f"配置已保存（幻灯片模式），文件夹: {slide_folder}")
+            diy = load_diy()
+            for img in images:
+                if img not in diy:
+                    diy.append(img)
+            save_diy(diy)
+            log_debug(f"已添加到DIY记录: {len(images)} 张图片")
+
+    except Exception as e:
+        log_debug(f"右键壁纸设置失败: {e}")
+        log_debug(traceback.format_exc())
+        start_main_program()
+        try:
+            escaped_msg = f"壁纸设置失败：\\n{e}\\n\\n应用已重启，原设置保持不变。".replace('"', '\\"')
+            subprocess.run(
+                [
+                    "osascript",
+                    "-e",
+                    f'display dialog "{escaped_msg}" with title "设置失败" buttons "OK" default button 1',
+                ],
+                timeout=10,
+                capture_output=True,
+            )
+        except Exception:
+            pass
+        return
 
     start_main_program()
     log_debug("新进程已启动")
 
     try:
         subprocess.run(
-            ["osascript", "-e", 'display dialog "壁纸设置成功！\n程序将自动重启应用新设置。" with title "提示" buttons "OK" default button 1'],
-            timeout=10, capture_output=True,
+            [
+                "osascript",
+                "-e",
+                'display dialog "壁纸设置成功！\n程序将自动重启应用新设置。" with title "提示" buttons "OK" default button 1',
+            ],
+            timeout=10,
+            capture_output=True,
         )
     except Exception:
         pass
     log_debug("右键菜单脚本执行完成")
     log_debug("=" * 60)
+
 
 if __name__ == "__main__":
     try:

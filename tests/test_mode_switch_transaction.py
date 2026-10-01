@@ -16,11 +16,7 @@ MAIN_WINDOW = PROJECT_ROOT / "src" / "ui" / "main_window.py"
 def _method_source(method_name: str) -> str:
     text = MAIN_WINDOW.read_text(encoding="utf-8")
     tree = ast.parse(text)
-    method = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == method_name
-    )
+    method = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == method_name)
     lines = text.splitlines()
     return "\n".join(lines[method.lineno - 1 : method.end_lineno])
 
@@ -85,9 +81,9 @@ def test_shared_gui_has_no_direct_mode_assignment_outside_core_transaction():
 )
 def test_direct_gui_mode_entrypoints_use_central_transaction(method_name: str, target: str):
     block = _method_source(method_name)
-    assert 'core.switch_wallpaper_mode(' in block
+    assert "core.switch_wallpaper_mode(" in block
     assert f'"{target}"' in block
-    assert 'updates=' in block
+    assert "updates=" in block
 
 
 def test_same_mode_staged_source_failure_restores_old_source_and_reactivates_old_runtime():

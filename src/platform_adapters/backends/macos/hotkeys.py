@@ -1,4 +1,5 @@
 """macOS global-hotkey backend and frontmost-application guard."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping

@@ -2,6 +2,39 @@
 
 本文件记录 ShangBackground 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.6.1] - 2026-10-01
+
+v1.6.1 是对 v1.6.0 的地毯式复核发布：基于 4 路并行只读审计（架构 5.5 / 代码卫生 4.5 / UX 综合 6.5 / 工程化 3 阻断 / 生态对标 6 优势 18 差距）逐条验证后的修复批次。审计报告的 5 条事实性错误经复核修正后未按原文实施（详见各条目）。UX 两条硬阻断（破坏性按钮无视觉警示、侧边栏键盘不可达）并列第一优先修复。
+
+### 修复
+
+- **破坏性按钮与普通按钮视觉无差异（UX 硬阻断）** — `QPushButton[danger]` 选择器从未在任何样式表中定义：danger_bg 只是孤立的主题角色，「恢复出厂设置」（清空配置/历史/托盘菜单/外观偏好）渲染得和所有按钮一样，且在安全模式页占据左一主按钮位——看起来反而像推荐操作。现双主题分支补齐 danger 规则（亮 #cf222e / 暗 #da3633，白字对比度 5.36:1 / 4.61:1 实算过 WCAG），安全模式按钮重排为 [弹性][关闭][复制错误信息][恢复出厂]，破坏性动作推到最右端；新增「复制错误信息」按钮（此前页面要求"把错误发给开发者"却不给复制手段）。
+- **侧边栏壁纸列表对键盘与屏幕阅读器完全不可达（UX 硬阻断）** — 核心动作「换一张壁纸」唯一触发路径是 mouseReleaseEvent 的曼哈顿距离门：ThumbnailItem 无焦点策略（默认 NoFocus）、无 keyPressEvent、无 accessibleName，全模块 897 行仅有的 1 次焦点 API 调用还是禁用方向（外点盾）。现 StrongFocus + accessibleName/Description、Enter/Space 发射同一 clicked 信号、焦点环样式、Tab 链、Up/Down 换焦（首尾环绕）、当前壁纸初始落焦（对鼠标用户零视觉增量）。
+- **英文界面必应进度整体失效（P1）** — 进度解码判据 `t("进度") in message` 对硬编码中文消息前缀匹配：英文界面每条进度消息都被当成完成消息——进度条中途跳 100%、同步按钮中途复活（可重入并发下载）、worker 引用被提前清空。进度协议改语言无关哨兵 `\x00bing-progress:<pct>/<status>`（\x00 不会出现在任何用户可见文本），状态文本过 t()（英文用户此前看硬编码中文下载进度）。旧中文前缀格式已无发射点，一并移除。变异验证：回植旧判据 4 项测试转红。
+- **视频模式 GUI 冻结（P1）** — 模式切换事务持操作锁 14-18 秒，GUI 以 700ms/40ms 双频轮询 is_running/set_option/last_target，带锁版本每次轮询排队等整个事务结束（实测单次停顿 2900ms）。三个热路径读方法去锁（探针/选项文件/目标读取均为独立于事务的纯读）。
+- **右键换壁纸失败后应用不回来（P1，三平台）** — 右键脚本先杀主进程再设壁纸：set_wallpaper 失败时旧实现弹错误框后直接 return，用户被留在"应用被杀 + 壁纸未变 + 无提示"状态。现杀进程后全部逻辑包进失败保障 try 块，任何失败都重启应用并告知原因；另 save_diy 原子写（此前 open("w") 中途崩溃毁掉整个 DIY 列表）、load_config 逐候选容错 + .bak 兜底（损坏配置不再终结脚本）、移除零写入方的 TEMP_FILE 死守卫。
+- **Windows mixin 629 行（72%）共享基类副本经 MRO 屏蔽共享实现（架构 🔴1）** — 暗色/主题修复改在共享基类永远到不了 Windows 用户，而唯一真机覆盖最充分的平台跑的正是副本。六个样式/图标方法（_init_icon/_render_svg_to_pixmap/_combo_popup_stylesheet/_extra_theme_qss/_rebuild_stylesheet/_settings_nav_stylesheet）统一回共享基类，真实平台差异（图标 .ico 优先、QSS 图标 URL 形态）转为显式 core.IS_WINDOWS 分支。Windows 侧逐字节等价证明：_rebuild_stylesheet 与 _settings_nav_stylesheet 统一后与旧副本字节相同；顺带修复共享暗色模板的五处暗/亮漂移（暗色下拉框块停留在旧版、item:selected 规则孤儿、按下内缩 1px、信息按钮色阶、QListView 弹窗行高 30px→28px 与 QMenu 弹窗一致——即审计 A5"像素一致实为两套数"的根因）。_is_desktop_foreground 是唯一真分歧对（Win32 窗口类 vs X11/Wayland 检测），保留覆写。main_window.py 8436→8143 行（净 -293；其中 mixin 统一 -696、死方法 -84、键盘/对比度/i18n/P1/P2 修复 +487）。
+- **可靠性批次（P2×4）** — UpdateChecker 完成后显式 deleteLater（不再等 Python GC 释放 QThread 资源）；日志节流状态 512 键硬上限（洪峰新键注入快于 0.75s 窗口自然过期，无上限 dict 随唯一消息线性增长）；两处后台线程启动失败兜底（_core_busy 已置位而线程未起时界面永久"正在执行"，现直接经完成信号复位）；托盘气泡接线（engine 的 IPC 失败气泡读 core.tray_icon_obj，GUI 从不写入该全局，通知分支自引入起就是死代码）。
+- **i18n 批次** — Windows 热键表把"上一张壁纸"动作标成 t("上一个桌面背景")（en.json 映射为应用名"ShangBackground"，英文用户把应用名当动作标签看）；热键录制反馈只写主窗口状态栏而用户在独立设置对话框里（录制开始现在同步更新对话框当前值标签，pynput 缺失改为对话框级警告）；6 处异常弹窗裸塞 str(e)/硬编码中文（保存必应/打开位置×3/右键菜单目标错误，现在带翻译引导语）；黑话清理（"pynput is missing"改组件级说明、XDG/Qt translation 文案去术语化）+ 删除混入语言文件的 docstring 死键。审计报告所称"3 个坏 i18n 键"经复核两处不成立（键存在且渲染正常），实际缺陷如上。
+- **对比度与状态可见性批次** — muted 文本 #6b7280/#656d76/#777→#57606a（状态栏在实际底色 #f0f2f5 上 4.31:1 差 0.19 未过 AA，修复后 5.70:1）；近白主题灰阶选中态配深字（白字 on #8c959f 3.04:1→#24292f 4.82:1；暗色 on #8b8ba3 2.73:1→#1a1b2e 5.10:1）；滚动条手柄（默认白主题下 1.51:1 几乎不可见→#6e7781 4.05:1，暗色与侧栏同步）；禁用态加虚线边（纯灰度禁用对色盲不可辨）；状态栏 ElideMiddle→ElideRight（句子中间截断切掉动词，错误原因在句尾）。全部数值经 WCAG 公式实算并固化为 CI 回归测试。
+- **CI 诚实化快赢** — requirements/test.txt 补 PySide6-Essentials/psutil（8 个测试含安全与 P0 验收项在 CI 恒 skip 从未执行）+ QT_QPA_PLATFORM=offscreen；Dependabot pip 目录从根（无 pyproject 依赖节，周更新空转数月）改 requirements 双目录；Pillow 下限 >=12.2（消除 34 条历史 GHSA 的理论解析面）；三处 backends 目录补包标记（命名空间包从覆盖率报告消失）；test_layering glob→rglob（约 2.1 万行零门禁区域纳入守护）+ core 禁 ui 导入 / app 禁模块级 ui 导入两条新 AST 守卫；xvfb 探针从存在性改功能性（缺 xauth 的环境此前硬失败而非跳过）。
+- **死代码清理** — services/bing_sync.py（56 行，生产零引用：唯一可达路径是历史巨文件时代的 main.py 惰性导出垫片，活动实现在 services/bing.py）连同 bundle.py 两处打包引用、垫片表项与文本守护测试删除；main_window 10 个零引用方法（84 行，全仓标识符扫描含字符串形式引用验证）删除。
+
+### 工程化
+
+- **覆盖率基线** — pytest 全测试腿 --cov=src --cov=build_tools 报告模式（不设阈值）：数字先可见，再谈门槛。
+- **pyright 顾问 job** — 非阻塞（continue-on-error）+ 产物上传。审计所称"sys.modules 门面是 pyright 未入 CI 的根因"经实测推翻（门面零错误），真实错误主体是 main_window/engine 动态属性模式（约 480），先可见再消化。
+- **Ruff 门禁扩展** — E9+F → +A/T10/TID/YTT/ICN/INT/LOG/RSE/SLOT（当前零违规的最大集）；W/G/B/ASYNC/ISC/PYI 约 12 处手修、I/UP 自动修复战役另行排队。
+- **macOS ad-hoc 签名** — 未签名 arm64 Mach-O 在 macOS 内核层直接 Killed: 9（Apple Silicon 上"能启动"的必要条件，非公证）。产物内嵌代码先签、主二进制次之、bundle 最后，严格校验后打包；README 补双平台未签名构建的打开指引（macOS 隐私与安全性→仍要打开 / Windows SmartScreen→更多信息→仍要运行）。完整签名/公证仍阻塞在证书（signing.py 具备 signtool+RFC3161 能力但无身份可用），Azure Trusted Signing 个人版为中期路径。
+- **ruff format 基线** — 151 文件一次性格式归一（Windows mixin 方法体多一层缩进的沉疴一并清除），后续 diff 只剩真实改动。
+
+### 已知未修复（下轮候选）
+
+- 视觉系统级问题（四种白拼盘/默认纯白主题线框感/#ffffff 硬编码 ×75）需要设计决策而非 token 替换，未动。
+- Windows per-monitor 静态壁纸（IDesktopWallpaper::SetWallpaper 官方原生支持，COM 后端已在但 monitorID 恒 NULL）——外部证据评为 P0 的功能缺口，属新功能非修复。
+- 发布签名/公证（需证书）；PyInstaller 后端真实构建验证；24 个文本 grep 测试改 AST 结构断言（重构 REFACTOR_ROADMAP 后续阶段的硬前置）。
+- Wayland 全屏自动暂停（外部证据：Lively/GNOME/KDE 三方均无干净解，不建议投入研发）。
+
 ## [1.6.0] - 2026-09-30
 
 v1.6.0 是 v1.5.1 之后经四轮审计迭代打磨的合并发布。开发过程中的 1.6.1–1.6.4 中间版本号从未作为标签发布，其变更全部并入本节：v1.6.0 审查报告修复、v1.6.1 两轮审计（自主 5-agent 检测 + 用户报告合并处置）、v1.6.2（v1.6.1 报告两项必须修复 + CI 三平台全绿）、v1.6.3（KDE schema=3 插件级恢复 + doctor 口径统一 + D-Bus 前置检查）、v1.6.4（KDE 按显示器静态壁纸设置）与本轮静默失败审计（P0×3、P1×6、P2×6，详见各条目"静默失败审计"前缀）。

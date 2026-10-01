@@ -1,4 +1,5 @@
 """Smooth video focus-policy behavior shared by every platform UI."""
+
 from __future__ import annotations
 
 from app.audio_fade import volume_fade_steps
@@ -137,9 +138,7 @@ class VideoFocusMixin:
                         # Resume at silence, then fade in to avoid a sudden
                         # audio jump when the desktop regains focus.
                         self._set_video_runtime_volume(False, 0)
-                        self._start_video_volume_ramp(
-                            base, duration_ms=480, start=0
-                        )
+                        self._start_video_volume_ramp(base, duration_ms=480, start=0)
                     else:
                         self._set_video_runtime_volume(muted, base)
                 return
@@ -149,10 +148,7 @@ class VideoFocusMixin:
                 if muted or base <= 0:
                     self._cancel_video_volume_ramp()
                     self._set_video_runtime_volume(muted, base)
-                elif not (
-                    self._video_volume_ramp_timer.isActive()
-                    and self._video_volume_ramp_target == base
-                ):
+                elif not (self._video_volume_ramp_timer.isActive() and self._video_volume_ramp_target == base):
                     self._start_video_volume_ramp(base, duration_ms=420)
         except Exception:
             pass
@@ -203,4 +199,3 @@ class VideoFocusMixin:
                 self._start_video_volume_ramp(duck, duration_ms=280)
         except Exception:
             pass
-

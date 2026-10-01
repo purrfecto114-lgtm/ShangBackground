@@ -11,13 +11,27 @@ import os
 import threading
 
 from PySide6.QtCore import (
-    QEasingCurve, QEvent, QObject, QPoint,
-    QPropertyAnimation, Qt, QTimer, Signal,
+    QEasingCurve,
+    QEvent,
+    QObject,
+    QPoint,
+    QPropertyAnimation,
+    Qt,
+    QTimer,
+    Signal,
 )
 from PySide6.QtGui import QCursor, QImage, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel,
-    QPushButton, QScrollArea, QScroller, QScrollerProperties, QVBoxLayout, QWidget,
+    QApplication,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QScroller,
+    QScrollerProperties,
+    QVBoxLayout,
+    QWidget,
 )
 from PIL import Image
 
@@ -29,15 +43,45 @@ from app.i18n import t
 def _sidebar_colors() -> dict[str, str]:
     dark = bool(getattr(core, "config", {}).get("dark_mode", False))
     if dark:
-        return {"panel":"#1e1e2e","card":"#252536","card_hover":"#2d2d3f","active":"#123456","active_border":"#58a6ff","border":"#4d4d65","text":"#e6e6f0","muted":"#a7a7ba","thumb":"#2d2d3f","scroll_bg":"#1e1e2e","scroll_handle":"#4d4d65","scroll_hover":"#6d6d85","close_hover":"#3d3d55","close_pressed":"#4d4d65"}
-    return {"panel":"#f7f8fa","card":"#ffffff","card_hover":"#f5f5f5","active":"#deeeff","active_border":"#4a90d9","border":"#dddddd","text":"#333333","muted":"#777777","thumb":"#eeeeee","scroll_bg":"#f1f3f5","scroll_handle":"#c9d1d9","scroll_hover":"#8c959f","close_hover":"#e0e0e0","close_pressed":"#c8c8c8"}
+        return {
+            "panel": "#1e1e2e",
+            "card": "#252536",
+            "card_hover": "#2d2d3f",
+            "active": "#123456",
+            "active_border": "#58a6ff",
+            "border": "#4d4d65",
+            "text": "#e6e6f0",
+            "muted": "#a7a7ba",
+            "thumb": "#2d2d3f",
+            "scroll_bg": "#1e1e2e",
+            "scroll_handle": "#6d6d85",
+            "scroll_hover": "#8c959f",
+            "close_hover": "#3d3d55",
+            "close_pressed": "#4d4d65",
+        }
+    return {
+        "panel": "#f7f8fa",
+        "card": "#ffffff",
+        "card_hover": "#f5f5f5",
+        "active": "#deeeff",
+        "active_border": "#4a90d9",
+        "border": "#dddddd",
+        "text": "#333333",
+        "muted": "#57606a",
+        "thumb": "#eeeeee",
+        "scroll_bg": "#f1f3f5",
+        "scroll_handle": "#6e7781",
+        "scroll_hover": "#57606a",
+        "close_hover": "#e0e0e0",
+        "close_pressed": "#c8c8c8",
+    }
 
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
-SUPPORTED_EXT = ('.jpg', '.jpeg', '.png', '.bmp')
-COPY_PREFIX   = "(xxdz_random_copy)"
-THUMB_WIDTH   = 148
-THUMB_HEIGHT  = 94
+SUPPORTED_EXT = (".jpg", ".jpeg", ".png", ".bmp")
+COPY_PREFIX = "(xxdz_random_copy)"
+THUMB_WIDTH = 148
+THUMB_HEIGHT = 94
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────────────────
@@ -68,6 +112,7 @@ def generate_thumbnail_fast(
     - Source: pillow.readthedocs.io/en/stable/reference/Image.html
     """
     import warnings
+
     try:
         with Image.open(img_path) as src:
             # v1.4.4: Use draft mode for JPEG to reduce memory
@@ -79,6 +124,7 @@ def generate_thumbnail_fast(
             # v1.4.4: Apply EXIF orientation
             try:
                 from PIL import ImageOps
+
                 src = ImageOps.exif_transpose(src)
             except Exception:
                 pass
@@ -100,10 +146,12 @@ def generate_thumbnail_fast(
 
 
 def pil_to_qpixmap(pil_img: Image.Image) -> QPixmap:
-    rgba  = pil_img.convert("RGBA")
-    data  = rgba.tobytes("raw", "RGBA")
-    qimg  = QImage(
-        data, rgba.width, rgba.height,
+    rgba = pil_img.convert("RGBA")
+    data = rgba.tobytes("raw", "RGBA")
+    qimg = QImage(
+        data,
+        rgba.width,
+        rgba.height,
         rgba.width * 4,
         QImage.Format.Format_RGBA8888,
     )
@@ -119,7 +167,7 @@ class _LoaderSignals(QObject):
 class ThumbnailLoader:
     def __init__(self, sidebar: "WallpaperSidebar"):
         self._sidebar = sidebar
-        self._stop    = False
+        self._stop = False
         self._signals = _LoaderSignals()
         self._signals.ready.connect(sidebar.on_thumbnail_ready)
 
@@ -156,18 +204,9 @@ class ThumbnailLoader:
 class ThumbnailItem(QFrame):
     clicked = Signal(str)
 
-    _S_NORMAL = (
-        "ThumbnailItem{"
-        "background:#ffffff;border:1px solid #dddddd;border-radius:6px;}"
-    )
-    _S_HOVER = (
-        "ThumbnailItem{"
-        "background:#f5f5f5;border:1px solid #aaaaaa;border-radius:6px;}"
-    )
-    _S_ACTIVE = (
-        "ThumbnailItem{"
-        "background:#deeeff;border:2px solid #4a90d9;border-radius:6px;}"
-    )
+    _S_NORMAL = "ThumbnailItem{background:#ffffff;border:1px solid #dddddd;border-radius:6px;}"
+    _S_HOVER = "ThumbnailItem{background:#f5f5f5;border:1px solid #aaaaaa;border-radius:6px;}"
+    _S_ACTIVE = "ThumbnailItem{background:#deeeff;border:2px solid #4a90d9;border-radius:6px;}"
 
     @staticmethod
     def _item_style(kind: str = "normal") -> str:
@@ -175,15 +214,19 @@ class ThumbnailItem(QFrame):
         if kind == "active":
             return f"ThumbnailItem{{background:{c['active']};border:2px solid {c['active_border']};border-radius:6px;}}"
         if kind == "hover":
-            return f"ThumbnailItem{{background:{c['card_hover']};border:1px solid {c['scroll_hover']};border-radius:6px;}}"
+            return (
+                f"ThumbnailItem{{background:{c['card_hover']};border:1px solid {c['scroll_hover']};border-radius:6px;}}"
+            )
+        if kind == "focus":
+            return f"ThumbnailItem{{background:{c['card']};border:2px solid {c['active_border']};border-radius:6px;}}"
         return f"ThumbnailItem{{background:{c['card']};border:1px solid {c['border']};border-radius:6px;}}"
 
     def __init__(self, img_path: str, parent=None):
         super().__init__(parent)
-        self.img_path     = img_path
+        self.img_path = img_path
         self._highlighted = False
-        self._loaded      = False
-        self._press_pos   = None
+        self._loaded = False
+        self._press_pos = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -191,6 +234,14 @@ class ThumbnailItem(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setStyleSheet(self._item_style("normal"))
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        # 键盘可达性（审计 §3.1-5）：核心动作「换壁纸」此前只能通过鼠标触发。
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        try:
+            display_name = os.path.basename(self.img_path)
+        except Exception:
+            display_name = self.img_path
+        self.setAccessibleName(f"{t('壁纸')} {display_name}")
+        self.setAccessibleDescription(t("按回车应用这张壁纸"))
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(7, 7, 7, 7)
@@ -201,12 +252,11 @@ class ThumbnailItem(QFrame):
         self.img_lbl.setFixedSize(THUMB_WIDTH, THUMB_HEIGHT)
         c = _sidebar_colors()
         self.img_lbl.setStyleSheet(
-            f"background:{c['thumb']};color:{c['muted']};border-radius:3px;"
-            f"font-family:'{FONT_FAMILY}';font-size:9pt;"
+            f"background:{c['thumb']};color:{c['muted']};border-radius:3px;font-family:'{FONT_FAMILY}';font-size:9pt;"
         )
 
         self.setToolTip(self.img_path)
-        lay.addWidget(self.img_lbl,  0, Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self.img_lbl, 0, Qt.AlignmentFlag.AlignCenter)
 
     def set_thumbnail(self, pixmap: QPixmap) -> None:
         self.img_lbl.setPixmap(pixmap)
@@ -235,6 +285,24 @@ class ThumbnailItem(QFrame):
         self._press_pos = None
         super().mouseReleaseEvent(event)
 
+    def keyPressEvent(self, event) -> None:
+        key = event.key()
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            self.clicked.emit(self.img_path)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def focusInEvent(self, event) -> None:
+        if not self._highlighted:
+            self.setStyleSheet(self._item_style("focus"))
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event) -> None:
+        if not self._highlighted:
+            self.setStyleSheet(self._item_style("normal"))
+        super().focusOutEvent(event)
+
     def enterEvent(self, event) -> None:
         if not self._highlighted:
             self.setStyleSheet(self._item_style("hover"))
@@ -244,8 +312,6 @@ class ThumbnailItem(QFrame):
         if not self._highlighted:
             self.setStyleSheet(self._item_style("normal"))
         super().leaveEvent(event)
-
-
 
 
 class _OutsideClickShield(QWidget):
@@ -261,11 +327,7 @@ class _OutsideClickShield(QWidget):
     def __init__(self, sidebar: "WallpaperSidebar"):
         super().__init__(None)
         self.sidebar = sidebar
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool
-        )
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_AcceptTouchEvents, True)
@@ -290,8 +352,6 @@ class _OutsideClickShield(QWidget):
             event.accept()
             return True
         return super().event(event)
-
-
 
 
 def _screen_for_sidebar(master=None):
@@ -334,6 +394,7 @@ def _available_geometry_for_sidebar(master=None):
             return geo
     return None
 
+
 def _enable_touch_scrolling(widget) -> None:
     try:
         target = widget.viewport() if hasattr(widget, "viewport") else widget
@@ -349,7 +410,10 @@ def _enable_touch_scrolling(widget) -> None:
             props.setScrollMetric(QScrollerProperties.ScrollMetric.FrameRate, QScrollerProperties.FrameRates.Fps60)
         except Exception:
             pass
-        props.setScrollMetric(QScrollerProperties.ScrollMetric.HorizontalOvershootPolicy, QScrollerProperties.OvershootPolicy.OvershootAlwaysOff)
+        props.setScrollMetric(
+            QScrollerProperties.ScrollMetric.HorizontalOvershootPolicy,
+            QScrollerProperties.OvershootPolicy.OvershootAlwaysOff,
+        )
         scroller.setScrollerProperties(props)
     except Exception:
         pass
@@ -381,27 +445,25 @@ class WallpaperSidebar(QWidget):
     ):
         super().__init__(None)
 
-        self._anchor_widget   = master
-        self.folder           = folder
-        self.current_path     = current_path or ""
-        self.log_path         = log_path
-        self.show_message     = show_message or (lambda t, m: None)
+        self._anchor_widget = master
+        self.folder = folder
+        self.current_path = current_path or ""
+        self.log_path = log_path
+        self.show_message = show_message or (lambda t, m: None)
         self.switch_wallpaper = switch_wallpaper
 
-        self.image_paths:     list[str]                  = []
-        self.thumbnail_items: list[ThumbnailItem]        = []
-        self.is_animating:    bool                       = False
-        self._is_closing:     bool                       = False
-        self.loader:          ThumbnailLoader | None     = None
-        self._anim:           QPropertyAnimation | None  = None
-        self._shield:         _OutsideClickShield | None = None
+        self.image_paths: list[str] = []
+        self.thumbnail_items: list[ThumbnailItem] = []
+        self.is_animating: bool = False
+        self._is_closing: bool = False
+        self.loader: ThumbnailLoader | None = None
+        self._anim: QPropertyAnimation | None = None
+        self._shield: _OutsideClickShield | None = None
         self._outside_poll_timer: QTimer | None = None
         self._outside_mouse_was_down = False
 
         if not QApplication.instance():
-            raise RuntimeError(
-                "WallpaperSidebar 必须在 QApplication 创建之后才能实例化"
-            )
+            raise RuntimeError("WallpaperSidebar 必须在 QApplication 创建之后才能实例化")
 
         # Bug 4 fix: 选择窗口标志策略，让 sidebar 在所有平台和合成器下都能工作。
         #
@@ -418,12 +480,9 @@ class WallpaperSidebar(QWidget):
         #   Qt.Tool 透明窗口）会抢走 sidebar 的焦点导致其看似无响应。改用
         #   Qt.Popup 后合成器自动处理外部点击关闭，不再需要 _OutsideClickShield。
         import sys as _sys
-        _is_wayland = (
-            _sys.platform.startswith("linux")
-            and (
-                os.environ.get("WAYLAND_DISPLAY")
-                or os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
-            )
+
+        _is_wayland = _sys.platform.startswith("linux") and (
+            os.environ.get("WAYLAND_DISPLAY") or os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
         )
         _is_macos = _sys.platform == "darwin"
         self._use_outside_click_shield = not (_is_wayland or _is_macos)
@@ -431,16 +490,12 @@ class WallpaperSidebar(QWidget):
         if _is_wayland or _is_macos:
             # Qt.Popup: 合成器自动定位 + 外部点击自动关闭
             self.setWindowFlags(
-                Qt.WindowType.FramelessWindowHint |
-                Qt.WindowType.WindowStaysOnTopHint |
-                Qt.WindowType.Popup
+                Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Popup
             )
         else:
             # Windows / X11: 保留原始行为
             self.setWindowFlags(
-                Qt.WindowType.FramelessWindowHint  |
-                Qt.WindowType.WindowStaysOnTopHint |
-                Qt.WindowType.Tool
+                Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool
             )
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
@@ -448,11 +503,9 @@ class WallpaperSidebar(QWidget):
 
         # ── 收集图片路径 ──────────────────────────────────────────────────────
         try:
-            files = sorted([
-                f for f in os.listdir(folder)
-                if f.lower().endswith(SUPPORTED_EXT)
-                and not f.startswith(COPY_PREFIX)
-            ])
+            files = sorted(
+                [f for f in os.listdir(folder) if f.lower().endswith(SUPPORTED_EXT) and not f.startswith(COPY_PREFIX)]
+            )
             _log_sidebar(f"找到 {len(files)} 张图片", log_path)
         except Exception as exc:
             _log_sidebar(f"列出图片失败: {exc}", log_path)
@@ -500,8 +553,8 @@ class WallpaperSidebar(QWidget):
         self.animate_in()
         self._start_outside_click_polling()
 
-        QTimer.singleShot(300,  self.highlight_current)
-        QTimer.singleShot(500,  self.start_loading_thumbnails)
+        QTimer.singleShot(300, self.highlight_current)
+        QTimer.singleShot(500, self.start_loading_thumbnails)
         QTimer.singleShot(1500, self.scroll_to_current_after_load)
         _log_sidebar("侧边栏初始化完成", self.log_path)
 
@@ -524,20 +577,17 @@ class WallpaperSidebar(QWidget):
         hl.setContentsMargins(12, 6, 10, 6)
 
         title_lbl = QLabel(t("壁纸列表"))
-        title_lbl.setStyleSheet(
-            f"font-family:'{FONT_FAMILY}';font-size:12pt;"
-            f"font-weight:bold;color:{c['text']};"
-        )
+        title_lbl.setStyleSheet(f"font-family:'{FONT_FAMILY}';font-size:12pt;font-weight:bold;color:{c['text']};")
 
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(28, 28)
         close_btn.setStyleSheet(f"""
             QPushButton {{
-                background:transparent; color:{c['muted']};
+                background:transparent; color:{c["muted"]};
                 font-size:12pt; border:none; border-radius:4px;
             }}
-            QPushButton:hover   {{ background:{c['close_hover']}; color:{c['text']}; }}
-            QPushButton:pressed {{ background:{c['close_pressed']}; }}
+            QPushButton:hover   {{ background:{c["close_hover"]}; color:{c["text"]}; }}
+            QPushButton:pressed {{ background:{c["close_pressed"]}; }}
         """)
         close_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         close_btn.clicked.connect(self.close_sidebar)
@@ -550,14 +600,12 @@ class WallpaperSidebar(QWidget):
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.viewport().setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
-        self.scroll_area.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll_area.setStyleSheet(f"""
-            QScrollArea {{ background:{c['panel']}; border:none; }}
-            QScrollBar:vertical {{ background:{c['scroll_bg']}; width:10px; margin:0; border-radius:5px; }}
-            QScrollBar::handle:vertical {{ background:{c['scroll_handle']}; border-radius:5px; min-height:30px; }}
-            QScrollBar::handle:vertical:hover {{ background:{c['scroll_hover']}; }}
+            QScrollArea {{ background:{c["panel"]}; border:none; }}
+            QScrollBar:vertical {{ background:{c["scroll_bg"]}; width:10px; margin:0; border-radius:5px; }}
+            QScrollBar::handle:vertical {{ background:{c["scroll_handle"]}; border-radius:5px; min-height:30px; }}
+            QScrollBar::handle:vertical:hover {{ background:{c["scroll_hover"]}; }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height:0; background:transparent; }}
             QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background:transparent; }}
         """)
@@ -574,11 +622,16 @@ class WallpaperSidebar(QWidget):
         root.addWidget(self.scroll_area)
 
     def _create_items(self) -> None:
+        previous_item = None
         for path in self.image_paths:
             item = ThumbnailItem(path)
             item.clicked.connect(self.on_thumbnail_click)
             self._vlay.addWidget(item)
             self.thumbnail_items.append(item)
+            # Tab 键在缩略图之间顺序移动（此前整个列表不在 Tab 链里）。
+            if previous_item is not None:
+                self.setTabOrder(previous_item, item)
+            previous_item = item
         self._vlay.addStretch()
 
     # ═══════════════════════════════ 缩略图加载 ═══════════════════════════════
@@ -610,28 +663,25 @@ class WallpaperSidebar(QWidget):
             return
         target = -1
         for i, item in enumerate(self.thumbnail_items):
-            is_cur = (
-                os.path.normpath(item.img_path) ==
-                os.path.normpath(self.current_path)
-            )
+            is_cur = os.path.normpath(item.img_path) == os.path.normpath(self.current_path)
             item.set_highlighted(is_cur)
             if is_cur:
                 target = i
 
         if target >= 0:
             _log_sidebar(
-                f"高亮当前壁纸: "
-                f"{os.path.basename(self.thumbnail_items[target].img_path)}",
+                f"高亮当前壁纸: {os.path.basename(self.thumbnail_items[target].img_path)}",
                 self.log_path,
             )
+            # 键盘用户从当前壁纸开始导航；对鼠标用户无视觉影响
+            # （当前壁纸本来就带高亮描边，focus 样式不会叠加变化）。
+            self.thumbnail_items[target].setFocus(Qt.FocusReason.TabFocusReason)
             QTimer.singleShot(120, lambda: self._scroll_to(target))
 
     def _scroll_to(self, idx: int) -> None:
         if self._is_closing or idx >= len(self.thumbnail_items):
             return
-        self.scroll_area.ensureWidgetVisible(
-            self.thumbnail_items[idx], 0, 60
-        )
+        self.scroll_area.ensureWidgetVisible(self.thumbnail_items[idx], 0, 60)
 
     def scroll_to_current_after_load(self) -> None:
         def _check() -> None:
@@ -713,13 +763,24 @@ class WallpaperSidebar(QWidget):
 
     def keyPressEvent(self, event) -> None:
         """
-        Esc 键快速关闭侧边栏。
-        与点击外部收起的行为等效，同样经过动画滑出流程。
+        Esc 键快速关闭侧边栏；Up/Down 在缩略图之间移动键盘焦点。
+        Esc 与点击外部收起的行为等效，同样经过动画滑出流程。
         """
-        if event.key() == Qt.Key.Key_Escape:
+        key = event.key()
+        if key == Qt.Key.Key_Escape:
             self.close_sidebar()
-        else:
-            super().keyPressEvent(event)
+            return
+        if key in (Qt.Key.Key_Up, Qt.Key.Key_Down) and self.thumbnail_items:
+            items = self.thumbnail_items
+            current = self.focusWidget()
+            idx = items.index(current) if current in items else -1
+            if key == Qt.Key.Key_Down:
+                nxt = items[idx + 1] if -1 < idx < len(items) - 1 else items[0]
+            else:
+                nxt = items[idx - 1] if idx > 0 else items[-1]
+            nxt.setFocus(Qt.FocusReason.TabFocusReason)
+            return
+        super().keyPressEvent(event)
 
     def _animations_enabled(self) -> bool:
         """Return True when interface animations should be played.
@@ -745,7 +806,7 @@ class WallpaperSidebar(QWidget):
         这避免了 200 ms 的等待, 对低端机器或对动态效果敏感的用户更友好.
         """
         start = QPoint(self._sx + self._sw, self._sy)
-        end   = QPoint(self._tx, self._sy)
+        end = QPoint(self._tx, self._sy)
 
         self.show()
         self.raise_()
@@ -808,7 +869,7 @@ class WallpaperSidebar(QWidget):
             pass
 
         start = QPoint(self._tx, self._sy)
-        end   = QPoint(self._sx + self._sw, self._sy)
+        end = QPoint(self._sx + self._sw, self._sy)
 
         def _done() -> None:
             self.is_animating = False

@@ -171,7 +171,9 @@ def test_release_workflow_smoke_tests_frozen_binary():
     probe must still exit 1 when the version string is genuinely absent.
     """
     release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
-    step = release_workflow.split("- name: Smoke-test frozen binary", 1)[1].split("- name: Build Windows setup.exe", 1)[0]
+    step = release_workflow.split("- name: Smoke-test frozen binary", 1)[1].split("- name: Build Windows setup.exe", 1)[
+        0
+    ]
     assert "--version" in step
     assert "PYTHONPATH=src" in step
     # `|| true` would mask real failures; the probe must use `exit 1` on mismatch.
@@ -337,11 +339,7 @@ def test_zip_directory_excludes_pycache_and_bytecode(tmp_path: Path):
     names = _archive_names_zip(destination)
     assert "ShangBackground-v1.6.1/src/app.py" in names
     assert "ShangBackground-v1.6.1/build_tools/tool.py" in names
-    offenders = {
-        name
-        for name in names
-        if "__pycache__" in name or name.endswith((".pyc", ".pyo"))
-    }
+    offenders = {name for name in names if "__pycache__" in name or name.endswith((".pyc", ".pyo"))}
     assert not offenders, f"byte-compilation leftovers leaked into zip: {sorted(offenders)}"
 
 
@@ -352,9 +350,5 @@ def test_tar_directory_excludes_pycache_and_bytecode(tmp_path: Path):
     names = _archive_names_tar(destination)
     assert "ShangBackground-v1.6.1/src/app.py" in names
     assert "ShangBackground-v1.6.1/build_tools/tool.py" in names
-    offenders = {
-        name
-        for name in names
-        if "__pycache__" in name or name.endswith((".pyc", ".pyo"))
-    }
+    offenders = {name for name in names if "__pycache__" in name or name.endswith((".pyc", ".pyo"))}
     assert not offenders, f"byte-compilation leftovers leaked into tar: {sorted(offenders)}"

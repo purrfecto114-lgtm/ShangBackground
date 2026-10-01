@@ -4,6 +4,7 @@ PartC keeps Windows/Linux/macOS as independent branches.  UI classes are exposed
 lazily so old tools can resolve them without forcing PySide6 import during CLI
 or environment checks.
 """
+
 from __future__ import annotations
 
 from importlib import import_module

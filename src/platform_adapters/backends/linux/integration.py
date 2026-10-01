@@ -73,6 +73,7 @@ def _same_existing_file(left: str, right: str) -> bool:
 def get_screen_size(root=None):
     try:
         from PySide6.QtWidgets import QApplication
+
         app = QApplication.instance()
         if app is not None:
             screen = app.primaryScreen()
@@ -85,6 +86,7 @@ def get_screen_size(root=None):
         rc, out, _ = _run_args(["xrandr", "--current"], timeout=5)
         if rc == 0 and out:
             import re
+
             for line in out.splitlines():
                 if "*" in line:
                     match = re.search(r"(\d+)x(\d+)", line)
@@ -138,13 +140,19 @@ def kde_wallpaper_restore_scope() -> dict:
     """
     try:
         if not _is_kde_session():
-            return {"applicable": False, "reachable": False, "plugins": [], "restorable": False, "detail": "not a KDE session"}
-        script = r'''
+            return {
+                "applicable": False,
+                "reachable": False,
+                "plugins": [],
+                "restorable": False,
+                "detail": "not a KDE session",
+            }
+        script = r"""
 var allDesktops = desktops();
 for (var i = 0; i < allDesktops.length; i++) {
     print("PLUGIN:" + (allDesktops[i].wallpaperPlugin || "org.kde.image"));
 }
-'''
+"""
         ok, out, detail = _run_plasma_script(script, timeout=8)
         if not ok:
             return {"applicable": True, "reachable": False, "plugins": [], "restorable": False, "detail": detail}
@@ -165,7 +173,13 @@ for (var i = 0; i < allDesktops.length; i++) {
             "detail": f"wallpaper plugins: {summary}",
         }
     except Exception as exc:  # pragma: no cover - 防御：诊断路径不允许抛异常
-        return {"applicable": True, "reachable": False, "plugins": [], "restorable": False, "detail": f"probe error: {exc}"}
+        return {
+            "applicable": True,
+            "reachable": False,
+            "plugins": [],
+            "restorable": False,
+            "detail": f"probe error: {exc}",
+        }
 
 
 def _is_xfce_session() -> bool:
@@ -188,11 +202,24 @@ _LINUX_FIT_MODE = "填充"
 def _normalize_linux_fit_mode(value: object) -> str:
     text = str(value or "").strip().lower()
     aliases = {
-        "填充": "填充", "fill": "填充", "zoom": "填充", "crop": "填充",
-        "适应": "适应", "fit": "适应", "scaled": "适应", "scale": "适应",
-        "拉伸": "拉伸", "stretch": "拉伸", "stretched": "拉伸",
-        "居中": "居中", "center": "居中", "centered": "居中",
-        "平铺": "平铺", "tile": "平铺", "tiled": "平铺", "wallpaper": "平铺",
+        "填充": "填充",
+        "fill": "填充",
+        "zoom": "填充",
+        "crop": "填充",
+        "适应": "适应",
+        "fit": "适应",
+        "scaled": "适应",
+        "scale": "适应",
+        "拉伸": "拉伸",
+        "stretch": "拉伸",
+        "stretched": "拉伸",
+        "居中": "居中",
+        "center": "居中",
+        "centered": "居中",
+        "平铺": "平铺",
+        "tile": "平铺",
+        "tiled": "平铺",
+        "wallpaper": "平铺",
     }
     return aliases.get(text, "填充")
 
@@ -214,7 +241,11 @@ def _summarize_command_output(value: str, *, max_lines: int = 3, max_chars: int 
     picked: list[str] = []
     for line in lines:
         lower = line.lower()
-        if lower.startswith(("value:", "plugin:", "image:", "wallpaperplugin:", "fillmode:", "previewimage:")) or "error" in lower or "unknown" in lower:
+        if (
+            lower.startswith(("value:", "plugin:", "image:", "wallpaperplugin:", "fillmode:", "previewimage:"))
+            or "error" in lower
+            or "unknown" in lower
+        ):
             picked.append(line)
         if len(picked) >= max_lines:
             break
@@ -234,8 +265,7 @@ def _qdbus_commands() -> list[str]:
 # KDE_SUPPORT_PLAN 任务 3 步骤 2：会话 bus 前置检查的可操作错误文案。
 # 与另外两种失败可区分：命令缺失="command not found"、Plasma 拒绝=rc!=0 stderr。
 _KDE_SESSION_BUS_UNAVAILABLE = (
-    "session bus unavailable: DBUS_SESSION_BUS_ADDRESS 未设置且 "
-    "$XDG_RUNTIME_DIR/bus 不存在——不在图形会话内或总线未导出"
+    "session bus unavailable: DBUS_SESSION_BUS_ADDRESS 未设置且 $XDG_RUNTIME_DIR/bus 不存在——不在图形会话内或总线未导出"
 )
 
 
@@ -265,15 +295,26 @@ def _run_plasma_script(script: str, *, timeout: int = 10, allow_dbus_send: bool 
         return False, "", _KDE_SESSION_BUS_UNAVAILABLE
     errors: list[str] = []
     for qdbus in _qdbus_commands():
-        rc, out, err = _run_args([qdbus, "org.kde.plasmashell", "/PlasmaShell", "org.kde.PlasmaShell.evaluateScript", script], timeout=timeout)
+        rc, out, err = _run_args(
+            [qdbus, "org.kde.plasmashell", "/PlasmaShell", "org.kde.PlasmaShell.evaluateScript", script],
+            timeout=timeout,
+        )
         if rc == 0:
             return True, out, ""
         errors.append(f"{qdbus}: {err or out or 'no output'}")
     if allow_dbus_send and shutil.which("dbus-send"):
-        rc, out, err = _run_args([
-            "dbus-send", "--session", "--dest=org.kde.plasmashell", "--type=method_call",
-            "/PlasmaShell", "org.kde.PlasmaShell.evaluateScript", f"string:{script}",
-        ], timeout=timeout)
+        rc, out, err = _run_args(
+            [
+                "dbus-send",
+                "--session",
+                "--dest=org.kde.plasmashell",
+                "--type=method_call",
+                "/PlasmaShell",
+                "org.kde.PlasmaShell.evaluateScript",
+                f"string:{script}",
+            ],
+            timeout=timeout,
+        )
         if rc == 0:
             return True, out, ""
         errors.append(f"dbus-send: {err or out or 'no output'}")
@@ -284,7 +325,7 @@ def _run_plasma_script(script: str, *, timeout: int = 10, allow_dbus_send: bool 
 
 def _kde_read_wallpaper_values() -> tuple[bool, list[str], str]:
     """Return raw local/URI wallpaper values from every KDE desktop containment."""
-    script = r'''
+    script = r"""
 var allDesktops = desktops();
 for (var i = 0; i < allDesktops.length; i++) {
     var d = allDesktops[i];
@@ -307,7 +348,7 @@ for (var i = 0; i < allDesktops.length; i++) {
         }
     }
 }
-'''
+"""
     ok, out, detail = _run_plasma_script(script, timeout=10)
     if not ok:
         return False, [], detail
@@ -352,7 +393,7 @@ def _get_kde_wallpaper() -> tuple[bool, str]:
 def _kde_set_script(image_value: str, *, fill_mode: int | None = None) -> str:
     fill_line = ""
     if fill_mode is not None:
-        fill_line = f"\n    d.writeConfig(\"FillMode\", {int(fill_mode)});"
+        fill_line = f'\n    d.writeConfig("FillMode", {int(fill_mode)});'
     return """
 var allDesktops = desktops();
 for (var i = 0; i < allDesktops.length; i++) {
@@ -423,7 +464,7 @@ def _kde_capture_state_script() -> str:
     FillMode 从命中的组读（未命中任何组则不打印 IMAGE/FILLMODE 行）。
     screen 兼容属性/方法两种 Plasma scripting API。
     """
-    return r'''
+    return r"""
 var allDesktops = desktops();
 for (var i = 0; i < allDesktops.length; i++) {
     var d = allDesktops[i];
@@ -462,7 +503,7 @@ for (var i = 0; i < allDesktops.length; i++) {
         }
     }
 }
-'''
+"""
 
 
 def _parse_kde_capture_output(out: str) -> list[dict[str, object]]:
@@ -472,7 +513,7 @@ def _parse_kde_capture_output(out: str) -> list[dict[str, object]]:
     for line in out.splitlines():
         text = line.strip()
         if text.startswith("ID:"):
-            body = text[len("ID:"):]
+            body = text[len("ID:") :]
             id_part, sep, tail = body.partition("  SCREEN:")
             raw_id = id_part.strip() if sep else body.strip()
             screen: int | None = None
@@ -545,10 +586,7 @@ def capture_wallpaper_state() -> dict | None:
             fill_mode = record.get("fill_mode")
             # R1 校准：KConfig 不写默认值键——FillMode 缺省不是“配置不完整”，
             # 而是 Plasma 正在使用自己的默认值。缺省即缺省：恢复时不写该键。
-            config_captured = (
-                record.get("plugin") == KDE_RESTOREABLE_PLUGIN
-                and bool(raw_image)
-            )
+            config_captured = record.get("plugin") == KDE_RESTOREABLE_PLUGIN and bool(raw_image)
             containments.append(
                 {
                     "id": record.get("id"),
@@ -675,7 +713,9 @@ def restore_wallpaper_state(state: object) -> tuple[bool, str]:
             entries.append(
                 {
                     "id": entry_id if isinstance(entry_id, int) and not isinstance(entry_id, bool) else None,
-                    "screen": entry_screen if isinstance(entry_screen, int) and not isinstance(entry_screen, bool) else None,
+                    "screen": entry_screen
+                    if isinstance(entry_screen, int) and not isinstance(entry_screen, bool)
+                    else None,
                     "plugin": plugin,
                     "image": str(raw_entry.get("image") or ""),
                     "image_uri": str(raw_entry.get("image_uri") or ""),
@@ -745,7 +785,9 @@ def _set_kde_wallpaper(path: str, *, fill_mode: int | None = None) -> tuple[bool
                 accepted=True,
                 verified=verified,
                 method="plasma-apply-wallpaperimage",
-                detail="read-back confirmed" if verified else "accepted (rc=0); read-back unconfirmed (known Plasma 6 behavior)",
+                detail="read-back confirmed"
+                if verified
+                else "accepted (rc=0); read-back unconfirmed (known Plasma 6 behavior)",
             )
             if verified:
                 return True, current
@@ -770,7 +812,9 @@ def _set_kde_wallpaper(path: str, *, fill_mode: int | None = None) -> tuple[bool
                 accepted=True,
                 verified=verified,
                 method="evaluateScript",
-                detail="read-back confirmed" if verified else "accepted (script done); read-back unconfirmed (known Plasma 6 behavior)",
+                detail="read-back confirmed"
+                if verified
+                else "accepted (script done); read-back unconfirmed (known Plasma 6 behavior)",
             )
             if verified:
                 return True, current
@@ -812,7 +856,7 @@ def _kde_set_for_screen_script(image_value: str, targets: list[dict[str, int]], 
     """
     fill_line = ""
     if fill_mode is not None:
-        fill_line = f"\n            d.writeConfig(\"FillMode\", {int(fill_mode)});"
+        fill_line = f'\n            d.writeConfig("FillMode", {int(fill_mode)});'
     return """
 // plasma-apply-wallpaperimage 是全输出命令（对全部屏幕生效），按显示器设置禁用——只走 evaluateScript。
 var targets = %s;
@@ -1053,9 +1097,7 @@ def _xfce_image_style_properties() -> list[str]:
 def _xfce_image_style_value(fit_mode: str) -> int:
     # xfdesktop enum order: None=0, Centered=1, Tiled=2, Stretched=3,
     # Scaled=4 (letterbox), Zoomed=5 (crop-to-fill).
-    return {"居中": 1, "平铺": 2, "拉伸": 3, "适应": 4, "填充": 5}.get(
-        _normalize_linux_fit_mode(fit_mode), 5
-    )
+    return {"居中": 1, "平铺": 2, "拉伸": 3, "适应": 4, "填充": 5}.get(_normalize_linux_fit_mode(fit_mode), 5)
 
 
 def _set_xfce_fit_mode(fit_mode: str) -> tuple[bool, str]:
@@ -1065,9 +1107,7 @@ def _set_xfce_fit_mode(fit_mode: str) -> tuple[bool, str]:
     changed = 0
     errors: list[str] = []
     for prop in _xfce_image_style_properties():
-        rc, out, err = _run_args(
-            ["xfconf-query", "-c", "xfce4-desktop", "-p", prop, "-s", str(value)], timeout=10
-        )
+        rc, out, err = _run_args(["xfconf-query", "-c", "xfce4-desktop", "-p", prop, "-s", str(value)], timeout=10)
         if rc != 0:
             rc, out, err = _run_args(
                 ["xfconf-query", "-c", "xfce4-desktop", "-p", prop, "-n", "-t", "int", "-s", str(value)],
@@ -1092,7 +1132,9 @@ def _set_xfce_wallpaper(path: str) -> tuple[bool, str]:
     for prop in _xfce_wallpaper_properties():
         rc, out, err = _run_args(["xfconf-query", "-c", "xfce4-desktop", "-p", prop, "-s", abs_path], timeout=10)
         if rc != 0:
-            rc, out, err = _run_args(["xfconf-query", "-c", "xfce4-desktop", "-p", prop, "-n", "-t", "string", "-s", abs_path], timeout=10)
+            rc, out, err = _run_args(
+                ["xfconf-query", "-c", "xfce4-desktop", "-p", prop, "-n", "-t", "string", "-s", abs_path], timeout=10
+            )
         if rc == 0:
             success_count += 1
         elif err or out:
@@ -1129,12 +1171,18 @@ def _set_feh_or_nitrogen_wallpaper(path: str) -> tuple[bool, str]:
     abs_path = _ensure_existing_file(path)
     mode = _normalize_linux_fit_mode(_LINUX_FIT_MODE)
     feh_option = {
-        "填充": "--bg-fill", "适应": "--bg-max", "拉伸": "--bg-scale",
-        "居中": "--bg-center", "平铺": "--bg-tile",
+        "填充": "--bg-fill",
+        "适应": "--bg-max",
+        "拉伸": "--bg-scale",
+        "居中": "--bg-center",
+        "平铺": "--bg-tile",
     }[mode]
     nitrogen_option = {
-        "填充": "--set-zoom-fill", "适应": "--set-scaled", "拉伸": "--set-auto",
-        "居中": "--set-centered", "平铺": "--set-tiled",
+        "填充": "--set-zoom-fill",
+        "适应": "--set-scaled",
+        "拉伸": "--set-auto",
+        "居中": "--set-centered",
+        "平铺": "--set-tiled",
     }[mode]
     errors: list[str] = []
     for cmd in (["feh", feh_option, abs_path], ["nitrogen", nitrogen_option, "--save", abs_path]):
@@ -1158,9 +1206,7 @@ def _set_linux_wallpaper(path: str) -> None:
     # accepting its successful dconf write there creates a false-positive where
     # ShangBackground reports success but the visible wallpaper never changes.
     if _is_kde_session():
-        primary_setters = (
-            lambda value: _set_kde_wallpaper(value, fill_mode=_kde_fit_mode_value(_LINUX_FIT_MODE)),
-        )
+        primary_setters = (lambda value: _set_kde_wallpaper(value, fill_mode=_kde_fit_mode_value(_LINUX_FIT_MODE)),)
     elif _is_xfce_session():
         primary_setters = (_set_xfce_wallpaper,)
     elif _is_lxde_session():
@@ -1183,7 +1229,13 @@ def _set_linux_wallpaper(path: str) -> None:
     fallback_setters = (_set_pcmanfm_wallpaper, _set_feh_or_nitrogen_wallpaper)
     if not _is_kde_session() and not _is_xfce_session() and not _is_lxde_session() and shutil.which("xfconf-query"):
         fallback_setters = (_set_xfce_wallpaper,) + fallback_setters
-    if not _is_kde_session() and not _is_xfce_session() and not _is_lxde_session() and shutil.which("gsettings") and _is_gsettings_desktop_session():
+    if (
+        not _is_kde_session()
+        and not _is_xfce_session()
+        and not _is_lxde_session()
+        and shutil.which("gsettings")
+        and _is_gsettings_desktop_session()
+    ):
         fallback_setters = (_set_gnome_wallpaper,) + fallback_setters
     for setter in fallback_setters:
         if setter in attempted:
@@ -1222,10 +1274,12 @@ def get_current_wallpaper_platform() -> str:
         # Probe only concrete desktop backends; do not return an unrelated dconf
         # value simply because gsettings happens to be installed.
         getters = tuple(
-            getter for available, getter in (
+            getter
+            for available, getter in (
                 (shutil.which("xfconf-query"), _get_xfce_wallpaper),
                 (shutil.which("gsettings") and _is_gsettings_desktop_session(), _get_gnome_wallpaper),
-            ) if available
+            )
+            if available
         )
     for getter in getters:
         ok, detail = getter()
@@ -1300,9 +1354,7 @@ def configure_fit_mode(fit_mode, winreg_module=None, log=None):
             if detail:
                 diagnostics.append(detail)
         elif _is_gsettings_desktop_session() and shutil.which("gsettings"):
-            rc, out, err = _run_args(
-                ["gsettings", "set", "org.gnome.desktop.background", "picture-options", option]
-            )
+            rc, out, err = _run_args(["gsettings", "set", "org.gnome.desktop.background", "picture-options", option])
             applied = rc == 0
             if not applied:
                 diagnostics.append(err or out or f"gsettings exit {rc}")
@@ -1334,16 +1386,24 @@ def configure_fit_mode(fit_mode, winreg_module=None, log=None):
 
 # Cache the desktop window-class names per session to avoid spawning a
 # subprocess on every call (the video focus policy polls every ~1s).
-_DESKTOP_WM_CLASSES = frozenset({
-    "plasmashell", "plasma-shell",  # KDE Plasma
-    "gnome-shell", "gjs", "gnome-shell-extension",  # GNOME
-    "xfdesktop",  # XFCE
-    "pcmanfm-qt", "pcmanfm",  # LXQt / LXDE
-    "mate-desktop", "caja",  # MATE
-    "dde-desktop", "deepin-desktop",  # Deepin
-    "nemo-desktop",  # Cinnamon
-    "budgie-panel",  # Budgie
-})
+_DESKTOP_WM_CLASSES = frozenset(
+    {
+        "plasmashell",
+        "plasma-shell",  # KDE Plasma
+        "gnome-shell",
+        "gjs",
+        "gnome-shell-extension",  # GNOME
+        "xfdesktop",  # XFCE
+        "pcmanfm-qt",
+        "pcmanfm",  # LXQt / LXDE
+        "mate-desktop",
+        "caja",  # MATE
+        "dde-desktop",
+        "deepin-desktop",  # Deepin
+        "nemo-desktop",  # Cinnamon
+        "budgie-panel",  # Budgie
+    }
+)
 _LAST_FOREGROUND_CACHE: tuple[bool, float] = (True, 0.0)
 _FOREGROUND_CACHE_TTL = 0.8  # seconds — avoid spawning xdotool more than ~1x/sec
 
@@ -1366,6 +1426,7 @@ def is_desktop_foreground() -> bool:
     """
     global _LAST_FOREGROUND_CACHE
     import time as _time
+
     now = _time.monotonic()
     cached_val, cached_at = _LAST_FOREGROUND_CACHE
     if now - cached_at < _FOREGROUND_CACHE_TTL:
@@ -1380,12 +1441,9 @@ def _detect_desktop_foreground_uncached() -> bool:
     """Spawn the appropriate subprocess(es) to detect the foreground window."""
     import os as _os
     import sys as _sys
-    is_wayland = (
-        _sys.platform.startswith("linux")
-        and (
-            _os.environ.get("WAYLAND_DISPLAY")
-            or _os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
-        )
+
+    is_wayland = _sys.platform.startswith("linux") and (
+        _os.environ.get("WAYLAND_DISPLAY") or _os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
     )
     if is_wayland:
         return _detect_desktop_foreground_wayland()
@@ -1439,10 +1497,15 @@ def _detect_desktop_foreground_wayland() -> bool:
             )
             rc, out, _err = _run_args(
                 [
-                    "gdbus", "call", "--session",
-                    "--dest", "org.gnome.Shell",
-                    "--object-path", "/org/gnome/Shell",
-                    "--method", "org.gnome.Shell.Eval",
+                    "gdbus",
+                    "call",
+                    "--session",
+                    "--dest",
+                    "org.gnome.Shell",
+                    "--object-path",
+                    "/org/gnome/Shell",
+                    "--method",
+                    "org.gnome.Shell.Eval",
                     script,
                 ],
                 timeout=3,

@@ -114,14 +114,9 @@ def _validate_linux_build_host(tool: str | None = None) -> None:
         package_hint = ""
         if any(name in {"objdump", "objcopy"} for name in missing_commands):
             package_hint = " Install the distro binutils package."
-        raise RuntimeError(
-            "Linux release build tools are missing: " + ", ".join(missing_commands) + "." + package_hint
-        )
+        raise RuntimeError("Linux release build tools are missing: " + ", ".join(missing_commands) + "." + package_hint)
     if tool == "nuitka" and not any(shutil.which(name) for name in ("gcc", "clang", "cc", "zig")):
-        raise RuntimeError(
-            "Nuitka Linux release builds require a C11-capable compiler "
-            "(GCC, Clang, or Zig)"
-        )
+        raise RuntimeError("Nuitka Linux release builds require a C11-capable compiler (GCC, Clang, or Zig)")
     ldd = shutil.which("ldd")
     assert ldd is not None  # checked in the required-command gate above
     plugin = _linux_qt_plugin_path()
@@ -551,7 +546,11 @@ def validate_frozen_runtime(plan: BuildPlan, executable: Path | None) -> tuple[s
         if payload.get("schema") != 1:
             errors.append(f"unexpected frozen verification schema: {payload.get('schema')!r}")
         verification = payload.get("verification")
-        if not isinstance(verification, dict) or verification.get("mode") != "real" or verification.get("executed") is not True:
+        if (
+            not isinstance(verification, dict)
+            or verification.get("mode") != "real"
+            or verification.get("executed") is not True
+        ):
             errors.append("frozen verification evidence is not marked as a real executed runtime check")
         if payload.get("app_version") != read_version():
             errors.append(
@@ -586,9 +585,7 @@ def validate_frozen_runtime(plan: BuildPlan, executable: Path | None) -> tuple[s
             errors.append(f"frozen runtime resource root is invalid: {resource_root!r}")
         else:
             if reported_root != packaged_root and not reported_root.is_relative_to(packaged_root):
-                errors.append(
-                    f"frozen runtime resource root escapes the packaged application: {reported_root}"
-                )
+                errors.append(f"frozen runtime resource root escapes the packaged application: {reported_root}")
         enabled = payload.get("enabled_features")
         if not isinstance(enabled, list) or set(map(str, enabled)) != set(plan.features):
             errors.append(f"frozen runtime feature set mismatch: expected {sorted(plan.features)}, found {enabled!r}")
@@ -603,8 +600,7 @@ def validate_frozen_runtime(plan: BuildPlan, executable: Path | None) -> tuple[s
             errors.append(f"frozen Qt startup smoke test failed: {qt_smoke!r}")
         elif plan.target == "linux" and qt_smoke.get("platform_plugin") != "xcb":
             errors.append(
-                "frozen Linux Qt smoke test did not load the XCB platform plugin: "
-                f"{qt_smoke.get('platform_plugin')!r}"
+                f"frozen Linux Qt smoke test did not load the XCB platform plugin: {qt_smoke.get('platform_plugin')!r}"
             )
         diagnostics = payload.get("diagnostics")
         if not isinstance(diagnostics, dict) or diagnostics.get("healthy") is not True:

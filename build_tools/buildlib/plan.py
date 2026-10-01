@@ -125,14 +125,9 @@ def create_plan(
     # still succeed, but now emit an explicit warning so the preview matches
     # the real behavior.
     require_bundled_real = "video" in selected and (
-        mpv_runtime == "bundled"
-        or (target == "windows" and profile == "full" and mpv_runtime == "auto")
+        mpv_runtime == "bundled" or (target == "windows" and profile == "full" and mpv_runtime == "auto")
     )
-    require_bundled = (
-        require_bundled_real
-        if not dry_run
-        else ("video" in selected and mpv_runtime == "bundled")
-    )
+    require_bundled = require_bundled_real if not dry_run else ("video" in selected and mpv_runtime == "bundled")
     mpv = resolve_build_runtime(
         PROJECT_ROOT,
         target,

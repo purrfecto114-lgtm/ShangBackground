@@ -7,8 +7,16 @@ from app import support
 
 def _args(**overrides):
     values = dict(
-        hide=False, from_context_menu=False, previous=False, next=False, random=False,
-        set_wallpaper=None, jump_to_wallpaper=False, show=False, quit=False, wait_for_exit=False,
+        hide=False,
+        from_context_menu=False,
+        previous=False,
+        next=False,
+        random=False,
+        set_wallpaper=None,
+        jump_to_wallpaper=False,
+        show=False,
+        quit=False,
+        wait_for_exit=False,
     )
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -22,6 +30,7 @@ def test_action_args_missing_wallpaper_returns_usage_failure(tmp_path):
 def test_action_args_exception_returns_failure(monkeypatch):
     def boom():
         raise RuntimeError("boom")
+
     monkeypatch.setattr(support.core, "previous_wallpaper", boom)
     assert support._handle_action_args(_args(previous=True)) == 1
 
@@ -59,6 +68,7 @@ def test_action_args_set_wallpaper_propagates_mode_transaction_failure(monkeypat
 
 def test_entry_propagates_direct_ipc_failure():
     from pathlib import Path
+
     text = Path("src/app/entry.py").read_text(encoding="utf-8")
     # Static regression guard: direct actions must no longer fall through to unconditional success.
     assert "if direct_action_launch and not forwarded:" in text
@@ -68,12 +78,17 @@ def test_entry_propagates_direct_ipc_failure():
 def test_source_entry_action_does_not_require_pyside_for_missing_file(tmp_path):
     import subprocess
     import sys
+
     missing = tmp_path / "missing.jpg"
     completed = subprocess.run(
         [sys.executable, "src/main.py", "--set-wallpaper", str(missing)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, encoding="utf-8", errors="replace",
-        timeout=30, check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=False,
     )
     assert completed.returncode == 2
     assert "壁纸文件不存在" in completed.stderr + completed.stdout

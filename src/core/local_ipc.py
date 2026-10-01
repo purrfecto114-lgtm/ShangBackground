@@ -1,4 +1,5 @@
 """Authenticated local command channel for the single running GUI instance."""
+
 from __future__ import annotations
 
 import json
@@ -81,11 +82,14 @@ def _message(command: str, payload: Any = None, *, identity: dict[str, Any] | No
         raise RuntimeError("The running instance has not published an IPC token")
     if command not in ALLOWED_COMMANDS:
         raise ValueError(f"Unsupported local command: {command}")
-    raw = json.dumps(
-        {"version": 1, "token": token, "command": command, "payload": payload},
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8") + b"\n"
+    raw = (
+        json.dumps(
+            {"version": 1, "token": token, "command": command, "payload": payload},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        + b"\n"
+    )
     if len(raw) > MAX_MESSAGE_BYTES:
         raise ValueError("Local command is too large")
     return raw
@@ -141,6 +145,7 @@ except Exception:  # pragma: no cover - import-safe without GUI dependencies
 
 
 if Signal is not None:
+
     class LocalCommandServer(QObject):
         command_received = Signal(str, object)
 
@@ -201,6 +206,7 @@ if Signal is not None:
                     # v1.4.4: Use hmac.compare_digest for timing-attack-resistant
                     # token comparison (Python docs recommend this over ==).
                     import hmac as _hmac
+
                     received_token = str(message.get("token") or "")
                     expected_token = str(identity.get("ipc_token") or "")
                     token_ok = _hmac.compare_digest(received_token, expected_token)
@@ -227,6 +233,7 @@ if Signal is not None:
             if self._handler is not None:
                 self._handler(command, payload)
 else:
+
     class LocalCommandServer:  # pragma: no cover
         def __init__(self, *_args, **_kwargs):
             raise RuntimeError("PySide6 QtNetwork is required for local IPC")

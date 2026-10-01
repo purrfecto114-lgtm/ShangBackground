@@ -4,6 +4,7 @@ This module is deliberately free of Qt, platform backends, file-system access,
 and application configuration.  It owns volatile state only; persistence and
 business decisions remain in their respective services/repositories.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping

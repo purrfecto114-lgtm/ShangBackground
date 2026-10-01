@@ -1,4 +1,5 @@
 """Small, consistent UI contracts for names, help text, and text inputs."""
+
 from __future__ import annotations
 
 from PySide6.QtWidgets import QLabel, QLineEdit, QWidget

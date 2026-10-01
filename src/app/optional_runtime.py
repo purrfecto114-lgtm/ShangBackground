@@ -1,4 +1,5 @@
 """Lazy feature-gated runtime modules used by the legacy engine facade."""
+
 from __future__ import annotations
 
 from importlib import import_module

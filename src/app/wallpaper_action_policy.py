@@ -1,4 +1,5 @@
 """Qt-free mode-aware availability rules for wallpaper playback actions."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -6,6 +6,7 @@ the existing message-only compatibility window; a cold launch detaches a child
 and returns to Explorer immediately.  The child then follows the normal,
 authenticated application startup path.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
@@ -137,9 +138,8 @@ def _spawn_detached(argv: Sequence[str]) -> bool:
     try:
         creationflags = 0
         if os.name == "nt":
-            creationflags = (
-                getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
-                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+            creationflags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(
+                subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200
             )
         subprocess.Popen(
             detached_child_command(argv),

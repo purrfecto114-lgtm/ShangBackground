@@ -1,4 +1,5 @@
 """Qt-free validation for user-entered wallpaper and cache sources."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -118,8 +119,9 @@ def _is_safe_html_url(text: str) -> bool:
         return False
     # Reject Windows device paths
     import re
+
     device_re = re.compile(
-        r'^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)',
+        r"^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)",
         re.IGNORECASE,
     )
     if device_re.match(os.path.basename(text)):

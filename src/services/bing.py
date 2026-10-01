@@ -6,6 +6,7 @@ Bing 壁纸下载器 - 同步版，适合直接集成到 GUI 按钮。
 - 默认 resolution='auto'：检测系统主屏分辨率；检测失败回退 1920x1080。
 - 下载失败时自动尝试 1920x1080、UHD、API 原始 URL。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -146,7 +147,9 @@ class BingDownloader:
                 result.append(url)
         return result
 
-    def fetch_wallpaper_info(self, index: int = 0, mkt: str = "zh-CN", resolution: str | None = "auto") -> Optional[WallpaperInfo]:
+    def fetch_wallpaper_info(
+        self, index: int = 0, mkt: str = "zh-CN", resolution: str | None = "auto"
+    ) -> Optional[WallpaperInfo]:
         res = choose_resolution(resolution, fallback=self.fallback_resolution)
         img = self._fetch_metadata(index, mkt)
         if not img:
@@ -263,7 +266,9 @@ class BingDownloader:
             return self.download_wallpaper(info)
         return None
 
-    def fetch_history(self, days: int = 7, mkt: str = "zh-CN", resolution: str | None = "auto", start_index: int = 0) -> List[WallpaperInfo]:
+    def fetch_history(
+        self, days: int = 7, mkt: str = "zh-CN", resolution: str | None = "auto", start_index: int = 0
+    ) -> List[WallpaperInfo]:
         wallpapers: list[WallpaperInfo] = []
         start_index = max(0, int(start_index or 0))
         days = max(0, min(MAX_SYNC_COUNT, int(days or 0)))
@@ -328,7 +333,11 @@ class BingDownloader:
     def is_bing_cache_file(self, path: Path) -> bool:
         """Only treat files containing 'bing' in the name as managed Bing cache files."""
         try:
-            return path.is_file() and path.suffix.lower() in {'.jpg', '.jpeg', '.png', '.bmp', '.webp'} and 'bing' in path.name.lower()
+            return (
+                path.is_file()
+                and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+                and "bing" in path.name.lower()
+            )
         except OSError:
             return False
 
@@ -348,7 +357,6 @@ class BingDownloader:
             return []
         files.sort(key=self._cache_sort_key, reverse=True)
         return [str(f) for f in files if f.exists()]
-
 
     def delete_oldest_cached_wallpapers(self, count: int, keyword: str = "bing") -> int:
         """Delete a fixed number of oldest cached Bing images, safely limited by filename keyword."""
@@ -378,20 +386,20 @@ class BingDownloader:
                 pass
         return deleted
 
-    def cleanup_cached_wallpapers(self, max_count: int, keyword: str = 'bing') -> int:
+    def cleanup_cached_wallpapers(self, max_count: int, keyword: str = "bing") -> int:
         """Delete old managed Bing cache files beyond max_count.
 
         Safety rule: never delete user images in the same directory unless the filename contains
         the keyword (default: 'bing') and has an image extension.
         """
         max_count = max(0, int(max_count or 0))
-        keyword = (keyword or 'bing').lower()
+        keyword = (keyword or "bing").lower()
         if not self.cache_dir.exists():
             return 0
         candidates = []
         for path in self.cache_dir.iterdir():
             try:
-                if not path.is_file() or path.suffix.lower() not in {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}:
+                if not path.is_file() or path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}:
                     continue
                 if keyword not in path.name.lower():
                     continue

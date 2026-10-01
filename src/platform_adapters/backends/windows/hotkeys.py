@@ -1,4 +1,5 @@
 """Windows RegisterHotKey backend and foreground focus guard."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
@@ -149,15 +150,20 @@ def _window_class(user32, hwnd) -> str:
 
 def _focus_snapshot() -> dict[str, object] | None:
     try:
+
         class POINT(ctypes.Structure):
             _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
         class GUITHREADINFO(ctypes.Structure):
             _fields_ = [
-                ("cbSize", wintypes.DWORD), ("flags", wintypes.DWORD),
-                ("hwndActive", wintypes.HWND), ("hwndFocus", wintypes.HWND),
-                ("hwndCapture", wintypes.HWND), ("hwndMenuOwner", wintypes.HWND),
-                ("hwndMoveSize", wintypes.HWND), ("hwndCaret", wintypes.HWND),
+                ("cbSize", wintypes.DWORD),
+                ("flags", wintypes.DWORD),
+                ("hwndActive", wintypes.HWND),
+                ("hwndFocus", wintypes.HWND),
+                ("hwndCapture", wintypes.HWND),
+                ("hwndMenuOwner", wintypes.HWND),
+                ("hwndMoveSize", wintypes.HWND),
+                ("hwndCaret", wintypes.HWND),
                 ("rcCaret", wintypes.RECT),
             ]
 

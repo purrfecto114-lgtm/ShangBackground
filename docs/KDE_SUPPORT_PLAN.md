@@ -144,7 +144,9 @@ def test_kde_wayland_does_not_claim_mpvpaper_as_verified_backend(monkeypatch):
 
     monkeypatch.setattr(capabilities, "_has", lambda name: name == "dbus_next")
     env = {"XDG_SESSION_TYPE": "wayland", "XDG_CURRENT_DESKTOP": "KDE"}
-    result = capabilities.probe_capabilities(env, which=lambda name: "/usr/bin/mpvpaper" if name == "mpvpaper" else None)
+    result = capabilities.probe_capabilities(
+        env, which=lambda name: "/usr/bin/mpvpaper" if name == "mpvpaper" else None
+    )
     assert result["video_wallpaper"]["runtime_ready"] is False
     assert result["video_wallpaper"]["state"] in {"best_effort", "unsupported"}
     assert "verified" not in str(result["video_wallpaper"]).lower()

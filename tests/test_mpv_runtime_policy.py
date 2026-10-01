@@ -36,7 +36,10 @@ def test_asset_patterns_cover_stable_and_development_windows_names():
     }
     development = {
         "assets": [
-            {"name": "mpv-v0.41.0-dev-g513d3407d-31293954660-x86_64-pc-windows-msvc.zip", "browser_download_url": "https://github.com/example"},
+            {
+                "name": "mpv-v0.41.0-dev-g513d3407d-31293954660-x86_64-pc-windows-msvc.zip",
+                "browser_download_url": "https://github.com/example",
+            },
         ]
     }
     assert mpv_runtime.select_release_asset(stable, "windows", "x86_64")["name"].endswith("msvc.zip")
@@ -110,7 +113,11 @@ def test_nested_mpv_archive_keeps_safe_extraction_guards(tmp_path: Path):
         mpv_runtime.install_downloaded_runtime(
             tmp_path,
             {"tag_name": "v0.41.0", "name": "v0.41.0"},
-            {"name": archive.name, "browser_download_url": "https://github.com/example", "size": archive.stat().st_size},
+            {
+                "name": archive.name,
+                "browser_download_url": "https://github.com/example",
+                "size": archive.stat().st_size,
+            },
             archive,
             target="windows",
             arch="x86",

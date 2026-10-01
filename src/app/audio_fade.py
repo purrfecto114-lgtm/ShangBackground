@@ -1,4 +1,5 @@
 """Small Qt-free helpers for smooth video-volume transitions."""
+
 from __future__ import annotations
 
 

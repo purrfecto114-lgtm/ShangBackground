@@ -4,6 +4,7 @@ The dialog owns close/reject semantics and the autosave affordance.  It does
 not know how settings are stored or how pages are built; the main-window
 controller supplies content and handles ``about_to_close``.
 """
+
 from __future__ import annotations
 
 from PySide6.QtCore import Signal

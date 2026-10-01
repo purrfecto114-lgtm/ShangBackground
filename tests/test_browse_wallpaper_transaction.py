@@ -42,7 +42,9 @@ def test_browse_outside_slideshow_switches_transactionally_to_image(monkeypatch,
         monkeypatch.setattr(
             core,
             "set_wallpaper",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("non-slideshow browse must use mode transaction")),
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("non-slideshow browse must use mode transaction")
+            ),
         )
 
         assert core.apply_browsed_wallpaper(str(target), "browse") is True

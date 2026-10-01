@@ -312,6 +312,37 @@ jobs:
           cp -v "$cursor_lib" "$dist_dir/"
           echo "Copied $cursor_lib into $dist_dir"
 
+      - name: Ad-hoc code sign macOS bundle
+        # v1.6.1: unsigned arm64 Mach-O binaries are killed by the macOS
+        # kernel on launch (Killed: 9) — ad-hoc signing is REQUIRED for
+        # Apple Silicon builds to run at all, and gives x86_64 builds a
+        # stable identity. This is NOT notarization: first launch still
+        # needs System Settings → Privacy & Security → Open Anyway
+        # (documented in README). No trust level changes — only launchability.
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          standalone_dir=$(find "dist-nuitka/macos" -type d -name standalone | head -1)
+          if [ -z "$standalone_dir" ]; then
+            echo "ERROR: no standalone directory found under dist-nuitka/macos"
+            exit 1
+          fi
+          app="$standalone_dir/ShangBackground.app"
+          if [ ! -d "$app" ]; then
+            echo "WARNING: $app not found; skipping ad-hoc signing"
+            exit 0
+          fi
+          # Sign nested code (dylibs/frameworks) first, then the main
+          # executable, then the bundle — --deep alone misses ordering.
+          find "$app" -type f \( -name "*.dylib" -o -name "*.so" \) -print0 |
+            xargs -0 -r -n1 sh -c 'codesign --force --sign - "$0" || true'
+          codesign --force --sign - "$app/Contents/MacOS/ShangBackground"
+          codesign --force --sign - "$app"
+          codesign --verify --strict "$app" || codesign --verify "$app"
+          echo "Ad-hoc signing complete:"
+          codesign -dv "$app" 2>&1 | head -3
+
       - name: Create release archive
         # The variant directory name includes "-html-native" when the html
         # feature is enabled (full profile enables it). We glob-match the

@@ -33,7 +33,9 @@ def test_gnome_wayland_does_not_claim_mpvpaper_backend(monkeypatch: pytest.Monke
     env = {"XDG_SESSION_TYPE": "wayland", "XDG_CURRENT_DESKTOP": "GNOME"}
     monkeypatch.setattr(capabilities, "_has", lambda _name: False)
 
-    result = capabilities.probe_capabilities(env, which=lambda name: "/usr/bin/mpvpaper" if name == "mpvpaper" else None)
+    result = capabilities.probe_capabilities(
+        env, which=lambda name: "/usr/bin/mpvpaper" if name == "mpvpaper" else None
+    )
 
     assert result["video_wallpaper"]["runtime_ready"] is False
     assert result["video_wallpaper"]["state"] == "unsupported"
@@ -107,7 +109,8 @@ def test_kde_multi_monitor_static_requires_plasma_scripting(monkeypatch: pytest.
 
     # (a) 只有 plasma-apply-wallpaperimage：全输出 ready，按显示器不 ready。
     result = capabilities.probe_capabilities(
-        env, which=lambda name: "/usr/bin/plasma-apply-wallpaperimage" if name == "plasma-apply-wallpaperimage" else None
+        env,
+        which=lambda name: "/usr/bin/plasma-apply-wallpaperimage" if name == "plasma-apply-wallpaperimage" else None,
     )
     assert result["static_wallpaper"]["runtime_ready"] is True
     assert result["multi_monitor_static"]["runtime_ready"] is False

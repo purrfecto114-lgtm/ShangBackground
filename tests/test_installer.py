@@ -5,6 +5,7 @@ placeholder rendering, source-layout validation, and CLI contract so the
 installer path stays healthy on every platform (CI runs on Linux/macOS
 without Inno Setup).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -119,9 +120,7 @@ def test_installer_prepare_to_install_does_not_perform_post_copy_sanity_checks()
     here. New-payload sanity checks belong in ``ssPostInstall``.
     """
     text = installer_module.ISS_PATH.read_text(encoding="utf-8")
-    prepare = text.split("function PrepareToInstall", 1)[1].split(
-        "function InitializeUninstall", 1
-    )[0]
+    prepare = text.split("function PrepareToInstall", 1)[1].split("function InitializeUninstall", 1)[0]
     assert "RaiseException" not in prepare
     assert "打包产物缺失" not in prepare
     assert "build-features.json" not in prepare
@@ -131,9 +130,7 @@ def test_installer_prepare_to_install_does_not_perform_post_copy_sanity_checks()
 
 def test_installer_attempts_graceful_upgrade_shutdown_before_restart_manager():
     text = installer_module.ISS_PATH.read_text(encoding="utf-8")
-    prepare = text.split("function PrepareToInstall", 1)[1].split(
-        "function InitializeUninstall", 1
-    )[0]
+    prepare = text.split("function PrepareToInstall", 1)[1].split("function InitializeUninstall", 1)[0]
     assert "ExecAsOriginalUser" in prepare
     assert "--quit --wait-for-exit" in prepare
     assert "GetPackedVersion" in prepare
@@ -233,17 +230,13 @@ def test_uninstaller_uses_dirifempty_fallback_for_data_dir():
     text = installer_module.ISS_PATH.read_text(encoding="utf-8")
     uninstall_delete_section = text.split("[UninstallDelete]", 1)[1].split("[Code]", 1)[0]
     data_dir_lines = [
-        line for line in uninstall_delete_section.splitlines()
-        if "{localappdata}" in line and "{#APP_NAME}" in line
+        line for line in uninstall_delete_section.splitlines() if "{localappdata}" in line and "{#APP_NAME}" in line
     ]
     assert data_dir_lines, "no [UninstallDelete] entry targets the data dir"
     types = [line.split("Type:")[1].split(";")[0].strip() for line in data_dir_lines if "Type:" in line]
-    assert "filesandordirs" in types, (
-        "filesandordirs must be used to recursively delete data dir contents"
-    )
+    assert "filesandordirs" in types, "filesandordirs must be used to recursively delete data dir contents"
     assert "dirifempty" in types, (
-        "dirifempty fallback must be present so the data dir itself is removed "
-        "even when only subdirectories existed"
+        "dirifempty fallback must be present so the data dir itself is removed even when only subdirectories existed"
     )
 
 
@@ -259,12 +252,10 @@ def test_installer_exposes_start_menu_shortcut_option():
     # behavior doesn't trigger false positives.
     setup_section = text.split("[Setup]", 1)[1].split("[Languages]", 1)[0]
     directive_lines = [
-        line.strip() for line in setup_section.splitlines()
-        if line.strip() and not line.strip().startswith(";")
+        line.strip() for line in setup_section.splitlines() if line.strip() and not line.strip().startswith(";")
     ]
     assert any(line.startswith("DisableProgramGroupPage=no") for line in directive_lines), (
-        "DisableProgramGroupPage=no must be set in [Setup] so the Select "
-        "Start Menu Folder page is shown"
+        "DisableProgramGroupPage=no must be set in [Setup] so the Select Start Menu Folder page is shown"
     )
     assert not any(line.startswith("DisableProgramGroupPage=yes") for line in directive_lines), (
         "DisableProgramGroupPage=yes must NOT be set — it silently forces "
@@ -285,24 +276,21 @@ def test_installer_shortcut_comment_uses_app_name_not_product_name():
     icons_section = text.split("[Icons]", 1)[1].split("[InstallDelete]", 1)[0]
     # Only check actual icon lines (skip comments and blank lines).
     icon_lines = [
-        line.strip() for line in icons_section.splitlines()
-        if line.strip() and not line.strip().startswith(";")
+        line.strip() for line in icons_section.splitlines() if line.strip() and not line.strip().startswith(";")
     ]
     assert icon_lines, "no icon entries found in [Icons] section"
     for line in icon_lines:
         if "Comment:" in line:
             # Bare PRODUCT_NAME only (without APP_NAME prefix) is forbidden.
             assert 'Comment: "{#PRODUCT_NAME}"' not in line, (
-                f"Shortcut Comment uses bare PRODUCT_NAME — tooltip won't "
-                f"match the shortcut label: {line}"
+                f"Shortcut Comment uses bare PRODUCT_NAME — tooltip won't match the shortcut label: {line}"
             )
             # The Comment must reference APP_NAME so the tooltip aligns with
             # the shortcut label. The uninstall shortcut uses a Chinese
             # prefix ("卸载 {#APP_NAME}") rather than the literal token, so
             # accept any Comment that contains {#APP_NAME}.
             assert "{#APP_NAME}" in line, (
-                f"Shortcut Comment must reference APP_NAME so the tooltip "
-                f"matches the shortcut label: {line}"
+                f"Shortcut Comment must reference APP_NAME so the tooltip matches the shortcut label: {line}"
             )
 
 
@@ -318,8 +306,7 @@ def test_installer_start_menu_shortcuts_are_task_gated():
     assert group_lines, "no {group} shortcut lines found in [Icons] section"
     for line in group_lines:
         assert "Tasks: startmenu" in line, (
-            f"Start Menu shortcut not guarded by Tasks: startmenu — "
-            f"user cannot opt out: {line.strip()}"
+            f"Start Menu shortcut not guarded by Tasks: startmenu — user cannot opt out: {line.strip()}"
         )
     # The startmenu task must be declared in [Tasks].
     tasks_section = text.split("[Tasks]", 1)[1].split("[Registry]", 1)[0]
@@ -455,9 +442,7 @@ def test_validate_source_layout_accepts_full_bundle_nuitka(tmp_path: Path):
     dist = source / "ShangBackground.dist"
     dist.mkdir(parents=True)
     (dist / "ShangBackground.exe").write_bytes(b"MZ")
-    (dist / "build-features.json").write_text(
-        '{"tool":"nuitka","target":"windows","arch":"x86_64"}', encoding="utf-8"
-    )
+    (dist / "build-features.json").write_text('{"tool":"nuitka","target":"windows","arch":"x86_64"}', encoding="utf-8")
     errors = _validate_source_layout(source)
     assert errors == ()
 
@@ -497,9 +482,7 @@ def test_installer_cli_parser_rejects_non_windows_targets():
 
 
 def test_installer_main_dry_run_returns_zero(capsys: pytest.CaptureFixture[str]):
-    rc = installer_module.main([
-        "--dry-run", "--skip-validate", "--tool", "pyinstaller", "--profile", "lite"
-    ])
+    rc = installer_module.main(["--dry-run", "--skip-validate", "--tool", "pyinstaller", "--profile", "lite"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "Inno Setup command" in out
@@ -520,7 +503,9 @@ def test_installer_script_uses_one_fail_fast_bundle_source():
 
 def test_uninstaller_can_continue_when_installed_executable_is_broken():
     text = installer_module.ISS_PATH.read_text(encoding="utf-8")
-    uninstall_init = text.split("function InitializeUninstall(): Boolean;", 1)[1].split("var\n  DeleteConfigSelected", 1)[0]
+    uninstall_init = text.split("function InitializeUninstall(): Boolean;", 1)[1].split(
+        "var\n  DeleteConfigSelected", 1
+    )[0]
     assert "MB_YESNO" in uninstall_init
     assert "IDYES" in uninstall_init
     assert "Result := False" not in uninstall_init
@@ -553,17 +538,26 @@ def test_validate_source_layout_rejects_selected_tool_mismatch(tmp_path: Path):
     dist = source / "ShangBackground.dist"
     dist.mkdir(parents=True)
     (dist / "ShangBackground.exe").write_bytes(b"MZ")
-    (dist / "build-features.json").write_text(
-        '{"tool":"nuitka","target":"windows","arch":"x86_64"}', encoding="utf-8"
-    )
+    (dist / "build-features.json").write_text('{"tool":"nuitka","target":"windows","arch":"x86_64"}', encoding="utf-8")
     errors = _validate_source_layout(source, expected_tool="pyinstaller")
     assert any("installer tool is pyinstaller" in error for error in errors)
 
 
 def test_real_installer_cannot_skip_validation(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(installer_module, "_print_plan", lambda _plan: None)
-    code = installer_module.main([
-        "--target", "windows", "--tool", "nuitka", "--profile", "full",
-        "--arch", "x86_64", "--input", str(tmp_path / "missing"), "--skip-validate",
-    ])
+    code = installer_module.main(
+        [
+            "--target",
+            "windows",
+            "--tool",
+            "nuitka",
+            "--profile",
+            "full",
+            "--arch",
+            "x86_64",
+            "--input",
+            str(tmp_path / "missing"),
+            "--skip-validate",
+        ]
+    )
     assert code == 2

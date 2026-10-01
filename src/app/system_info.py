@@ -1,4 +1,5 @@
 """Privacy-aware system information for the About page and bug reports."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -26,7 +27,7 @@ def _private_path(value: str | os.PathLike[str] | None) -> str:
     home = os.path.abspath(os.path.expanduser("~"))
     try:
         if os.path.commonpath([home, text]) == home:
-            return "~" + text[len(home):]
+            return "~" + text[len(home) :]
     except (OSError, ValueError):
         pass
     return text
@@ -42,7 +43,6 @@ def _runtime_label() -> str:
     return "source"
 
 
-
 def _desktop_session() -> str:
     values = []
     for key in ("XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP", "DESKTOP_SESSION"):
@@ -54,6 +54,7 @@ def _desktop_session() -> str:
     if sys.platform == "darwin":
         return "macOS Aqua"
     return " / ".join(values) or "unknown"
+
 
 def _mpv_summary(*, probe: bool) -> str:
     try:
@@ -69,6 +70,7 @@ def _mpv_summary(*, probe: bool) -> str:
                 label = "libmpv (direct): " + _private_path(library)
                 if probe:
                     from app.libmpv_runtime import probe_libmpv
+
                     ok, detail = probe_libmpv(library)
                     if ok and "|" in detail:
                         label += " | " + detail.rsplit("|", 1)[-1].strip()

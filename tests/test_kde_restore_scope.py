@@ -11,6 +11,7 @@ REVIEW_REPORT_V1.6.1 指出：``WallpaperBackend`` 只有 get_current/set_wallpa
 - 诊断（doctor）对超范围插件显式 WARN + hint；
 - README/CHANGELOG 声明恢复范围限定为"本地静态图片"。
 """
+
 from __future__ import annotations
 
 import sys
@@ -100,7 +101,13 @@ def _doctor_checks(monkeypatch: pytest.MonkeyPatch, scope_result: dict):
 def test_doctor_passes_when_all_plugins_restorable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     checks = _doctor_checks(
         monkeypatch,
-        {"applicable": True, "reachable": True, "plugins": ["org.kde.image"], "restorable": True, "detail": "wallpaper plugins: org.kde.image"},
+        {
+            "applicable": True,
+            "reachable": True,
+            "plugins": ["org.kde.image"],
+            "restorable": True,
+            "detail": "wallpaper plugins: org.kde.image",
+        },
     )
     assert len(checks) == 1
     assert checks[0].status == "pass"
@@ -110,7 +117,13 @@ def test_doctor_passes_when_all_plugins_restorable(monkeypatch: pytest.MonkeyPat
 def test_doctor_warns_when_plugin_out_of_range(monkeypatch: pytest.MonkeyPatch):
     checks = _doctor_checks(
         monkeypatch,
-        {"applicable": True, "reachable": True, "plugins": ["org.kde.slideshow"], "restorable": False, "detail": "wallpaper plugins: org.kde.slideshow"},
+        {
+            "applicable": True,
+            "reachable": True,
+            "plugins": ["org.kde.slideshow"],
+            "restorable": False,
+            "detail": "wallpaper plugins: org.kde.slideshow",
+        },
     )
     assert checks[0].status == "warn"
     # v1.6.3（schema=3）口径：插件会被重选恢复，但内部配置回落默认值。
@@ -158,14 +171,18 @@ def _run_set(monkeypatch: pytest.MonkeyPatch, *, rc: int, readback_same: bool):
     from platform_adapters.backends.linux import integration
 
     monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/tmp/shangbackground-test-bus")
-    monkeypatch.setattr(integration.shutil, "which", lambda name: "/usr/bin/plasma-apply-wallpaperimage" if name == "plasma-apply-wallpaperimage" else None)
+    monkeypatch.setattr(
+        integration.shutil,
+        "which",
+        lambda name: "/usr/bin/plasma-apply-wallpaperimage" if name == "plasma-apply-wallpaperimage" else None,
+    )
     monkeypatch.setattr(integration, "_run_args", lambda cmd, timeout=8: (rc, "", ""))
     monkeypatch.setattr(integration, "_ensure_existing_file", lambda path: "/tmp/wp.png")
     monkeypatch.setattr(integration, "_file_uri", lambda path: f"file://{path}")
     monkeypatch.setattr(
         integration,
         "_verify_kde_wallpaper",
-        lambda abs_path, timeout=0.5: ((True, abs_path) if readback_same else (False, "")),
+        lambda abs_path, timeout=0.5: (True, abs_path) if readback_same else (False, ""),
     )
     result = integration._set_kde_wallpaper("/tmp/wp.png")
     return result, integration.last_kde_set_outcome()
@@ -202,7 +219,9 @@ def test_last_kde_set_outcome_returns_copy(monkeypatch: pytest.MonkeyPatch):
 
     snapshot = integration.last_kde_set_outcome()
     snapshot["accepted"] = "tampered"
-    assert integration.last_kde_set_outcome() != snapshot or integration.last_kde_set_outcome()["accepted"] != "tampered"
+    assert (
+        integration.last_kde_set_outcome() != snapshot or integration.last_kde_set_outcome()["accepted"] != "tampered"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +246,9 @@ def test_session_facade_scope_addition_keeps_layering_guard():
     同源同法，防止本文件的新增绕过守护）。"""
     import ast
 
-    source = (Path(__file__).resolve().parents[1] / "src" / "platform_adapters" / "session.py").read_text(encoding="utf-8")
+    source = (Path(__file__).resolve().parents[1] / "src" / "platform_adapters" / "session.py").read_text(
+        encoding="utf-8"
+    )
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

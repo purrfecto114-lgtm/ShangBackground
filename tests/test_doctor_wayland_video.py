@@ -18,6 +18,7 @@ linux_video_wallpaper_capability() 消费 probe_capabilities() 的
 5. 门面透传：返回 video_wallpaper 子表的副本，形状含
    state/runtime_ready 键。
 """
+
 from __future__ import annotations
 
 import sys
@@ -212,5 +213,7 @@ def test_session_facade_returns_empty_dict_on_malformed_probe(monkeypatch: pytes
 
     monkeypatch.setattr(capabilities, "probe_capabilities", lambda env=None, which=None: {"static_wallpaper": {}})
     assert session_facade.linux_video_wallpaper_capability() == {}
-    monkeypatch.setattr(capabilities, "probe_capabilities", lambda env=None, which=None: {"video_wallpaper": "corrupted"})
+    monkeypatch.setattr(
+        capabilities, "probe_capabilities", lambda env=None, which=None: {"video_wallpaper": "corrupted"}
+    )
     assert session_facade.linux_video_wallpaper_capability() == {}

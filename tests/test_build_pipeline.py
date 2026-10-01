@@ -276,9 +276,7 @@ def test_publish_retries_on_transient_permission_error(tmp_path: Path, monkeypat
     assert attempts["count"] >= 3
 
 
-def test_publish_falls_back_to_copytree_when_replace_permanently_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_publish_falls_back_to_copytree_when_replace_permanently_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """If every ``os.replace`` retry fails, the publish step must fall back to
     ``shutil.copytree`` + ``shutil.rmtree`` so a stray locked file does not
     block the build permanently."""

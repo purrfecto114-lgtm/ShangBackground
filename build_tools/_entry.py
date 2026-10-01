@@ -3,6 +3,7 @@
 All command-line wrappers delegate here so there is only one parser and one
 backend implementation for each freezer.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence

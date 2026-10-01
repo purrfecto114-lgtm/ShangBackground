@@ -4,6 +4,7 @@ Desktop launchers do not consistently export ``XDG_SESSION_TYPE``.  All Linux
 backends must therefore use the same fallback order so capability probing and
 runtime dispatch cannot disagree about X11 versus Wayland.
 """
+
 from __future__ import annotations
 
 import os

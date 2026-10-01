@@ -6,6 +6,7 @@ ShangBackground process loses the final job handle, Windows terminates every
 associated renderer process (and inherited descendants) when assignment is
 supported by the host environment.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable

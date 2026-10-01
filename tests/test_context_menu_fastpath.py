@@ -49,26 +49,32 @@ def test_context_fastpath_detaches_cold_start_when_no_instance():
 
 
 def test_context_fastpath_child_marker_prevents_recursive_detach():
-    assert handle_context_menu_fastpath(
-        [
-            "ShangBackground.exe",
-            "--from-context-menu",
-            "--previous",
-            "--context-menu-dispatched-child",
-        ],
-        is_windows=True,
-        sender=lambda _command: (_ for _ in ()).throw(AssertionError("must not send")),
-        spawner=lambda _argv: (_ for _ in ()).throw(AssertionError("must not spawn")),
-    ) is None
+    assert (
+        handle_context_menu_fastpath(
+            [
+                "ShangBackground.exe",
+                "--from-context-menu",
+                "--previous",
+                "--context-menu-dispatched-child",
+            ],
+            is_windows=True,
+            sender=lambda _command: (_ for _ in ()).throw(AssertionError("must not send")),
+            spawner=lambda _argv: (_ for _ in ()).throw(AssertionError("must not spawn")),
+        )
+        is None
+    )
 
 
 def test_context_fastpath_is_windows_only():
-    assert handle_context_menu_fastpath(
-        ["main.py", "--from-context-menu", "--next"],
-        is_windows=False,
-        sender=lambda _command: True,
-        spawner=lambda _argv: True,
-    ) is None
+    assert (
+        handle_context_menu_fastpath(
+            ["main.py", "--from-context-menu", "--next"],
+            is_windows=False,
+            sender=lambda _command: True,
+            spawner=lambda _argv: True,
+        )
+        is None
+    )
 
 
 def test_context_command_preserves_set_wallpaper_payload(tmp_path):
@@ -146,6 +152,6 @@ def test_primary_local_ipc_set_wallpaper_uses_mode_transaction():
     # switch_wallpaper_mode("图片", updates={"single_image": ...}) transaction
     # (covered by test_ipc_set_wallpaper_routes_through_mode_transaction).
     assert "core.queue_ipc_wallpaper_command" in local_block
-    assert 'set_wallpaper|{target}' in local_block
+    assert "set_wallpaper|{target}" in local_block
     assert "core.switch_wallpaper_mode" not in local_block
     assert "core.set_wallpaper(" not in local_block
