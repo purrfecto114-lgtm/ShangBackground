@@ -262,6 +262,12 @@ jobs:
         run: |
           python -m pip install --upgrade "pip>=25" -r requirements/test.txt
           python -m pytest -q
+        env:
+          # Headless Qt platform plugin — same contract as the CI workflow.
+          # Without it, build_verification._qt_smoke_test's widget.show()
+          # aborts the process (SIGABRT, uncatchable from Python) on the
+          # Linux build runner's default xcb platform with no X server.
+          QT_QPA_PLATFORM: offscreen
 
       - name: Build validated full standalone package (Nuitka + UPX)
         # Full profile = all features (video, html, bing, hotkeys, updates, fonts).
