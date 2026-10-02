@@ -47,51 +47,41 @@ def _runtime_package(plan: BuildPlan, *, materialize: bool) -> tuple[Path | None
     # configuration contract. A real build always stages the verified payload.
     config = plan.generated_dir / "shangbackground-mpv.nuitka-package.config.yml"
     when = {"windows": "win32", "linux": "linux", "macos": "macos"}[plan.target]
-    lines = ["---", "- module-name: 'shangbackground_native_runtime'", "  dlls:"]
+    # v1.6.2: the payload ships as data-files, NEVER as `dlls` entries.
+    # Nuitka 4.1.3's UPX plugin compresses every dll/exe entry point copied
+    # through the ``dlls`` mechanism (UpxPlugin.onCopiedDLL has no per-file
+    # opt-out), and UPX-packed mpv.exe / codec DLLs are a well-known
+    # antivirus false-positive magnet. The release smoke test only runs
+    # --version, so a UPX-broken mpv.exe would ship unnoticed. Data files
+    # are copied verbatim — no UPX, no dependency scanning (the payload is
+    # self-contained and loaded via app-side path resolution, not Nuitka's
+    # loader). The app's own binary still gets UPX-compressed normally.
+    # The payload is staged directly INTO the package directory (see
+    # plan.create_plan): Nuitka data-file patterns preserve the path
+    # relative to the package folder, so only a flat staging layout lands
+    # flat in bin/mpv — which is what verify_bundled_runtime_output()
+    # enforces (mpv.exe and runtime.json as direct children of bin/mpv).
+    # Note: ``data-files`` must be an ARRAY of items (Nuitka 4.1.3 jsonschema
+    # rejects a bare mapping — validated against the real schema in the
+    # release sandbox; the pre-v1.6.2 single-mapping form was never loadable).
+    lines = [
+        "---",
+        "- module-name: 'shangbackground_native_runtime'",
+        "  data-files:",
+        "    - patterns:",
+    ]
     if plan.target == "windows":
-        lines.extend(
-            (
-                "    - from_filenames:",
-                "        relative_path: 'payload'",
-                "        prefixes: ['']",
-                "        suffixes: ['dll']",
-                "      dest_path: 'bin/mpv'",
-                f"      when: '{when}'",
-                "    - from_filenames:",
-                "        relative_path: 'payload'",
-                "        prefixes: ['mpv']",
-                "        suffixes: ['exe']",
-                "      dest_path: 'bin/mpv'",
-                "      executable: 'yes'",
-                f"      when: '{when}'",
-            )
-        )
+        lines.extend(("        - '*.dll'", "        - '*.exe'"))
     elif plan.target == "linux":
-        lines.extend(
-            (
-                "    - from_filenames:",
-                "        relative_path: 'payload'",
-                "        prefixes: ['lib']",
-                "      dest_path: 'bin/mpv'",
-                f"      when: '{when}'",
-                "    - from_filenames:",
-                "        relative_path: 'payload'",
-                "        prefixes: ['mpv']",
-                "      dest_path: 'bin/mpv'",
-                "      executable: 'yes'",
-                f"      when: '{when}'",
-            )
-        )
+        lines.extend(("        - 'lib*.so*'", "        - 'mpv'"))
     lines.extend(
         (
-            "  data-files:",
-            "    patterns:",
-            "      - 'payload/*.txt'",
-            "      - 'payload/*.json'",
-            "      - 'payload/*.conf'",
-            "      - 'payload/licenses/*'",
-            "    dest_path: 'bin/mpv'",
-            f"    when: '{when}'",
+            "        - '*.txt'",
+            "        - '*.json'",
+            "        - '*.conf'",
+            "        - 'licenses/*'",
+            "      dest_path: 'bin/mpv'",
+            f"      when: '{when}'",
         )
     )
     if materialize:

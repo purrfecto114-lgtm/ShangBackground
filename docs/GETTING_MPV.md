@@ -10,7 +10,7 @@ Windows 的首选视频路径不是 `python-mpv`，也不再把完整主程序�
 4. Linux 保留各桌面环境/Wayland 的平台适配路径；
 5. macOS 走 AVFoundation/AppKit，不依赖 libmpv。
 
-需要区分两种产物形态：**bundled/auto 构建必须包含完整、同架构的 `mpv.exe` 运行时**（及其同目录 DLL 依赖）；而 GitHub Release 的官方发布包按 `--mpv-runtime system` 构建（见 `.github/workflows/release.yml`），**产物内不含 `mpv.exe`**，Windows 视频壁纸依赖目标机器自行安装、可被程序找到的 mpv。运行时代码仍兼容旧安装遗留的 libmpv-only payload，但构建器不再接受它作为 bundled 构建输入，避免再次生成“启动完整 ShangBackground 子进程承载 libmpv”的 bundle。`python-mpv` 包不是运行依赖。
+需要区分两种产物形态：**bundled/auto 构建必须包含完整、同架构的 `mpv.exe` 运行时**（及其同目录 DLL 依赖）；v1.6.2 起 GitHub Release 的 Windows 官方发布包同样按 bundled 构建（见 `.github/workflows/release.yml` 的 "Download verified MPV runtime" 步骤，固定 v0.41.0 msvc 资产摘要）——**产物内含 `bin/mpv/mpv.exe`，视频壁纸开箱可用**；Linux 发布包按 `--mpv-runtime system` 构建，由目标发行版提供 libmpv/mpv。运行时代码仍兼容旧安装遗留的 libmpv-only payload，但构建器不再接受它作为 bundled 构建输入，避免再次生成“启动完整 ShangBackground 子进程承载 libmpv”的 bundle。`python-mpv` 包不是运行依赖。
 
 ## 播放就绪验证
 
@@ -71,11 +71,11 @@ python build_tools/build.py mpv prune --target windows --arch x86_64 --keep 2
 <application>/bin/mpv/
 ```
 
-GitHub Release 的官方发布包统一使用 `--mpv-runtime system`：产物不含 `bin/mpv/`，目标机器需自行安装 mpv 并保证可被程序找到（如加入 `PATH`）。
+v1.6.2 起 GitHub Release 的 Windows 发布包即 bundled 构建：CI 先 `mpv download --channel stable --sha256 <固定摘要>`（上游发新版时 fail-closed，需人工复核后更新摘要）再 `--mpv-runtime bundled`。捆绑 payload 经 Nuitka data-files 平铺拷贝到 `bin/mpv/`——不经过 UPX（UPX 压缩的 mpv.exe 是杀毒误报重灾区），与独立验证的下载字节一致；`runtime.json` 记录来源版本与 SHA-256。
 
 ### Linux
 
-`auto` 先使用本地 libmpv；未找到时记录为 `system`，由目标发行版提供 libmpv/mpv。跨发行版发布时不能把本机 `.so` 无条件复制到其他系统。
+`auto` 先使用本地 libmpv；未找到时记录为 `system`，由目标发行版提供 libmpv/mpv。跨发行版发布时不能把本机 `.so` 无条件复制到其他系统（glibc 绑定）——GitHub Release 的 Linux 发布包因此维持 system 模式。
 
 ### macOS
 

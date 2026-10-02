@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.6.1-0ea5e9?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-v1.6.2-0ea5e9?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/PySide6-6.11-41cd52?style=flat-square&logo=qt&logoColor=white" alt="PySide6">
   <img src="https://img.shields.io/badge/License-GPLv3-blue?style=flat-square" alt="GPLv3">
@@ -126,9 +126,14 @@ python build_tools/build.py mpv list --target windows --arch x86_64
 Windows 安装包使用 Nuitka full standalone + UPX，再由 [Inno Setup 7](https://jrsoftware.org/isdl.php) 封装。UPX 4.2.0+ 应位于 `PATH`，也可通过 `SHANGBACKGROUND_UPX_BINARY` 指定：
 
 ```bash
-# 构建并验证 Nuitka full standalone；缺少 UPX 时直接失败
-python build_tools/build.py --tool nuitka --target windows --profile full --mode standalone --mpv-runtime system --arch x86_64 --upx
+# 构建并验证 Nuitka full standalone（bundled：需先 mpv download，与官方发布包同路径）；缺少 UPX 时直接失败
+python build_tools/build.py --tool nuitka --target windows --profile full --mode standalone --mpv-runtime bundled --arch x86_64 --upx
 
+# 或构建依赖系统 mpv 的精简形态（与 Linux 发布包同策略）
+python build_tools/build.py --tool nuitka --target windows --profile full --mode standalone --mpv-runtime system --arch x86_64 --upx
+```
+
+```bash
 # 用同一份产物生成 setup.exe（输出在 dist-installer/windows/<variant>/）
 python build_tools/build.py installer --tool nuitka --target windows --profile full --arch x86_64
 

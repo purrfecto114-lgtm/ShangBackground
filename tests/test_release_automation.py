@@ -120,17 +120,59 @@ def test_release_workflow_builds_windows_installer():
 
 def test_release_workflow_uses_nuitka_full_with_upx():
     """``release.yml`` must use Nuitka (not PyInstaller) with the full profile
-    and UPX compression for all three platforms. The full profile includes
+    and UPX compression for Windows and Linux. The full profile includes
     all features (video, html, bing, hotkeys, updates, fonts); UPX reduces
     binary size 30-60% on Windows/Linux."""
     release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
     assert "--tool nuitka" in release_workflow
     assert "--profile full" in release_workflow
     assert "--upx" in release_workflow
+    # Linux/macOS keep the system-runtime contract; Windows bundling is
+    # pinned by test_release_workflow_bundles_mpv_on_windows.
     assert "--mpv-runtime system" in release_workflow
     # The release archive path must point to dist-nuitka, not dist-pyinstaller.
     assert "dist-nuitka/" in release_workflow
     assert "dist-pyinstaller/" not in release_workflow
+
+
+def test_release_workflow_bundles_mpv_on_windows():
+    """v1.6.2: the Windows release build must bundle a verified mpv.exe so
+    video wallpapers work out of the box. v1.6.1 and earlier built with
+    ``--mpv-runtime system``, requiring every user to install MPV manually
+    (the stale v1.5-era "asset format mismatch" note is obsolete: mpv's
+    stable release publishes mpv-v0.41.0-x86_64-pc-windows-msvc.zip, which
+    matches the downloader's pinned patterns). Linux keeps the system
+    libmpv contract (cross-distro glibc compatibility); macOS uses the
+    native AVFoundation backend."""
+    release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    # Fail with a readable assertion (not IndexError) if a split marker
+    # disappears — 36-V finding #4: a missing marker must read as "step
+    # vanished", not as an opaque string-index error.
+    for marker in (
+        "- name: Download verified MPV runtime",
+        "- name: Build validated full standalone package",
+        "- name: Copy libxcb-cursor",
+    ):
+        assert marker in release_workflow, f"release.yml lost step marker: {marker}"
+    # The verified download step must exist and pin the archive digest
+    # (fail-closed against upstream mpv releases).
+    download_step = release_workflow.split("- name: Download verified MPV runtime", 1)[1]
+    download_step = download_step.split("- name: Build validated full standalone package", 1)[0]
+    assert "mpv download --target windows --arch x86_64 --channel stable" in download_step
+    assert "--sha256 4e197f729f5071c6772f35fffd96e0f36e3e8a044bd9479b136bb09b7c6a80ff" in download_step
+    assert "mpv verify --target windows --arch x86_64" in download_step
+    # The build step must select bundled ONLY for Windows (system elsewhere).
+    build_step = release_workflow.split("- name: Build validated full standalone package", 1)[1]
+    build_step = build_step.split("- name: Copy libxcb-cursor", 1)[0]
+    if_line = 'if [ "${{ matrix.target }}" = "windows" ]; then'
+    assert if_line in build_step
+    # Association matters, not just token presence: a swapped then/else
+    # (Windows system, Linux/macOS bundled) passed all three bare
+    # assertions above during 36-V mutation testing — the whole 518-test
+    # suite stayed green. Pin each runtime flag to its own branch.
+    then_body, else_body = build_step.split(if_line, 1)[1].split("else", 1)
+    assert "args+=(--mpv-runtime bundled)" in then_body
+    assert "args+=(--mpv-runtime system)" in else_body
 
 
 def test_release_workflow_installs_upx():
@@ -145,15 +187,41 @@ def test_release_workflow_installs_upx():
 
 
 def test_release_workflow_installs_libmpv_on_linux():
-    """``release.yml`` must install libmpv on Linux so the full video feature
-    can link against the system MPV runtime during the frozen-runtime check.
-    libmpv2 is included in the main apt-get install step (not a separate
+    """``release.yml`` must install libmpv on Linux in both the release-gate
+    (prepare) job and the build job, so the full video feature can link
+    against the system MPV runtime during the frozen-runtime check and the
+    suite runs in the same libmpv-present shape as the CI tests job.
+    libmpv2 is included in the main apt-get install steps (not a separate
     redundant step)."""
     release_workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
-    assert "libmpv2" in release_workflow
+    # Pin the package in BOTH apt-get install commands (prepare/release-gate
+    # and build job). A bare count("libmpv2") >= 2 is too weak — one comment
+    # mention plus a single surviving apt line satisfies it, so removing
+    # either package individually survived the old assertion (v1.6.2
+    # mutation-tested during acceptance).
+    assert "libxkbcommon0 libxcb-cursor0 libglib2.0-0 libmpv2" in release_workflow
+    assert "libmpv2 upx-ucl" in release_workflow
     # The redundant "Install libmpv" step was removed; libmpv2 is now
-    # installed in the main Linux packaging prerequisites step.
+    # installed in the main Linux packaging prerequisites steps.
     assert "Install libmpv (Linux, full video feature)" not in release_workflow
+
+
+def test_ci_workflow_installs_libmpv_on_linux_test_legs():
+    """v1.6.2: the CI tests job must install libmpv2 on Linux so
+    libmpv_runtime.runtime_available() exercises a real dlopen on every CI
+    run instead of only the not-found path. Proven safe: the release build
+    job's Linux leg has run the full suite with libmpv2 installed since
+    v1.6.1 (the suite is availability-tolerant)."""
+    ci_workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+    tests_step = ci_workflow.split("- name: Install Linux test prerequisites", 1)[1]
+    tests_step = tests_step.split("- name: Install test dependencies", 1)[0]
+    # Pin the package inside the actual apt-get command, not anywhere in the
+    # step: the step's comment block also mentions "libmpv2", so the bare
+    # substring assertion survived removal of the package from the install
+    # line (v1.6.2 mutation-tested during acceptance). Comments live before
+    # the ``run: >`` block, so splitting past it leaves only the command.
+    apt_command = tests_step.split("run: >", 1)[1]
+    assert "libmpv2" in apt_command
 
 
 def test_release_workflow_does_not_force_prerelease():

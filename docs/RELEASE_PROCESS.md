@@ -33,18 +33,25 @@
 
 ## 自动发布配置
 
-正式自动产物使用 Nuitka `full + standalone`，Windows/Linux 强制启用 UPX：
+正式自动产物使用 Nuitka `full + standalone`，Windows/Linux 强制启用 UPX。MPV 运行时策略按目标平台区分（v1.6.2 起，见 `.github/workflows/release.yml`）：
+
+- **Windows：bundled** —— CI 先执行“Download verified MPV runtime”步骤（`mpv download --channel stable --sha256 <固定摘要>` 对 mpv 稳定版资产钉住摘要，上游发新版时 fail-closed，需人工复核后更新摘要），再 `mpv verify`，最后 `--mpv-runtime bundled` 构建真实产物（无已验证运行时即硬失败）。产物内含 `bin/mpv/mpv.exe`，视频壁纸开箱可用；payload 经 Nuitka data-files 平铺拷贝，不经过 UPX；等效本地命令：
 
 ```bash
+python build_tools/build.py mpv download --target windows --arch x86_64 --channel stable --sha256 <摘要>
+python build_tools/build.py mpv verify --target windows --arch x86_64 --version auto
 python build_tools/build.py \
   --tool nuitka \
-  --target <host> \
+  --target windows \
   --profile full \
   --mode standalone \
-  --mpv-runtime system \
-  --arch <host-arch> \
+  --mpv-runtime bundled \
+  --arch x86_64 \
   --upx
 ```
+
+- **Linux：system** —— 目标发行版提供 libmpv（捆绑构建机的 `.so` 会把发布绑死在 runner 的 glibc 上）；
+- **macOS：原生 AVFoundation 后端**，不涉及 mpv（等效 `--mpv-runtime system`，仅作占位）。
 
 `full` 包含视频、HTML、Bing、全局热键、更新和字体。UPX 在 Windows/Linux 是发布门禁，macOS 因签名和 ABI 约束自动禁用。动态壁纸仍必须在对应桌面真机验收。
 
@@ -105,21 +112,24 @@ python .github/scripts/release.py package \
 
 CI 之外，开发者也可以在本机生成 `setup.exe`：
 
-1. 先用 Nuitka + UPX 产出已验证的 full standalone 目录：
+1. 先用 Nuitka + UPX 产出已验证的 full standalone 目录（bundled：与官方发布包同路径，需先 `mpv download`；完整步骤见上文“自动发布配置”）：
 
    ```bash
+   python build_tools/build.py mpv download --target windows --arch x86_64 --channel stable
    python build_tools/build.py --tool nuitka --target windows \
-     --profile full --mode standalone --mpv-runtime system --arch x86_64 --upx
+     --profile full --mode standalone --mpv-runtime bundled --arch x86_64 --upx
    ```
+
+   产物目录名携带实际解析到的运行时（如 `full-html-native-x86_64-mpv-v0.41.0`，可用 `mpv list` 查看已安装的 runtime id）。
 
 2. 安装 [Inno Setup 7 x64](https://jrsoftware.org/isdl.php)，或设置 `SHANGBACKGROUND_ISCC` 指向其 `ISCC.exe`。
 
-3. 调用 `installer` 子命令：
+3. 调用 `installer` 子命令（`--input` 指向上一步的 standalone 目录）：
 
    ```bash
    python build_tools/build.py installer --tool nuitka \
      --target windows --profile full --arch x86_64 \
-     --input dist-nuitka/windows/full-html-native-x86_64-mpv-system/standalone \
+     --input dist-nuitka/windows/full-html-native-x86_64-mpv-v0.41.0/standalone \
      --output-dir dist-release
    ```
 

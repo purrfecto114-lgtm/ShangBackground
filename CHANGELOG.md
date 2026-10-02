@@ -2,6 +2,20 @@
 
 本文件记录 ShangBackground 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.6.2] - 2026-10-02
+
+v1.6.2 是发布产物完整性修复：Windows 官方发布包此前不含 MPV 运行时（`--mpv-runtime system`），视频壁纸开箱不可用，每位用户需自行安装 MPV——v1.5 时代留下的"资产格式不匹配导致自动下载失效"注记经实测已过时（mpv v0.41.0 稳定版发布 `mpv-v0.41.0-x86_64-pc-windows-msvc.zip`，与构建工具的固定模式完全匹配，GitHub 现为每个资产附带 SHA-256 摘要，下载器双重校验）。
+
+### 修复
+
+- **Windows 发布包内置 MPV 运行时（发布产物完整性）** — release.yml Windows 构建腿新增"Download verified MPV runtime"步骤：`mpv download --channel stable --sha256 4e197f…`（对 mpv v0.41.0 x86_64 msvc 资产固定摘要，上游发新版时 fail-closed 提示人工复核）+ `mpv verify`；构建参数 Windows 改 `--mpv-runtime bundled`（真实构建无已验证运行时即硬失败）。Linux 维持 system 模式（跨发行版 glibc 兼容性：捆绑构建机的 .so 会把发布绑死在 runner 的 glibc 上），macOS 维持原生 AVFoundation 后端。沙箱动态验证：下载 v0.41.0（73.6 MiB）→ PE 架构校验 → 错误摘要 exit 2 / 正确摘要 exit 0（幂等）→ `mpv verify` OK → 跨目标 dry-run 构建计划解析 `MPV bundled:v0.41.0:x86_64`。
+- **Nuitka 捆绑路径的 UPX 暴露与嵌套布局（构建工具，同批次发现）** — 原 `_runtime_package` 生成的包配置把 mpv.exe/DLL 走 Nuitka `dlls` 机制：Nuitka 4.1.3 的 UPX 插件会压缩每个拷贝的 dll/exe 入口点（`onCopiedDLL` 无逐文件豁免），UPX 压缩的 mpv.exe/编解码 DLL 是杀毒软件误报重灾区——而发布冒烟测试只跑 `--version`，永不执行 mpv.exe，损坏无法被 CI 发现。同时 data-files 的 `payload/*.json` 模式经 Nuitka 源码复核会把 `runtime.json` 落到 `bin/mpv/payload/`（Nuitka 以包目录为基准保留相对路径），违反 `verify_bundled_runtime_output` 要求的平铺契约——即 Nuitka 捆绑路径从未被端到端执行过（CI 一直 system 模式）。现 payload 直接平铺 staging 进包目录、全部改走 data-files 模式（原样拷贝：无 UPX、无依赖扫描），平铺落位 `bin/mpv/`；应用主二进制仍正常 UPX 压缩。新增契约测试钉死 `dlls:` 不得回归。
+
+### 工程化
+
+- **CI 测试腿补 libmpv2（Linux）** — ci.yml 测试矩阵与 release gate 的 Linux 环境补装 libmpv2：`libmpv_runtime.runtime_available()` 在每次 CI 上真实 dlopen 而非只走"未找到"分支。安全性有实证：release 构建 job 的 Linux 腿自 v1.6.1 起就带着 libmpv2 跑全量测试且全绿（测试套件对可用性容忍）。
+- **workflow 契约测试更新** — `test_release_workflow_bundles_mpv_on_windows`（下载步骤存在 + 摘要固定 + bundled 仅 Windows；36-V 复审强化：if/else 分支关联钉住——交换 bundled/system 分支的变异此前全量存活，另补分割标记存在性断言）、`test_ci_workflow_installs_libmpv_on_linux_test_legs`、`test_release_workflow_installs_libmpv_on_linux` 升级为双处（prepare + build）断言；新增 `test_nuitka_mpv_payload_ships_as_data_files_never_dlls`（36-V 补钉 `when: 'win32'` 平台值断言——错值过 yaml schema 但构建期才中止）与 `test_nuitka_bundled_plan_stages_payload_into_package_root`（验收轮变异实验暴露的测试缺口：plan.py 平铺 staging 路径无测试钉住，变异改回 `payload/` 子目录时全量套件仍全绿；新测试在 Linux 上需 patch host 守卫，首版未运行即合并已修复）；文档同步：RELEASE_PROCESS.md 三处 system 模式/旧变体名改 bundled（变体路径 `full-html-native-x86_64-mpv-v0.41.0` 经真实 dry-run 逐字验证）。
+
 ## [1.6.1] - 2026-10-01
 
 v1.6.1 是对 v1.6.0 的地毯式复核发布：基于 4 路并行只读审计（架构 5.5 / 代码卫生 4.5 / UX 综合 6.5 / 工程化 3 阻断 / 生态对标 6 优势 18 差距）逐条验证后的修复批次。审计报告的 5 条事实性错误经复核修正后未按原文实施（详见各条目）。UX 两条硬阻断（破坏性按钮无视觉警示、侧边栏键盘不可达）并列第一优先修复。

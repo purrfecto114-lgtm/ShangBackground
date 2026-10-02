@@ -236,6 +236,127 @@ def test_pyinstaller_flattens_windows_mpv_native_dependencies(tmp_path: Path, mo
     assert f"{dependency}{os.pathsep}bin/mpv" in command
 
 
+def test_nuitka_mpv_payload_ships_as_data_files_never_dlls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """v1.6.2 contract: the Nuitka mpv package config must reference the
+    payload via data-files only. Nuitka 4.1.3's UPX plugin compresses every
+    dll/exe entry point copied through the ``dlls`` mechanism
+    (UpxPlugin.onCopiedDLL has no per-file opt-out), and UPX-packed
+    mpv.exe / codec DLLs are a well-documented antivirus false-positive
+    magnet. The release smoke test only runs ``--version``, so a
+    UPX-broken mpv.exe would ship unnoticed. Data files are copied
+    verbatim and land flat in ``bin/mpv`` — the layout
+    verify_bundled_runtime_output() enforces (mpv.exe and runtime.json as
+    direct children of bin/mpv)."""
+    from build_tools.buildlib import nuitka, plan as plan_module
+
+    monkeypatch.setattr(plan_module, "PROJECT_ROOT", tmp_path)
+    payload = tmp_path / "runtime"
+    payload.mkdir()
+    (payload / "mpv.exe").write_bytes(b"exe")
+    (payload / "vulkan-1.dll").write_bytes(b"dll")
+    (payload / "runtime.json").write_text("{}", encoding="utf-8")
+    (payload / "licenses").mkdir()
+    (payload / "licenses" / "mpv.txt").write_text("GPL", encoding="utf-8")
+    plan = _plan(tmp_path)
+    object.__setattr__(plan, "tool", "nuitka")
+    object.__setattr__(plan, "target", "windows")
+    object.__setattr__(
+        plan,
+        "mpv",
+        MpvBuildSelection(
+            requested_mode="bundled",
+            mode="bundled",
+            target="windows",
+            arch="x86_64",
+            runtime_id="fixture",
+            payload_dir=payload,
+            metadata={"version": "fixture"},
+        ),
+    )
+    # create_plan stages the payload directly into the package directory
+    # (flat, no payload/ child) — reproduce that staging here.
+    staged = plan.generated_dir / "python" / "shangbackground_native_runtime"
+    plan_module._copy_verified_payload(payload, staged)
+
+    package_root, config = nuitka._runtime_package(plan, materialize=True)
+
+    assert package_root is not None and config is not None
+    # Flat staging: payload files are direct children of the package dir
+    # alongside the materialized anchor module.
+    assert (staged / "__init__.py").is_file()
+    assert (staged / "mpv.exe").is_file()
+    assert (staged / "runtime.json").is_file()
+    text = config.read_text(encoding="utf-8")
+    # The UPX-exposed ``dlls`` mechanism must stay gone — a regression here
+    # silently re-exposes the bundled mpv.exe to UPX compression.
+    assert "dlls:" not in text
+    assert "executable:" not in text
+    # Flat patterns (no payload/ prefix) land flat in bin/mpv. The ``when``
+    # value must stay 'win32' — Nuitka's evaluation context only defines
+    # win32/linux/macos, and an unknown name (e.g. 'windows') passes the
+    # yaml schema but aborts the build at condition evaluation (36-V
+    # mutation finding: no test pinned this).
+    for needed in ("'*.dll'", "'*.exe'", "'*.json'", "'*.txt'", "dest_path: 'bin/mpv'", "when: 'win32'"):
+        assert needed in text
+
+
+def test_nuitka_bundled_plan_stages_payload_into_package_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """v1.6.2: create_plan must stage the mpv payload directly into the
+    shangbackground_native_runtime package directory (flat, no payload/
+    child). Nuitka data-file patterns preserve the path relative to the
+    package folder, so only a flat staging layout lands flat in the
+    bundle's bin/mpv — a nested staging breaks
+    verify_bundled_runtime_output() (fail-closed: blocks the release CI
+    rather than silently shipping a broken payload, but still an outage).
+    Acceptance finding #3: this contract previously had no pinning test."""
+    import struct
+
+    from build_tools.buildlib import plan as plan_module
+
+    monkeypatch.setattr(plan_module, "PROJECT_ROOT", tmp_path)
+    # The host guard rejects real (non-dry-run) builds for a foreign target —
+    # it exists to stop accidental cross-compiles, not to make the staging
+    # contract untestable. The staging logic below is host-independent, so
+    # pretend this host is Windows (same pattern the CLI tests use for
+    # foreign-target dry-runs, here for the real staging path).
+    monkeypatch.setattr(plan_module, "host_target", lambda: "windows")
+
+    def fake_pe(machine: int) -> bytes:
+        header = bytearray(0x40)
+        header[0:2] = b"MZ"
+        header[0x3C:0x40] = struct.pack("<I", 0x40)
+        return bytes(header) + b"PE\0\0" + struct.pack("<H", machine)
+
+    # A structurally valid Windows x86_64 payload (PE machine=0x8664).
+    payload = tmp_path / "src" / "bin" / "mpv" / "windows" / "x86_64" / "fixture"
+    payload.mkdir(parents=True)
+    (payload / "mpv.exe").write_bytes(fake_pe(0x8664))
+    (payload / "vulkan-1.dll").write_bytes(fake_pe(0x8664))
+    (payload / "runtime.json").write_text("{}", encoding="utf-8")
+
+    built = plan_module.create_plan(
+        tool="nuitka",
+        target="windows",
+        profile="full",
+        mode="standalone",
+        jobs=2,
+        features=frozenset({"video"}),
+        mpv_runtime="bundled",
+        mpv_version="auto",
+        arch="x86_64",
+        dry_run=False,
+    )
+
+    staged = built.staged_mpv_dir
+    assert staged is not None
+    assert staged.name == "shangbackground_native_runtime"
+    assert staged.parent.name == "python"
+    # Flat: payload children are direct children of the staged package dir.
+    assert (staged / "mpv.exe").is_file()
+    assert (staged / "runtime.json").is_file()
+    assert not (staged / "payload").exists()
+
+
 def test_publish_retries_on_transient_permission_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Regression: on Windows, antivirus / file watchers can briefly lock
     freshly-built files, causing ``os.replace`` to fail with ``PermissionError``

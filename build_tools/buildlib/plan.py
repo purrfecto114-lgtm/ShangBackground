@@ -163,7 +163,11 @@ def create_plan(
         if not ok:
             raise RuntimeError("Invalid MPV payload: " + "; ".join(errors))
         if tool == "nuitka":
-            staged = generated / "python" / "shangbackground_native_runtime" / "payload"
+            # v1.6.2: stage the payload directly INTO the package directory
+            # (not a payload/ child). Nuitka data-file patterns preserve the
+            # path relative to the package folder, so only a flat staging
+            # layout lands flat in the bundle's bin/mpv.
+            staged = generated / "python" / "shangbackground_native_runtime"
             if not dry_run:
                 _copy_verified_payload(mpv.payload_dir, staged)
     # A dry-run is a pure plan operation. It must not rewrite the manifest used

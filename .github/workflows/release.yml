@@ -56,11 +56,14 @@ jobs:
         # Load-time deps of the PySide6 wheels in requirements/test.txt —
         # absent on bare ubuntu-24.04 runners (v1.6.1 release gate finding:
         # collection-time ImportError "libEGL.so.1: cannot open shared
-        # object file" once PySide6 stopped silently skipping).
+        # object file" once PySide6 stopped silently skipping). libmpv2 is
+        # included so the release gate sees the same libmpv-present
+        # environment as the build job's Linux leg (the suite is
+        # availability-tolerant either way; proven green on both shapes).
         run: >
           sudo apt-get update && sudo apt-get install --yes
           libegl1 libgl1 libfontconfig1 libdbus-1-3
-          libxkbcommon0 libxcb-cursor0 libglib2.0-0
+          libxkbcommon0 libxcb-cursor0 libglib2.0-0 libmpv2
 
       - name: Run release gate tests
         run: |
@@ -269,15 +272,44 @@ jobs:
           # Linux build runner's default xcb platform with no X server.
           QT_QPA_PLATFORM: offscreen
 
+      - name: Download verified MPV runtime (Windows)
+        # v1.6.2: bundle a verified mpv.exe into the Windows release so video
+        # wallpapers work out of the box — v1.6.1 and earlier shipped
+        # --mpv-runtime system and required every user to install MPV
+        # manually. The stale v1.5-era "MPV release asset format mismatch"
+        # note is obsolete: mpv's stable release publishes
+        # mpv-v0.41.0-x86_64-pc-windows-msvc.zip which matches the
+        # downloader's pinned patterns, and GitHub now serves a per-asset
+        # SHA-256 digest that the downloader verifies in addition to this
+        # explicit pin (verified end-to-end in the build sandbox: download,
+        # wrong-pin exit 2, correct-pin exit 0, mpv verify OK).
+        # The pin fails CLOSED when mpv publishes a new stable release —
+        # bump the digest consciously after reviewing the release notes
+        # (runtime.json records the bundled version and source URL).
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python build_tools/build.py mpv download --target windows --arch x86_64 --channel stable \
+            --sha256 4e197f729f5071c6772f35fffd96e0f36e3e8a044bd9479b136bb09b7c6a80ff
+          python build_tools/build.py mpv verify --target windows --arch x86_64 --version auto
+
       - name: Build validated full standalone package (Nuitka + UPX)
         # Full profile = all features (video, html, bing, hotkeys, updates, fonts).
         # UPX is auto-disabled on macOS by the build tool; Windows and Linux
         # get a 30-60% smaller binary. Nuitka's --upx-binary runs BEFORE any
         # code signing, so signatures remain valid.
-        # --mpv-runtime system: use the target system's libmpv (Linux) or
-        # AVFoundation (macOS). Windows video relies on the user installing
-        # MPV separately; this is acceptable for a prerelease and avoids the
-        # MPV GitHub release asset format mismatch that breaks auto-download.
+        # v1.6.2 mpv runtime policy:
+        #   - Windows: bundled — the mpv.exe downloaded and verified above is
+        #     packaged into bin/mpv (video works out of the box). The real
+        #     build hard-fails without a verified runtime (fail-closed).
+        #     The payload ships as Nuitka data-files, so UPX never touches
+        #     mpv.exe / codec DLLs (UPX-packed mpv is a well-documented
+        #     antivirus false-positive magnet).
+        #   - Linux: system — the target distribution provides libmpv
+        #     (bundling the runner's .so would tie the release to the
+        #     build host's glibc).
+        #   - macOS: native AVFoundation backend, no mpv involved.
         # --upx is only passed for Windows/Linux; the build tool would silently
         # skip it on macOS anyway, but omitting the flag avoids confusion in logs.
         shell: bash
@@ -289,9 +321,13 @@ jobs:
             --target ${{ matrix.target }}
             --profile full
             --mode standalone
-            --mpv-runtime system
             --arch ${{ matrix.arch }}
           )
+          if [ "${{ matrix.target }}" = "windows" ]; then
+            args+=(--mpv-runtime bundled)
+          else
+            args+=(--mpv-runtime system)
+          fi
           if [ "${{ matrix.target }}" != "macos" ]; then
             args+=(--upx)
           fi
