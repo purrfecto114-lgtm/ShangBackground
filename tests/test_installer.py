@@ -240,6 +240,64 @@ def test_uninstaller_uses_dirifempty_fallback_for_data_dir():
     )
 
 
+def test_uninstaller_cleans_legacy_startup_vbs_names():
+    """Releases before v1.4.5 wrote the autostart VBS helper under the legacy
+    name ``PowerOn.vbs`` (see ``engine.LEGACY_STARTUP_VBS_NAMES``). The
+    uninstaller must delete it alongside ``ShangBackground.vbs``; otherwise a
+    user who enabled autostart on an old release and never toggled it in-app
+    keeps a startup script that points at the removed executable.
+
+    Regression: v1.6.2 and earlier uninstallers only deleted
+    ``ShangBackground.vbs``, leaving ``PowerOn.vbs`` behind.
+    """
+    text = installer_module.ISS_PATH.read_text(encoding="utf-8")
+    code_section = text.split("[Code]", 1)[1]
+    assert r"'\PowerOn.vbs'" in code_section or "PowerOn.vbs" in code_section, (
+        "CurUninstallStepChanged must delete the legacy PowerOn.vbs from {userstartup}"
+    )
+    startup_cleanup = code_section.split("{userstartup}", 1)[1]
+    assert "PowerOn.vbs" in startup_cleanup, "PowerOn.vbs cleanup must follow the {userstartup} expansion"
+    assert "DeleteFile(VbsPath)" in code_section
+
+
+def test_uninstaller_removes_empty_product_registry_key():
+    """``ConsumeOriginalWallpaperStyle`` deletes the
+    ``HKCU\\Software\\ShangBackground\\UninstallStyleBackup`` subkey but the
+    product-owned parent key ``HKCU\\Software\\ShangBackground`` used to
+    survive as an empty orphan. The uninstaller must attempt an
+    if-empty deletion of the parent so no registry residue remains.
+    """
+    text = installer_module.ISS_PATH.read_text(encoding="utf-8")
+    code_section = text.split("[Code]", 1)[1]
+    assert "RegDeleteKeyIfEmpty(HKEY_CURRENT_USER, 'Software\\ShangBackground')" in code_section, (
+        "ConsumeOriginalWallpaperStyle must delete the empty parent key after consuming the backup"
+    )
+    # The if-empty deletion must happen after the backup subkey consumption.
+    consume_pos = code_section.find("RegDeleteKeyIncludingSubkeys(HKEY_CURRENT_USER, StyleBackupSubkey)")
+    empty_pos = code_section.find("RegDeleteKeyIfEmpty(HKEY_CURRENT_USER, 'Software\\ShangBackground')")
+    assert consume_pos != -1 and empty_pos > consume_pos, (
+        "parent-key cleanup must run after the UninstallStyleBackup subkey is removed"
+    )
+
+
+def test_uninstaller_cleans_temp_fallback_directories():
+    """When %LOCALAPPDATA% is not writable the app falls back to per-user TEMP
+    locations: ``%TEMP%\\shangbackground-mpv`` (paths.py:mpv_user_install_path)
+    and ``%TEMP%\\ShangBackground`` (log_setup.py fallback). Both are
+    product-owned and must be cleaned by [UninstallDelete].
+    """
+    text = installer_module.ISS_PATH.read_text(encoding="utf-8")
+    # Split on the newline-anchored header: a [UninstallDelete] comment also
+    # mentions "[Code]" mid-sentence, so a bare split would truncate early.
+    uninstall_delete_section = text.split("[UninstallDelete]", 1)[1].split("\n[Code]", 1)[0]
+    assert 'Type: filesandordirs; Name: "{tmp}\\shangbackground-mpv"' in uninstall_delete_section, (
+        "the per-user MPV install fallback directory must be deleted on uninstall"
+    )
+    assert 'Type: filesandordirs; Name: "{tmp}\\ShangBackground"' in uninstall_delete_section, (
+        "the per-user log fallback directory must be deleted on uninstall"
+    )
+
+
 def test_installer_exposes_start_menu_shortcut_option():
     """The Select Start Menu Folder wizard page must be shown so users can
     rename the group or opt out of start-menu shortcuts entirely.

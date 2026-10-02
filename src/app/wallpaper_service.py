@@ -78,6 +78,37 @@ class WallpaperService:
             self._cached_current = ""
             self._cached_at = 0.0
 
+    def note_current_wallpaper(self, path: object) -> None:
+        """Record an externally observed current wallpaper (v1.6.3).
+
+        The WM_SETTINGCHANGE handler queries the authoritative system value
+        with ``use_cache=False``; feeding the answer back here keeps the
+        navigation cache in sync immediately after external wallpaper changes
+        instead of waiting for the TTL to expire. An empty/unformattable value
+        clears the cache so the next read re-queries the backend.
+        """
+        normalized = normalize_wallpaper_path(path)
+        with self._lock:
+            self._prime_current_cache(normalized)
+
+    def _prime_current_cache(self, path: str) -> None:
+        """Record *path* as the known system wallpaper (caller holds the lock).
+
+        v1.6.3: ``apply()`` used to invalidate the current-wallpaper cache after
+        a successful backend set. Combined with history navigation querying
+        with ``use_cache=False`` on every click, each 上一张/下一张 paid a
+        fresh system query (Windows: a new COM apartment on the worker thread
+        plus an IDesktopWallpaper round-trip to Explorer), and the
+        WM_SETTINGCHANGE broadcast that follows our own switch paid another
+        one on the GUI thread. After a successful set the system wallpaper is
+        exactly ``path`` (the platform layer maps any non-ASCII alias back to
+        the original on read), so priming the cache removes both per-switch
+        queries while the 30-second TTL still bounds staleness for external
+        changes.
+        """
+        self._cached_current = str(path or "")
+        self._cached_at = time.monotonic() if path else 0.0
+
     def get_current(self, *, use_cache: bool = True) -> str:
         with self._lock:
             now = time.monotonic()
@@ -201,7 +232,7 @@ class WallpaperService:
                     message += "；恢复原壁纸失败: " + rollback_error
                 return self._fail(message)
 
-            self.invalidate_current_cache()
+            self._prime_current_cache(normalized)
             if self._preview is not None:
                 self._preview(normalized)
             self._log("设置壁纸成功: " + os.path.basename(normalized))
@@ -215,9 +246,12 @@ class WallpaperService:
             return ""
         try:
             self._backend.set_wallpaper(previous_system)
-            self.invalidate_current_cache()
+            # v1.6.3: the rollback just restored *previous_system* through the
+            # backend, so it is the authoritative current wallpaper now.
+            self._prime_current_cache(previous_system)
             return ""
         except Exception as exc:
+            self.invalidate_current_cache()
             return str(exc)
 
     def _fail(self, message: str) -> bool:

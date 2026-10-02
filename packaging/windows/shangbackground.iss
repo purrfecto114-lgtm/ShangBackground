@@ -245,6 +245,12 @@ Type: dirifempty; Name: "{localappdata}\{#APP_NAME}"; Check: ShouldDeleteConfig
 Type: files; Name: "{localappdata}\{#APP_NAME}\single_instance.lock"; Check: ShouldDeleteConfig
 ; Legacy session wallpaper file written to %TEMP% by older releases.
 Type: files; Name: "{tmp}\ShangBackground_session_wallpaper.json"
+; v1.6.3: fallback directories used when %LOCALAPPDATA% is not writable —
+; the per-user MPV install location (src/app/paths.py:mpv_user_install_path)
+; and the log fallback (src/app/log_setup.py). %TEMP% is user-scoped, so
+; these are per-user residue the uninstaller should clear.
+Type: filesandordirs; Name: "{tmp}\shangbackground-mpv"
+Type: filesandordirs; Name: "{tmp}\ShangBackground"
 
 [Code]
 var
@@ -316,6 +322,16 @@ begin
         Log('{#APP_NAME}: graceful exit already restored style; discarding install-time backup');
     end;
     RegDeleteKeyIncludingSubkeys(HKEY_CURRENT_USER, StyleBackupSubkey);
+    // v1.6.3: with the backup subkey gone, HKCU\Software\ShangBackground is
+    // an empty product-owned key. Remove it too when nothing else remains so
+    // the uninstall leaves no orphan registry entry behind. A non-empty key
+    // (values or subkeys created outside the uninstaller) is kept — that is
+    // exactly what "if empty" is for.
+    try
+      RegDeleteKeyIfEmpty(HKEY_CURRENT_USER, 'Software\ShangBackground');
+    except
+      Log('{#APP_NAME}: product registry key kept (non-empty or protected)');
+    end;
   except
     Log('{#APP_NAME}: wallpaper style rollback failed: ' + GetExceptionMessage);
   end;
@@ -425,6 +441,14 @@ begin
     // MANDATORY: Remove legacy VBS startup files (v1.4.4 and earlier).
     StartupFolder := ExpandConstant('{userstartup}');
     VbsPath := StartupFolder + '\ShangBackground.vbs';
+    if FileExists(VbsPath) then
+      DeleteFile(VbsPath);
+    // v1.6.3: releases before v1.4.5 wrote the autostart helper under the
+    // legacy name PowerOn.vbs (see engine.LEGACY_STARTUP_VBS_NAMES). The
+    // in-app autostart toggle removes it when used, but a user who never
+    // toggles autostart keeps the file — and after uninstall Windows would
+    // try to run a VBS pointing at the removed executable on every login.
+    VbsPath := StartupFolder + '\PowerOn.vbs';
     if FileExists(VbsPath) then
       DeleteFile(VbsPath);
 

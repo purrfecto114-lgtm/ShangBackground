@@ -1809,7 +1809,16 @@ def previous_wallpaper():
     hist = list_wallpaper_history(existing_only=True)
     log("当前历史: " + str([os.path.basename(p) for p in hist[:5]]) + ("..." if len(hist) > 5 else ""))
     # The GUI recent list is newest-first; navigation must not reorder it.
-    actual_current = _get_application_services().wallpaper.get_current(use_cache=False)
+    # v1.6.3: anchor through the service cache instead of forcing a fresh
+    # system query on every click. apply() primes the cache with the path it
+    # just set, so consecutive 上一张/下一张 no longer pay a
+    # IDesktopWallpaper round-trip (new COM apartment on the worker thread)
+    # per click — the sidebar browse path never paid it, which is why it felt
+    # snappier. External wallpaper changes re-sync immediately on Windows:
+    # the WM_SETTINGCHANGE handler queries the authoritative value and feeds
+    # it back into the service cache (see note_current_wallpaper). Linux has
+    # no such broadcast, so the 30-second TTL is the only bound there.
+    actual_current = _get_application_services().wallpaper.get_current()
     current_anchor = actual_current or config.get("current_wallpaper", "")
     found = previous_history_item(hist, current_anchor)
     if found is None:
@@ -1852,7 +1861,8 @@ def next_wallpaper():
     _require_wallpaper_action("next")
 
     history = list_wallpaper_history(existing_only=True)
-    actual_current = _get_application_services().wallpaper.get_current(use_cache=False)
+    # v1.6.3: cached anchor, matching previous_wallpaper() — see the note there.
+    actual_current = _get_application_services().wallpaper.get_current()
     current = actual_current or config.get("current_wallpaper", "")
     newer = newer_history_item(history, current)
     if newer is not None:
@@ -2360,8 +2370,18 @@ def handle_system_setting_change() -> None:
     and the "record system wallpaper change into history" feature never
     fired. It is now also driven by a Qt native event filter on the GUI
     thread (see app.entry), which does receive the broadcast.
+
+    v1.6.3: query with ``use_cache=False``. WallpaperService.apply() now
+    primes its cache after a successful set, so a cached read here would
+    return the just-applied value and mask genuine external changes for the
+    rest of the TTL. WM_SETTINGCHANGE is exactly the moment the authoritative
+    answer changed, so pay one direct system query per broadcast instead —
+    and feed the answer back through ``note_current_wallpaper()`` so the
+    navigation cache re-syncs immediately instead of at TTL expiry.
     """
-    current = get_current_wallpaper()
+    current = get_current_wallpaper(use_cache=False)
+    if current:
+        _get_application_services().wallpaper.note_current_wallpaper(current)
     if current and current != config.get("current_wallpaper", ""):
         log(f"系统壁纸已改变: {os.path.basename(current)}")
         push_wallpaper(current)

@@ -27,7 +27,7 @@ from app.i18n import LanguageChangeEvent, get_language, load_language, subscribe
 from app.build_features import is_feature_enabled
 from app.system_info import collect_system_info, render_system_info
 from app.config_normalization import normalize_runtime_config_in_place
-from app.wallpaper_action_policy import wallpaper_action_availability
+from app.wallpaper_action_policy import operation_persists_itself, wallpaper_action_availability
 from app.paths import entry_script_path, image_path, app_executable_path
 from app.support import (
     APP_DISPLAY_NAME,
@@ -5082,7 +5082,13 @@ QLabel[muted="true"] { color: __FG_MUTED__; }
                     self.core_result_signal.emit(False, t("操作已终止"), None)
                     return
                 result = fn(*args)
-                core.save_config()
+                # v1.6.3: wallpaper-apply operations commit their own config
+                # transaction inside WallpaperService (remember_* → persist).
+                # The unconditional trailing save only re-serialized the whole
+                # config — the duplicate write the hotkey path already dropped
+                # in v1.6.1. Non-self-persisting operations keep the save.
+                if not operation_persists_itself(name):
+                    core.save_config()
                 if result is False:
                     # fn 返回 False 而非抛异常时，core.log 已记录原因；
                     # 通过 core.last_operation_error 把原因带回 GUI，避免用户

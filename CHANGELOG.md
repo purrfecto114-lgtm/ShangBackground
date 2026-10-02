@@ -2,6 +2,19 @@
 
 本文件记录 ShangBackground 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.6.3] - 2026-10-02
+
+v1.6.3 是 v1.6.2 真机反馈修复：卸载残留清理补全 + 上一张/下一张壁纸切换的多余链路移除（用户实测"跳转到壁纸"侧边栏路径明显更跟手，逐层排查定位到历史导航路径每次点击都在多付两次系统壁纸查询和一次冗余配置序列化——侧边栏路径全免）。
+
+### 修复
+
+- **上一张/下一张壁纸切换卡顿（多余链路移除）** — 三处热路径冗余逐一清除：(1) `previous_wallpaper`/`next_wallpaper` 每次点击都 `get_current(use_cache=False)` 强制绕过 30 秒缓存做一次全新系统查询（Windows 上为 worker 线程新建 COM apartment + `IDesktopWallpaper::GetWallpaper` 跨 Explorer 往返），改为走服务缓存锚点；(2) `WallpaperService.apply()` 成功后原本清空当前壁纸缓存，导致自己切壁纸触发的 WM_SETTINGCHANGE 广播又在 GUI 线程补一次系统查询——改为把刚设置的路径预热进缓存（非 ASCII 别名场景两侧都会归一到原始路径，语义一致），点击关键路径上的系统查询从每击 2 次降为 0 次（Windows 上仅剩由切换触发的 WM_SETTINGCHANGE 广播按下方补偿性增强付的一次事件驱动权威查询，不在点击关键路径上；Linux 无该广播，为每击 0 次）；(3) `run_core` worker 在操作完成后无条件再 `save_config()` 一次——这五个壁纸应用操作的服务层事务内已经落盘（`remember_*` → persist 回调），尾部保存只是整份配置的重复序列化，正是 v1.6.1 热键路径注释里定性过的"duplicate disk writes"，GUI 路径当时漏改；现按 `operation_persists_itself` 策略谓词跳过（Qt-free 可测），非自持久操作（幻灯片启停等）维持原行为。补偿性增强：`handle_system_setting_change` 改为 `use_cache=False` 事件驱动直查并把权威值经新增的 `note_current_wallpaper()` 回填导航缓存——预热缓存后若仍走缓存读，外部壁纸变更会被已填缓存遮蔽到 TTL 过期；现在每次 WM_SETTINGCHANGE 广播都拿权威值并立即同步缓存，外部变更检测与导航锚点新鲜度均强于修复前（此前缓存未命中才查，命中时同样遮蔽；Linux 无广播，TTL 是唯一兜底）。链路对比依据：侧边栏（"跳转到壁纸"→缩略图点击）为 GUI 线程同步 `apply_browsed_wallpaper`，锚点取内存配置值、单次落盘、零系统查询。
+- **卸载残留（安装器三处清理缺口）** — (1) v1.4.5 之前版本的开机自启动脚本 `PowerOn.vbs`（`LEGACY_STARTUP_VBS_NAMES`）：应用内自启动开关切换时会清理，但从不切换的用户卸载后启动文件夹残留该文件，每次登录 wscript 尝试启动已删除的程序；卸载器现在同时删除 `ShangBackground.vbs` 与 `PowerOn.vbs`。(2) `HKCU\Software\ShangBackground` 注册表键：卸载时只删 `UninstallStyleBackup` 子键，空父键永久残留；现在消费备份后追加 `RegDeleteKeyIfEmpty`（键非空则保留，绝不误删）。(3) `%LOCALAPPDATA%` 不可写时的两处用户级 TEMP 回退目录（`shangbackground-mpv` MPV 安装回退 / `ShangBackground` 日志回退）此前无任何清理；`[UninstallDelete]` 补 `filesandordirs` 条目。其余残留面复核无缺口：AppData/PID/日志/WebView profile/非 ASCII 别名缓存均在 `%LOCALAPPDATA%\ShangBackground`（受确认弹窗管控）、右键菜单键 HKCU+HKLM 双 Hive `uninsdeletekey` 覆盖、单实例锁目录哈希扫描清理。
+
+### 工程化
+
+- **导航延迟契约测试** — 新增 `tests/test_wallpaper_action_policy.py`：策略谓词单测（自持久集合/非持久集合/函数对象识别）+ 引擎源码级契约（prev/next 不得出现 `use_cache=False`、SETTINGCHANGE 处理器必须 `use_cache=False` 且必须回填 `note_current_wallpaper`、`set_wallpaper` 侧边栏路径锚点必须走配置/缓存兑底——三者方向各异故分别钉住）+ engine 级行为测试两条（伪造服务栈证明锚点走缓存 getter、apply 收到正确 `previous_path`、MRU 不重排；SETTINGCHANGE 处理器直查+回填+变更时才入历史）+ run_core 门控契约；`tests/test_static_mode_transaction.py` 补四条：apply 成功预热缓存（缓存读零后端调用、显式失效后回源）、回滚后以恢复值为准、回滚本身失败时必须失效预热缓存（对抗验收轮补——否则陈旧缓存值会顶替真实系统状态到 TTL 过期，导航锚点错位）、`note_current_wallpaper` 替换缓存值/空观察清缓存回源；`tests/test_installer.py` 补三条卸载清理契约（PowerOn.vbs / 父键 if-empty 删除且时序在备份消费之后 / TEMP 回退目录）。
+
 ## [1.6.2] - 2026-10-02
 
 v1.6.2 是发布产物完整性修复：Windows 官方发布包此前不含 MPV 运行时（`--mpv-runtime system`），视频壁纸开箱不可用，每位用户需自行安装 MPV——v1.5 时代留下的"资产格式不匹配导致自动下载失效"注记经实测已过时（mpv v0.41.0 稳定版发布 `mpv-v0.41.0-x86_64-pc-windows-msvc.zip`，与构建工具的固定模式完全匹配，GitHub 现为每个资产附带 SHA-256 摘要，下载器双重校验）。
