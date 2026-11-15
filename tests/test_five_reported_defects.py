@@ -387,100 +387,60 @@ class TestIssue4IpcTimeoutBudget:
     def test_mpv_ipc_client_dead_after_timeout_speeds_up_second_call(self):
         """同一条连接上, 一次应答超时后, 后续请求不得再次等满整个 timeout。
 
-        当前实现: 超时不置 dead, set_video_volume 的两次 set_property
+        v1.6.4 修复前: 超时不置 dead, set_video_volume 的两次 set_property
         (volume+mute) 各自等满 3s。修复后第二次必须快速失败。
+
+        实现方式与 tests/test_mpv_ipc_protocol.py 的注入式内存 I/O 一致
+        （不建真实 socket, Windows runner 无 AF_UNIX 也能执行本契约）:
+        假通道对任何请求都返回 None（通道在但 mpv 永不回应）。
         """
-        import socket as _socket
+
+        class _HangingMpv:
+            """收下一切写入但永不回应（mpv 挂起语义）。"""
+
+            def __init__(self):
+                self.wire: list[bytes] = []
+                self.read_calls = 0
+                self.write_calls = 0
+                self.closed = False
+
+            def write_bytes(self, payload: bytes) -> int:
+                self.write_calls += 1
+                self.wire.append(bytes(payload))
+                return len(payload)
+
+            def read_bytes(self, timeout: float):
+                self.read_calls += 1
+                time.sleep(min(0.02, max(0.001, float(timeout) / 100)))
+                return None  # 通道存活, 但永远没有数据
+
+            def close(self):
+                self.closed = True
 
         from platform_adapters.mpv_ipc import MpvIpcClient
 
-        sock_dir = tempfile.mkdtemp(prefix="sb-t-issue4-")
-        sock_path = os.path.join(sock_dir, "ipc.sock")
-        srv = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
-        srv.bind(sock_path)
-        srv.listen(1)
-
-        server_done = []
-
-        import threading
-
-        def dead_server():
-            conn, _ = srv.accept()
-            conn.settimeout(0.5)
-            try:
-                while True:
-                    data = conn.recv(65536)
-                    if not data:
-                        break
-                    # 收下但永不回应（mpv 挂起语义）。
-                    # 注意 socket.timeout 是 OSError 子类, 必须先捕获并 continue,
-                    # 服务器保持存活才能复现"通道在但无应答"。
-            except TimeoutError:
-                pass  # pragma: no cover - loop handles timeouts
-            except OSError:
-                pass
-            finally:
-                try:
-                    conn.close()
-                except OSError:
-                    pass
-            server_done.append(True)
-
-        # recv 超时必须 continue 而非 break：改用显式循环
-        def dead_server_keepalive():
-            conn, _ = srv.accept()
-            conn.settimeout(0.5)
-            alive = True
-            while alive:
-                try:
-                    data = conn.recv(65536)
-                    if not data:
-                        alive = False
-                except TimeoutError:
-                    continue
-                except OSError:
-                    alive = False
-            try:
-                conn.close()
-            except OSError:
-                pass
-
-        t = threading.Thread(target=dead_server_keepalive, daemon=True)
-        t.start()
-
-        sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
-        sock.settimeout(0.25)
-        sock.connect(sock_path)
-
-        def read_bytes(timeout):
-            sock.settimeout(max(0.01, float(timeout)))
-            try:
-                chunk = sock.recv(65536)
-            except _socket.timeout:
-                return None
-            return chunk if chunk else b""
-
+        channel = _HangingMpv()
         client = MpvIpcClient(
-            write_bytes=lambda p: (sock.sendall(p) or len(p)),
-            read_bytes=read_bytes,
-            close=sock.close,
+            write_bytes=channel.write_bytes,
+            read_bytes=channel.read_bytes,
+            close=channel.close,
         )
-        try:
-            budget = 3.0
-            t0 = time.perf_counter()
-            ok1, _ = client.request(["set_property", "volume", 50], timeout=budget)
-            first = time.perf_counter() - t0
-            t0 = time.perf_counter()
-            ok2, _ = client.request(["set_property", "mute", False], timeout=budget)
-            second = time.perf_counter() - t0
-            total = first + second
-            assert total < budget * 1.5, (
-                f"两次 set_property 总阻塞 {total:.2f}s ≈ 双倍超时; "
-                "第一次超时后连接必须判死, 第二次快速失败"
-            )
-        finally:
-            try:
-                sock.close()
-            except OSError:
-                pass
-            srv.close()
+        budget = 3.0
+        t0 = time.perf_counter()
+        ok1, _ = client.request(["set_property", "volume", 50], timeout=budget)
+        first = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        ok2, _ = client.request(["set_property", "mute", False], timeout=budget)
+        second = time.perf_counter() - t0
+        assert ok1 is False and ok2 is False
+        # 契约: 第一次必须等到预算耗尽判死（~budget）; 第二次在判死
+        # 连接上必须快速失败（远小于 budget）—— 修复前会再等满 3s,
+        # 两次共 ~6s 双倍阻塞。second 的硬上限 0.2s = _READ_SLICE 预算内。
+        assert first <= budget * 1.1, f"第一次调用 {first:.2f}s 超出预算, 异常"
+        assert second < 0.2, (
+            f"判死连接上的第二次 set_property 阻塞 {second:.2f}s; "
+            "必须快速失败（修复前双倍阻塞 ~6s 回归）"
+        )
+        assert channel.write_calls == 1, (
+            "判死后的第二次请求不得再写线上帧"
+        )
