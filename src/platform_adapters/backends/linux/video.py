@@ -199,6 +199,14 @@ def _open_ipc_client(ipc_path: str, timeout: float = 3.0) -> MpvIpcClient | None
 # 运行时 IPC（音量/暂停/属性读写）的打开预算：通道应已存在，缺失即快速
 # 失败；启动期就绪验证仍用长预算（见 _verify_started_player）。
 _RUNTIME_IPC_OPEN_TIMEOUT = 0.5
+# v1.6.4 fix (issue #4): runtime volume/mute/property round-trip budget. The
+# old default inherited MpvIpcClient's 3.0s and the whole chain is synchronous
+# from the Qt main thread (VideoFocusMixin -> engine.set_video_volume ->
+# MediaService.set_option -> set_video_volume -> MpvIpcClient.set_property),
+# so one unresponsive-but-alive mpv froze the UI for the full timeout — and
+# set_video_volume's two set_property calls (volume + mute) could double it.
+# 0.5s matches the open budget: a healthy mpv answers in single-digit ms.
+_RUNTIME_IPC_TIMEOUT = 0.5
 
 
 def _heal_dead_player_state() -> None:
@@ -698,9 +706,9 @@ def set_video_volume(muted: bool, volume: int) -> bool:
         return False
     try:
         clamped_volume = max(0, min(100, int(volume)))
-        if not client.set_property("volume", clamped_volume):
+        if not client.set_property("volume", clamped_volume, timeout=_RUNTIME_IPC_TIMEOUT):
             return False
-        return client.set_property("mute", bool(muted))
+        return client.set_property("mute", bool(muted), timeout=_RUNTIME_IPC_TIMEOUT)
     finally:
         client.close()
 
@@ -715,7 +723,7 @@ def set_video_paused(paused: bool) -> bool:
         _heal_dead_player_state()
         return False
     try:
-        return client.set_property("pause", bool(paused))
+        return client.set_property("pause", bool(paused), timeout=_RUNTIME_IPC_TIMEOUT)
     finally:
         client.close()
 

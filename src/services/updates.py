@@ -23,9 +23,9 @@ VERSION_RE = re.compile(
 )
 
 PLATFORM_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
-    "windows": ("windows", "win", "win64", "win32", "x64", "x86_64", ".exe", ".msi"),
-    "linux": ("linux", "ubuntu", "debian", "appimage", "x86_64", "amd64", ".tar.gz", ".deb", ".rpm"),
-    "macos": ("macos", "mac", "darwin", "osx", "x64", "arm64", ".dmg", ".pkg", ".app", ".zip"),
+    "windows": ("windows", "win", "win64", "win32", ".exe", ".msi"),
+    "linux": ("linux", "ubuntu", "debian", "appimage", ".appimage", ".deb", ".rpm"),
+    "macos": ("macos", "mac", "darwin", "osx", ".dmg", ".pkg", ".app", ".zip"),
 }
 
 # v1.4.4: Architecture-specific markers for fine-grained asset selection.
@@ -155,7 +155,12 @@ def _pick_version_source(data: dict[str, Any]) -> str:
 def _has_asset_marker(text: str, marker: str) -> bool:
     marker = marker.lower()
     if marker.startswith("."):
-        return marker in text
+        # v1.6.4 fix (red-team E): extension markers must match at a token
+        # boundary, not as a raw substring — ".app" as a substring also hits
+        # ".AppImage", which let Linux AppImage assets leak into the macOS
+        # compatible list. A trailing token boundary is enough for the
+        # extension set in use; ".exe"/".zip" keep their current behavior.
+        return re.search(rf"{re.escape(marker)}(?![a-z0-9])", text) is not None
     return re.search(rf"(?<![a-z0-9]){re.escape(marker)}(?![a-z0-9])", text) is not None
 
 
@@ -170,6 +175,36 @@ def _asset_ext_rank(text: str) -> int:
     return 0
 
 
+def _has_foreign_platform_marker(text: str, platform_id: str) -> bool:
+    """Return True if *text* carries an explicit marker of another platform.
+
+    v1.6.4 fix (issue #1): archive extensions such as ``.tar.gz`` are shared by
+    several platforms and must not count as a foreign-platform hit — that
+    double-penalized the correct ``macos-x86_64.tar.gz`` asset on Intel Macs
+    (``.tar.gz`` was also listed as a *linux* platform marker). Only the
+    platform words themselves and platform-exclusive installer extensions
+    (``.exe``/``.msi`` for windows, ``.deb``/``.rpm``/``.appimage`` for linux,
+    ``.dmg``/``.pkg`` for macos) are considered foreign markers.
+    """
+    foreign_installer_exts: dict[str, tuple[str, ...]] = {
+        "windows": (".exe", ".msi"),
+        "linux": (".deb", ".rpm"),
+        "macos": (".dmg", ".pkg"),
+    }
+    for other_platform, markers in PLATFORM_ASSET_MARKERS.items():
+        if other_platform == platform_id:
+            continue
+        for marker in markers:
+            if marker.startswith("."):
+                continue  # shared extensions never identify a foreign platform
+            if _has_asset_marker(text, marker):
+                return True
+        for ext in foreign_installer_exts.get(other_platform, ()):
+            if ext in text:
+                return True
+    return False
+
+
 def _asset_score(asset: dict[str, Any], platform_id: str = PLATFORM_ID) -> int:
     text = f"{asset.get('name', '')} {asset.get('download_url', '')}".lower()
     if not any(ext in text for ext in PACKAGE_EXTENSIONS):
@@ -179,12 +214,11 @@ def _asset_score(asset: dict[str, Any], platform_id: str = PLATFORM_ID) -> int:
 
     own_markers = PLATFORM_ASSET_MARKERS.get(platform_id, ())
     own_hits = sum(_has_asset_marker(text, marker) for marker in own_markers)
-    foreign_hits = sum(
-        _has_asset_marker(text, marker)
-        for other_platform, markers in PLATFORM_ASSET_MARKERS.items()
-        if other_platform != platform_id
-        for marker in markers
-    )
+    # v1.6.4 fix (issue #1): foreign-hit counting must use the dedicated
+    # helper — shared archive extensions (.tar.gz etc.) are not platform
+    # markers, and architecture words never were (they live in
+    # ARCH_ASSET_MARKERS only, scored separately below).
+    foreign_hits = 1 if _has_foreign_platform_marker(text, platform_id) else 0
 
     # v1.4.4: Architecture matching — boost assets matching the host arch,
     # penalize assets matching a different arch.

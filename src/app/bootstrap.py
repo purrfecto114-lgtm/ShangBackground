@@ -372,10 +372,23 @@ def build_services(
         mode: str,
         cfg: MutableMapping[str, Any],
     ) -> ModeActivationResult:
+        # v1.6.4 fix (issue #5): ``persisted`` must describe whether the mode
+        # change itself reached disk through the activation callback. The old
+        # hardcoded ``persisted=True`` made WallpaperModeService.switch() skip
+        # its own ``_persist()`` whenever activation merely *succeeded*, so a
+        # same-image switch to 图片 returned success while the on-disk ``mode``
+        # stayed on the previous mode until restart. None of the activation
+        # paths below actually persists the *mode* key itself:
+        # - slideshow.restart()/media.start_*(): update mode-adjacent keys, and
+        #   MediaService only persists when the target actually changed;
+        # - wallpaper.apply()/apply_solid()/apply_gradient(): only record
+        #   history/current_wallpaper — mode is written by switch()'s persist.
+        # Therefore every path now reports persisted=False and the mode
+        # service persists the config (including ``mode``) transactionally.
         if mode == "幻灯片放映":
             folder = str(cfg.get("slide_folder", "") or "")
             if folder and os.path.isdir(folder):
-                return ModeActivationResult(slideshow.restart(), persisted=True)
+                return ModeActivationResult(slideshow.restart(), persisted=False)
             slideshow.stop(stop_dynamic=False)
             media.stop_all()
             return ModeActivationResult(True, persisted=False)
@@ -386,27 +399,27 @@ def build_services(
             if image and os.path.exists(image):
                 return ModeActivationResult(
                     wallpaper.apply(image, "切换单张图片模式"),
-                    persisted=True,
+                    persisted=False,
                 )
             return ModeActivationResult(True, persisted=False)
         if mode == "视频":
             target = str(cfg.get("video_file", "") or "")
             if target and os.path.exists(target):
-                return ModeActivationResult(media.start_video(target), persisted=True)
+                return ModeActivationResult(media.start_video(target), persisted=False)
             media.stop_all()
             return ModeActivationResult(True, persisted=False)
         if mode == "HTML":
             media.stop("video")
             target = str(cfg.get("html_file", "") or cfg.get("html_url", "") or "")
             if target:
-                return ModeActivationResult(media.start_html(target), persisted=True)
+                return ModeActivationResult(media.start_html(target), persisted=False)
             media.stop("html")
             return ModeActivationResult(True, persisted=False)
         media.stop_all()
         if mode == "纯色":
-            return ModeActivationResult(bool(apply_solid()), persisted=True)
+            return ModeActivationResult(bool(apply_solid()), persisted=False)
         if mode == "渐变":
-            return ModeActivationResult(bool(apply_gradient()), persisted=True)
+            return ModeActivationResult(bool(apply_gradient()), persisted=False)
         return ModeActivationResult(True, persisted=False)
 
     modes = WallpaperModeService(

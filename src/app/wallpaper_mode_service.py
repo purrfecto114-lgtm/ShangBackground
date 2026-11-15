@@ -181,10 +181,21 @@ class WallpaperModeService:
                     continue
                 config[str(key)] = value
             config["mode"] = selected
+            # v1.6.4 (issue #3): the set of keys this transaction is allowed
+            # to restore on failure: ``mode`` and the caller-staged updates.
+            # New keys created during activation are *kept* — the diff cannot
+            # distinguish activation writes (video_file etc.) from concurrent
+            # user saves, and deleting a user setting is unrecoverable while
+            # a stale path key is inert after the mode rolled back. Values of
+            # pre-existing keys that only the user touched likewise survive
+            # because they are not in this set.
+            transaction_keys = {"mode", *dict(updates or {}).keys()}
             try:
                 activation = self._activation_result(self._activate(selected, config))
             except Exception as exc:
-                rollback = self._compensate(config, before, previous_mode)
+                rollback = self._compensate(
+                    config, before, previous_mode, transaction_keys=transaction_keys
+                )
                 raise WallpaperModeError(
                     f"切换壁纸模式失败({selected}): {exc}",
                     report=ModeSwitchReport(
@@ -196,7 +207,9 @@ class WallpaperModeService:
                     ),
                 ) from exc
             if not activation.ok:
-                rollback = self._compensate(config, before, previous_mode)
+                rollback = self._compensate(
+                    config, before, previous_mode, transaction_keys=transaction_keys
+                )
                 raise WallpaperModeError(
                     f"切换壁纸模式失败: {selected}",
                     report=ModeSwitchReport(
@@ -209,11 +222,23 @@ class WallpaperModeService:
                 )
             config["mode"] = selected
             if activation.persisted:
-                return True
+                # v1.6.4 fix (issue #5, defense in depth): an activation
+                # callback claiming ``persisted`` must have written the *mode*
+                # key itself. Verify against the persistence layer's view of
+                # the committed mode; on mismatch fall through to the local
+                # ``_persist()`` so a successful switch can never leave the
+                # on-disk mode behind the in-memory mode.
+                if self._committed_mode_matches(selected):
+                    return True
+                self._log(
+                    f"模式激活声明已持久化但磁盘 mode 与 {selected} 不一致，补写配置"
+                )
             try:
                 persisted = bool(self._persist())
             except Exception as exc:
-                rollback = self._compensate(config, before, previous_mode)
+                rollback = self._compensate(
+                    config, before, previous_mode, transaction_keys=transaction_keys
+                )
                 raise WallpaperModeError(
                     f"保存壁纸模式失败({selected}): {exc}",
                     report=ModeSwitchReport(
@@ -225,7 +250,9 @@ class WallpaperModeService:
                     ),
                 ) from exc
             if not persisted:
-                rollback = self._compensate(config, before, previous_mode)
+                rollback = self._compensate(
+                    config, before, previous_mode, transaction_keys=transaction_keys
+                )
                 raise WallpaperModeError(
                     f"保存壁纸模式失败: {selected}",
                     report=ModeSwitchReport(
@@ -244,28 +271,74 @@ class WallpaperModeService:
             return raw
         return ModeActivationResult(bool(raw), persisted=False)
 
+    def _committed_mode_matches(self, selected: str) -> bool:
+        """Check whether the persistence layer already committed *selected*.
+
+        v1.6.4 (issue #5, gap B): the hook-less branch must NOT trust a
+        ``persisted=True`` claim. The production config provider is a bare
+        ``lambda: config`` with no ``last_committed_mode`` attribute, so the
+        original "return True when no hook" made the safety net dead code in
+        the real app: any future activation path that wrongly claims
+        ``persisted`` would silently skip the mode write again (issue #5
+        revived). Without a hook the mode service cannot verify the commit,
+        so it must fall back to persisting locally — a redundant write is
+        cheap and idempotent, a skipped write is the original bug.
+        """
+        provider = getattr(self._config_provider, "last_committed_mode", None)
+        if provider is None:
+            return False  # unverifiable claim -> caller persists locally
+        try:
+            committed = self._normalize_mode(str(provider() or ""))
+        except Exception:
+            return False
+        return committed == selected
+
     def _compensate(
         self,
         config: MutableMapping[str, Any],
         before: dict[str, Any],
         previous_mode: str,
+        *,
+        transaction_keys: set[str] | None = None,
     ) -> ModeRollbackOutcome:
         """Best-effort rollback; returns what actually succeeded (v1.6.1).
 
-        Behavior is unchanged from v1.6.0 — the only addition is that every
-        partial failure is captured into a :class:`ModeRollbackOutcome`
-        instead of vanishing into the log.
+        v1.6.4 fix (issue #3): the rollback is now *merge semantics* — only
+        the keys this transaction actually staged (``mode`` plus caller
+        ``updates``, plus any keys the activation callback wrote through
+        ``config``) are restored to their pre-transaction values. Keys the
+        user saved through out-of-transaction paths during the switch (Qt
+        slots like ``video_focus_behavior`` that write directly to the shared
+        config) are *not* the transaction's to undo and must survive the
+        rollback. The old full-restore (delete unknown keys + ``update(before)``)
+        silently reverted those user settings. When ``transaction_keys`` is
+        None (legacy/internal callers), behavior falls back to the old full
+        restore for safety.
         """
         errors: list[str] = []
         config_restored = True
+        # v1.6.4 fix (issue #3): with transaction_keys, restore *only* those
+        # keys to their pre-transaction values; other keys (user saves that
+        # raced in through out-of-transaction paths) are left untouched.
+        # Without transaction_keys, keep the v1.6.1 key-by-key full restore.
+        def _restore_config_keys() -> None:
+            if transaction_keys is None:
+                for key in list(config.keys()):
+                    if key not in before:
+                        del config[key]
+                config.update(before)
+            else:
+                for key in transaction_keys:
+                    if key in before:
+                        config[key] = before[key]
+                    else:
+                        config.pop(key, None)
+
         # v1.6.1 fix: apply the rollback diff key-by-key instead of
         # clear()+update(); clear() briefly emptied the shared config dict,
         # racing concurrent readers outside the operation lock.
         try:
-            for key in list(config.keys()):
-                if key not in before:
-                    del config[key]
-            config.update(before)
+            _restore_config_keys()
         except Exception as exc:
             config_restored = False
             errors.append(f"配置回滚失败: {exc}")
@@ -287,10 +360,7 @@ class WallpaperModeService:
                 errors.append(f"回滚壁纸模式运行状态失败({previous_mode}): {exc}")
                 self._log(f"回滚壁纸模式运行状态失败({previous_mode}): {exc}")
         try:
-            for key in list(config.keys()):
-                if key not in before:
-                    del config[key]
-            config.update(before)
+            _restore_config_keys()
         except Exception as exc:
             config_restored = False
             errors.append(f"配置二次回滚失败: {exc}")

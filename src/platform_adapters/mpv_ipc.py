@@ -184,15 +184,27 @@ class MpvIpcClient:
         return True
 
     def _await_response(self, request_id: int, deadline: float) -> tuple[bool, Any]:
-        """按行读取直到出现匹配 request_id 的应答；事件暂存、坏行容忍。"""
+        """按行读取直到出现匹配 request_id 的应答；事件暂存、坏行容忍。
+
+        v1.6.4 (issue #4): 应答超时也判死通道。一个健康 mpv 的应答在个位数
+        毫秒内到达；等到 deadline 仍无应答说明对端挂起/通道假死，此时通道
+        不可信。置 ``dead`` 让同一条连接上的后续请求（例如音量+静音两次
+        set_property）快速失败，而不是每次都阻塞整个 timeout 造成双倍冻结。
+        """
         while True:
             if self.dead or self.closed:
                 return False, None
             if time.monotonic() >= deadline:
+                self.dead = True
                 return False, None
             line = self._read_line(deadline)
             if line is None:
                 # 超时（通道保留）或 EOF/故障（已判死）。
+                # v1.6.4 (issue #4): deadline 到点的"无应答"也判死——健康
+                # mpv 毫秒级应答，等到超时说明对端挂起，后续请求必须快速
+                # 失败而不是再次阻塞整个 timeout。
+                if time.monotonic() >= deadline:
+                    self.dead = True
                 return False, None
             try:
                 message = json.loads(line.decode("utf-8", errors="replace"))
@@ -246,8 +258,9 @@ def verify_media_playing(client: MpvIpcClient, timeout: float = 5.0, poll_interv
     2. ``duration`` 可读且 > 0 且 ``pause`` 为 False —— 文件已加载且未暂停，
        用于 time-pos/eof-reached 不可用的精简构建。
 
-    其余情况（属性恒 0/None、已暂停、通道死亡）持续轮询直至超时，
-    超时返回 False，由调用方拆除播放器并向上回退。
+    其余情况（属性恒 0/None、已暂停）持续轮询直至超时；通道死亡
+    （EOF/破裂，以及 v1.6.4 起的应答超时判死）则直接返回 False，
+    由调用方拆除播放器并向上回退。
     """
     if client is None:
         return False

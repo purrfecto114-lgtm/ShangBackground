@@ -329,6 +329,11 @@ class SessionWallpaperState:
         self._style: dict[str, Any] = {}
         self._captured = False
         self._backend_state: dict[str, Any] | None = None
+        # v1.6.4 (issue #2): provenance guard. Once a capture attempt observed
+        # an unrecordable/unrestorable pre-session desktop ("refused"), later
+        # captures in the same process must not treat whatever wallpaper the
+        # *application itself* has since applied as the user's original one.
+        self._refused_unrecordable = False
 
     @property
     def lock(self) -> RLock:
@@ -343,6 +348,24 @@ class SessionWallpaperState:
                 dict(self._backend_state) if self._backend_state is not None else None,
             )
 
+    @property
+    def refused_unrecordable(self) -> bool:
+        """True once a capture refused to record an unrecordable desktop.
+
+        v1.6.4 (issue #2): ``capture()`` reads this to close the pollution
+        window where ``MediaService.start_video/start_html`` trigger a second
+        capture *after* the app changed the desktop — without the guard the
+        app-owned wallpaper became the recorded "startup original" and exit
+        restore re-applied it.
+        """
+        with self._lock:
+            return self._refused_unrecordable
+
+    def mark_refused_unrecordable(self) -> None:
+        """Record that this process refused to capture the startup desktop."""
+        with self._lock:
+            self._refused_unrecordable = True
+
     def replace(
         self,
         wallpaper: str,
@@ -352,8 +375,21 @@ class SessionWallpaperState:
         with self._lock:
             self._wallpaper = str(wallpaper or "")
             self._style = dict(style or {})
-            self._captured = bool(self._wallpaper)
             self._backend_state = dict(backend_state) if backend_state is not None else None
+            # v1.6.4 (issue #2, gap A): a valid plugin-level state is an
+            # anchor in its own right (KDE slideshow desktops have no local
+            # restorable path). Capture counts as done when *either* a
+            # restorable path or a backend state was recorded, so later
+            # same-process captures early-out instead of re-reading a desktop
+            # the application itself may already have changed.
+            self._captured = bool(self._wallpaper) or bool(
+                backend_state
+            )
+            if self._captured:
+                # A successful capture supersedes an earlier refusal (e.g. a
+                # later explicit capture with force_refresh found a restorable
+                # desktop before the app touched it).
+                self._refused_unrecordable = False
 
     def clear(self) -> None:
         with self._lock:
@@ -361,6 +397,7 @@ class SessionWallpaperState:
             self._style = {}
             self._captured = False
             self._backend_state = None
+            self._refused_unrecordable = False
 
 
 class OperationClockState:

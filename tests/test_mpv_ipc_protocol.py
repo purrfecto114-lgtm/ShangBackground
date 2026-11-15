@@ -118,19 +118,29 @@ def test_error_response_returns_false_with_full_data():
 
 
 def test_timeout_returns_false_none_and_keeps_channel_alive():
-    """应答超时：(False, None)，通道保留（不判死，可继续复用）。"""
+    """应答超时：(False, None)。
+
+    v1.6.4 (issue #4) 契约变更：超时也判死通道。mpv JSON IPC 对每条命令
+    必有应答（毫秒级）；等到 deadline 仍无应答说明对端挂起/假死，同一条
+    连接上的后续请求必须快速失败——旧契约"通道保留可复用"会让
+    set_video_volume 的 volume+mute 两次 set_property 各阻塞整个 timeout，
+    从 Qt 主线程看就是双倍界面冻结。
+    """
     fake = _FakeMpv(lambda _message: [])  # 从不应答
     client = MpvIpcClient(fake.write_bytes, fake.read_bytes)
 
     ok, data = client.request(["get_property", "time-pos"], timeout=0.15)
 
     assert (ok, data) == (False, None)
-    assert client.dead is False
+    assert client.dead is True
     assert fake.read_calls > 0
-    # 通道仍在：后续请求照常写线上
+    # 后续请求快速失败，不再写线上（dead 短路）
     writes_before = fake.write_calls
-    client.request(["get_property", "pause"], timeout=0.15)
-    assert fake.write_calls == writes_before + 1
+    reads_before = fake.read_calls
+    ok2, _ = client.request(["get_property", "pause"], timeout=0.15)
+    assert ok2 is False
+    assert fake.write_calls == writes_before
+    assert fake.read_calls == reads_before
 
 
 def test_eof_marks_dead_and_later_requests_fast_fail_without_reads():

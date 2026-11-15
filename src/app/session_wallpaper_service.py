@@ -190,6 +190,18 @@ class SessionWallpaperService:
             else:
                 self.clear_files()
             try:
+                # v1.6.4 (issue #2) pollution guard: a previous capture in
+                # this process already refused to record the startup desktop
+                # (get_current() was empty/unrestorable). By now the desktop
+                # almost certainly shows whatever *this application* applied,
+                # so recording it as "the pre-session wallpaper" would make
+                # exit-restore re-apply our own wallpaper instead of the
+                # user's original desktop. Refuse instead. An explicit
+                # ``force_refresh`` capture (e.g. desktop manually reverted)
+                # clears the refusal via state.clear() above.
+                if self._state.refused_unrecordable:
+                    self._log("跳过记录启动前壁纸：此前已拒绝记录且桌面可能已被本程序修改")
+                    return False
                 # 顺序契约：先读路径快照再捕获插件状态（本函数只读，顺序
                 # 保守；slideshow 场景 get_current() 返回 ""/远程时仍记录
                 # 状态——这正是 v1.6.2 降级声明所覆盖的缺口）。
@@ -205,6 +217,11 @@ class SessionWallpaperService:
                 if self._valid_backend_state(backend_state):
                     # wallpaper 字段保持“本地可恢复路径”语义：不可恢复时
                     # 留空（不伪造），插件级状态由 backend_state 承载。
+                    # v1.6.4 (issue #2, gap A): 有效的 backend_state 本身就是
+                    # 恢复锚点——SessionWallpaperState.replace 现在把非空
+                    # 插件状态也置 captured=True，因此本进程内的后续 capture
+                    # （MediaService.start_video/start_html 触发）会在入口
+                    # 早退，不会重新读取已被本程序修改的桌面状态。
                     restorable = self.is_restorable(current)
                     self._state.replace(current if restorable else "", self._get_style(), backend_state)
                     if not self.persist():
@@ -215,6 +232,11 @@ class SessionWallpaperService:
                     return True
                 if not self.is_restorable(current):
                     self._state.clear()
+                    # v1.6.4 (issue #2): mark the refusal so later captures in
+                    # this process cannot record the app-owned wallpaper that
+                    # MediaService.start_video/start_html will trigger after
+                    # the desktop changed.
+                    self._state.mark_refused_unrecordable()
                     self._log("启动前壁纸不是可恢复的本地图片文件，已跳过记录: " + (current or "<empty>"))
                     return False
                 self._state.replace(current, self._get_style())
